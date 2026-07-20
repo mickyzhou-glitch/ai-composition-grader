@@ -187,10 +187,10 @@ export default function NewReviewPage() {
           <section className="paper-card flow-card" aria-labelledby="assignment-heading">
             <div className="section-heading"><div><p className="eyebrow">第一步</p><h2 id="assignment-heading">选择作文题目</h2></div></div>
             <div className="template-grid">
-              <button type="button" aria-label="使用内置题目《为自己鼓掌》" className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setError(""); }}>
+              <button type="button" aria-label="使用内置题目《为自己鼓掌》" aria-pressed={config.templateType === "preset_self_applause"} className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setError(""); }}>
                 <span className="template-mark" aria-hidden="true">荐</span><strong>《为自己鼓掌》</strong><small>六年级 · 600 字 · 记叙文</small>
               </button>
-              <button type="button" aria-label="自定义题目" className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setError(""); }}>
+              <button type="button" aria-label="自定义题目" aria-pressed={config.templateType === "custom"} className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setError(""); }}>
                 <span className="template-mark" aria-hidden="true">+</span><strong>自定义题目</strong><small>自行设置年级、结构与评分重点</small>
               </button>
             </div>

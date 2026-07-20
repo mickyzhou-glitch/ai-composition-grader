@@ -71,7 +71,7 @@ describe("复核页", () => {
     expect(screen.getByLabelText("个性评语")).toHaveValue("本地未保存内容");
   });
 
-  it("冲突后的 refresh 不覆盖脏的本地草稿，链接离开仍会确认", async () => {
+  it("冲突不会覆盖脏的本地草稿，链接离开仍会确认", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
@@ -88,12 +88,54 @@ describe("复核页", () => {
     await user.type(screen.getByLabelText("个性评语"), "本地草稿");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
     await screen.findByRole("alert");
-    await user.click(screen.getByRole("button", { name: "重试" }));
-
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(screen.getByLabelText("个性评语")).toHaveValue("本地草稿");
     fireEvent.click(screen.getByRole("link", { name: "新建作文批改" }));
     expect(confirm).toHaveBeenCalledWith("复核内容尚未保存，确定离开吗？");
+  });
+
+  it("替换图片前确认脏草稿，取消后不上传也不清空本地内容", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json(review));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.clear(await screen.findByLabelText("个性评语"));
+    await user.type(screen.getByLabelText("个性评语"), "替换前本地草稿");
+    await user.upload(
+      screen.getByLabelText("替换/重拍作文图片"),
+      new File(["image"], "replacement.jpg", { type: "image/jpeg" }),
+    );
+
+    expect(confirm).toHaveBeenCalledWith("当前复核内容尚未保存，替换图片会清空这些修改。确定继续吗？");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("个性评语")).toHaveValue("替换前本地草稿");
+  });
+
+  it("保存 409 提供确认后的放弃本地修改并刷新动作", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ code: "ANALYSIS_CONFLICT", message: "冲突" }, 409))
+      .mockImplementationOnce(() => json({
+        ...review,
+        report: { ...review.report, personalizedComment: "服务端最新内容" },
+      }));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.clear(await screen.findByLabelText("个性评语"));
+    await user.type(screen.getByLabelText("个性评语"), "会被放弃的本地草稿");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+    const abandon = screen.queryByRole("button", { name: "放弃本地修改并刷新" });
+    expect(abandon).toBeInTheDocument();
+    if (!abandon) return;
+    await user.click(abandon);
+
+    expect(confirm).toHaveBeenCalledWith("将放弃当前未保存的复核修改并加载服务器最新内容，确定继续吗？");
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(screen.getByLabelText("个性评语")).toHaveValue("服务端最新内容");
   });
 
   it("分析中轮询不会覆盖脏的本地草稿", async () => {

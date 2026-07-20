@@ -34,8 +34,9 @@ describe("新建作文批改", () => {
     const user = userEvent.setup();
     render(<NewReviewPage />);
 
-    expect(screen.getByRole("button", { name: /为自己鼓掌/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /为自己鼓掌/ })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "自定义题目" }));
+    expect(screen.getByRole("button", { name: "自定义题目" })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
 
     expect(screen.getByRole("alert")).toHaveTextContent("请填写作文题目");

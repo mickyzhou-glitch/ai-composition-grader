@@ -35,8 +35,8 @@ export default function ReviewPage() {
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
   }, []);
 
-  const refresh = useCallback(async (showLoading = true) => {
-    if (dirty) {
+  const refresh = useCallback(async (showLoading = true, force = false) => {
+    if (dirty && !force) {
       setNotice("本地复核内容尚未保存，已保留当前草稿。");
       return;
     }
@@ -51,6 +51,11 @@ export default function ReviewPage() {
       if (showLoading) setLoading(false);
     }
   }, [applyReview, dirty, reviewId]);
+
+  async function forceRefresh() {
+    if (!window.confirm("将放弃当前未保存的复核修改并加载服务器最新内容，确定继续吗？")) return;
+    await refresh(true, true);
+  }
 
   useEffect(() => {
     let active = true;
@@ -147,6 +152,9 @@ export default function ReviewPage() {
       setError("请选择 1 至 3 张作文图片");
       return;
     }
+    if (dirty && !window.confirm("当前复核内容尚未保存，替换图片会清空这些修改。确定继续吗？")) {
+      return;
+    }
     setBusy("replace");
     setError("");
     setNotice("");
@@ -206,7 +214,7 @@ export default function ReviewPage() {
           <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
           <div className="review-actions"><AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" onClick={() => void analyze()}>重新分析</AsyncButton>{review.status !== "needs_better_images" ? replacementControl() : null}{report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty} onClick={() => void save()}>保存复核</AsyncButton> : null}</div>
         </header>
-        {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void refresh() : undefined} /> : null}
+        {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
 

@@ -7,7 +7,7 @@ test("renders the teacher workbench", async ({ page }) => {
     page.getByRole("heading", { name: "新建作文批改" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "教师工作台" }),
+    page.getByText("教师工作台", { exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "批改历史" })).toBeVisible();
 });
