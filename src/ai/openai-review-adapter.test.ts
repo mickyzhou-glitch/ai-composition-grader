@@ -168,6 +168,15 @@ describe("OpenAIReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
+  it("首个空 content 也进入一次结构修复", async () => {
+    const harness = setup([null, JSON.stringify(successEnvelope)]);
+
+    await expect(
+      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
+    ).resolves.toEqual(successEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
     Object.assign(new Error("rate limited"), { status: 429 }),

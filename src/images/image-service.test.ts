@@ -237,4 +237,28 @@ describe("ImageService", () => {
       }),
     ).rejects.toMatchObject({ code: "INVALID_IMAGE_TRANSFORM", status: 400 });
   });
+
+  it("PATCH 仅调整顺序时保留已有旋转和裁剪", async () => {
+    const data = await jpeg();
+    await service.upload("review-1", [
+      { originalName: "first.jpg", mimeType: "image/jpeg", data },
+      { originalName: "second.jpg", mimeType: "image/jpeg", data },
+    ]);
+
+    await service.update("review-1", {
+      images: [
+        { id: repository.images[0].id, position: 1 },
+        { id: repository.images[1].id, position: 0 },
+      ],
+    } as never);
+
+    expect(repository.images.map(({ originalName, rotation, crop }) => ({
+      originalName,
+      rotation,
+      crop,
+    }))).toEqual([
+      { originalName: "second.jpg", rotation: 0, crop: null },
+      { originalName: "first.jpg", rotation: 0, crop: null },
+    ]);
+  });
 });

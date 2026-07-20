@@ -70,9 +70,9 @@ const updateSchema = z.object({
     .array(
       z.object({
         id: z.number().int().positive(),
-        position: z.number().int().nonnegative(),
-        rotation: rotationSchema,
-        crop: normalizedCropSchema.nullable(),
+        position: z.number().int().nonnegative().optional(),
+        rotation: rotationSchema.optional(),
+        crop: normalizedCropSchema.nullable().optional(),
       }),
     )
     .min(1)
@@ -238,11 +238,9 @@ export class ImageService {
     if (!review) throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     const parsed = this.parseUpdate(input);
     const currentById = new Map(review.images.map((image) => [image.id, image]));
-    const expectedPositions = parsed.images.map(({ position }) => position).sort((a, b) => a - b);
     if (
       parsed.images.length !== review.images.length ||
-      new Set(parsed.images.map(({ id }) => id)).size !== parsed.images.length ||
-      expectedPositions.some((position, index) => position !== index)
+      new Set(parsed.images.map(({ id }) => id)).size !== parsed.images.length
     ) {
       throw new ImageServiceError(
         "INVALID_IMAGE_TRANSFORM",
@@ -250,13 +248,30 @@ export class ImageService {
         400,
       );
     }
-
-    const updated: ReviewImageInput[] = [];
-    for (const change of [...parsed.images].sort((a, b) => a.position - b.position)) {
+    const changes = parsed.images.map((change) => {
       const current = currentById.get(change.id);
       if (!current) {
         throw new ImageServiceError("INVALID_IMAGE_TRANSFORM", "图片 id 无效", 400);
       }
+      return {
+        id: change.id,
+        position: change.position ?? current.position,
+        rotation: change.rotation ?? current.rotation,
+        crop: change.crop === undefined ? current.crop : change.crop,
+      };
+    });
+    const expectedPositions = changes.map(({ position }) => position).sort((a, b) => a - b);
+    if (expectedPositions.some((position, index) => position !== index)) {
+      throw new ImageServiceError(
+        "INVALID_IMAGE_TRANSFORM",
+        "图片更新必须提供连续顺序",
+        400,
+      );
+    }
+
+    const updated: ReviewImageInput[] = [];
+    for (const change of [...changes].sort((a, b) => a.position - b.position)) {
+      const current = currentById.get(change.id) as ReviewImage;
       const original = await this.fileStore.readFile(
         reviewId,
         "images",

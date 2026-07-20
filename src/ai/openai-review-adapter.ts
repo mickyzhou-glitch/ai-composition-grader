@@ -125,14 +125,7 @@ async function completionContent(
   try {
     const completion = await client.chat.completions.create(request);
     const content = completion.choices[0]?.message.content;
-    if (content === null || content === undefined) {
-      throw new AiAdapterError(
-        "AI_INVALID_RESPONSE",
-        "AI 返回了空响应",
-        502,
-      );
-    }
-    return content;
+    return content ?? "";
   } catch (error) {
     if (error instanceof AiAdapterError) throw error;
     throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502);
@@ -245,9 +238,12 @@ export async function testOpenAIConnection(
     timeout: AI_TIMEOUT_MS,
     maxRetries: AI_MAX_RETRIES,
   });
-  await completionContent(client, {
+  const content = await completionContent(client, {
     model: input.model,
     messages: [{ role: "user", content: "只回复 OK" }],
     max_tokens: 8,
   });
+  if (content.trim().length === 0) {
+    throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回了空响应", 502);
+  }
 }
