@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AI 作业批改助手",
-  description: "面向教师的 AI 作业批改工作台",
+  title: "朱批 · AI作文批改助手",
+  description: "面向教师的本地 AI 作文批改与复核工作台",
 };
 
 export default function RootLayout({

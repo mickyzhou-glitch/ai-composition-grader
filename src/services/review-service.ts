@@ -24,7 +24,11 @@ interface ReviewServiceOptions {
 
 export class ReviewServiceError extends Error {
   constructor(
-    readonly code: "REVIEW_NOT_FOUND" | "IMAGES_REQUIRED",
+    readonly code:
+      | "REVIEW_NOT_FOUND"
+      | "IMAGES_REQUIRED"
+      | "INVALID_FILE_PATH"
+      | "FILE_NOT_FOUND",
     message: string,
     readonly status: number,
   ) {
@@ -61,6 +65,55 @@ export class ReviewService {
     const review = this.repository.getById(id);
     if (!review) throw new ReviewServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     return review;
+  }
+
+  async readImageFile(id: string, storedPath: string): Promise<{
+    data: Buffer;
+    contentType: string;
+  }> {
+    const review = this.get(id);
+    if (!/^images\/[^/\\\0]+$/.test(storedPath)) {
+      throw new ReviewServiceError("INVALID_FILE_PATH", "图片路径无效", 400);
+    }
+    const registered = review.images.some((image) =>
+      [image.originalPath, image.annotationPath, image.aiPath].includes(storedPath),
+    );
+    if (!registered) {
+      throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
+    }
+    const extension = storedPath.split(".").at(-1)?.toLowerCase();
+    const contentTypes: Record<string, string> = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      heic: "image/heic",
+      heif: "image/heif",
+    };
+    const contentType = extension ? contentTypes[extension] : undefined;
+    if (!contentType) {
+      throw new ReviewServiceError("INVALID_FILE_PATH", "图片格式无效", 400);
+    }
+    try {
+      return {
+        data: await this.fileStore.readFile(
+          id,
+          "images",
+          storedPath.slice("images/".length),
+        ),
+        contentType,
+      };
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
+      }
+      throw error;
+    }
   }
 
   async create(config: AssignmentConfig): Promise<ReviewRecord> {

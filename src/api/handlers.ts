@@ -359,3 +359,33 @@ export function createAnalyzeRouteHandlers(dependencies: {
     },
   };
 }
+
+export function createReviewFilesRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "readImageFile">;
+}) {
+  return {
+    async GET(request: Request, context: RouteContext) {
+      try {
+        const storedPath = new URL(request.url).searchParams.get("path");
+        if (!storedPath) {
+          throw routeError("INVALID_FILE_PATH", "缺少图片路径", 400);
+        }
+        const file = await dependencies.reviewService.readImageFile(
+          (await context.params).id,
+          storedPath,
+        );
+        const bytes = Uint8Array.from(file.data).buffer;
+        return new Response(bytes, {
+          status: 200,
+          headers: {
+            "content-type": file.contentType,
+            "cache-control": "private, max-age=3600",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
