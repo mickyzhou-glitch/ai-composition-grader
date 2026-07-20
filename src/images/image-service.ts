@@ -250,6 +250,7 @@ export class ImageService {
   }
 
   private async uploadExclusive(reviewId: string, files: UploadedImage[]) {
+    await this.fileStore.retryImageCleanup(reviewId);
     const review = this.repository.getById(reviewId);
     if (!review) {
       throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
@@ -302,6 +303,7 @@ export class ImageService {
   }
 
   private async updateExclusive(reviewId: string, input: UpdateImagesInput) {
+    await this.fileStore.retryImageCleanup(reviewId);
     const review = this.repository.getById(reviewId);
     if (!review) throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     const parsed = this.parseUpdate(input);
@@ -414,11 +416,11 @@ export class ImageService {
       );
       throw error;
     }
-    await this.deleteStoredImages(reviewId, previous);
+    await this.queueStoredImageCleanup(reviewId, previous);
     return saved;
   }
 
-  private async deleteStoredImages(
+  private async queueStoredImageCleanup(
     reviewId: string,
     images: ReviewImage[],
   ): Promise<void> {
@@ -429,11 +431,7 @@ export class ImageService {
         storedFilename(image.aiPath),
       ]),
     );
-    await Promise.all(
-      [...filenames].map((filename) =>
-        this.fileStore.deleteFile(reviewId, "images", filename),
-      ),
-    );
+    await this.fileStore.queueImageCleanup(reviewId, [...filenames]);
   }
 
   private parseUpdate(input: UpdateImagesInput): UpdateImagesInput {

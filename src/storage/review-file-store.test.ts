@@ -4,6 +4,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rm,
   stat,
   symlink,
@@ -124,6 +125,33 @@ describe("ReviewFileStore", () => {
     await expect(
       stat(store.getReviewPaths("review-1").reviewDirectory),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("崩溃恢复时 DB 仍有 review 则将持久暂存目录恢复原位", async () => {
+    await store.writeFile("review-1", "images", "page.jpg", "page");
+    await store.stageDelete("review-1");
+    const restarted = new ReviewFileStore(store.rootDirectory);
+
+    await restarted.recoverStagedDeletes(async (reviewId) => reviewId === "review-1");
+
+    await expect(
+      restarted.readFile("review-1", "images", "page.jpg"),
+    ).resolves.toEqual(Buffer.from("page"));
+  });
+
+  it("崩溃恢复时 DB 已无 review 则清理持久暂存目录", async () => {
+    await store.writeFile("review-1", "images", "page.jpg", "page");
+    await store.stageDelete("review-1");
+    const restarted = new ReviewFileStore(store.rootDirectory);
+
+    await restarted.recoverStagedDeletes(async () => false);
+
+    await expect(
+      stat(restarted.getReviewPaths("review-1").reviewDirectory),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      readdir(path.join(restarted.rootDirectory, ".trash")),
+    ).resolves.toEqual([]);
   });
 
   it("拒绝通过中间目录符号链接写入根目录外", async () => {

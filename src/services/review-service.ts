@@ -37,6 +37,7 @@ export class ReviewService {
   private readonly createId: () => string;
   private readonly createRunId: () => string;
   private readonly lock: ReviewLock;
+  private readonly recovery: Promise<void>;
 
   constructor(
     private readonly repository: ReviewRepository,
@@ -47,6 +48,9 @@ export class ReviewService {
     this.createId = options.createId ?? randomUUID;
     this.createRunId = options.createRunId ?? randomUUID;
     this.lock = options.lock ?? new InMemoryReviewLock();
+    this.recovery = this.fileStore.recoverStagedDeletes(
+      (id) => this.repository.getById(id) !== null,
+    );
   }
 
   list(): ReviewRecord[] {
@@ -60,6 +64,7 @@ export class ReviewService {
   }
 
   async create(config: AssignmentConfig): Promise<ReviewRecord> {
+    await this.recovery;
     const id = this.createId();
     await this.fileStore.createReview(id);
     try {
@@ -76,6 +81,7 @@ export class ReviewService {
   }
 
   async delete(id: string): Promise<void> {
+    await this.recovery;
     await this.lock.runExclusive(id, async () => {
       this.get(id);
       const staged = await this.fileStore.stageDelete(id);
@@ -91,7 +97,11 @@ export class ReviewService {
         await staged.rollback();
         throw error;
       }
-      await staged.commit();
+      try {
+        await staged.commit();
+      } catch {
+        // The DB deletion is authoritative; startup recovery retries trash cleanup.
+      }
     });
   }
 
@@ -99,6 +109,7 @@ export class ReviewService {
     review: ReviewRecord;
     pageWarnings: string[];
   }> {
+    await this.recovery;
     const review = this.get(id);
     if (review.images.length < 1 || review.images.length > 3) {
       throw new ReviewServiceError(

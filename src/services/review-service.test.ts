@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -222,5 +222,44 @@ describe("ReviewService analysis CAS", () => {
     await expect(
       fileStore.readFile("review-1", "images", "page-ai.jpg"),
     ).resolves.toEqual(Buffer.from("ai"));
+  });
+
+  it("首次异步操作等待启动恢复后再读取仍存在于 DB 的 review 文件", async () => {
+    await fileStore.stageDelete("review-1");
+    const analyze = vi.fn(async () => readyEnvelope);
+    const service = serviceFor(analyze);
+
+    await expect(service.analyze("review-1")).resolves.toMatchObject({
+      review: { status: "ready_for_review" },
+    });
+
+    expect(analyze).toHaveBeenCalledOnce();
+  });
+
+  it("DB 删除成功后 trash 清理失败仍返回成功并留给下一次启动恢复", async () => {
+    const stageDelete = fileStore.stageDelete.bind(fileStore);
+    vi.spyOn(fileStore, "stageDelete").mockImplementation(async (reviewId) => {
+      const staged = await stageDelete(reviewId);
+      return {
+        rollback: staged.rollback,
+        commit: async () => {
+          throw new Error("trash cleanup failed");
+        },
+      };
+    });
+    const service = serviceFor(async () => readyEnvelope);
+
+    await expect(service.delete("review-1")).resolves.toBeUndefined();
+
+    expect(repository.getById("review-1")).toBeNull();
+    await expect(
+      readdir(path.join(fileStore.rootDirectory, ".trash")),
+    ).resolves.toHaveLength(1);
+
+    const restarted = serviceFor(async () => readyEnvelope);
+    await restarted.create(config);
+    await expect(
+      readdir(path.join(fileStore.rootDirectory, ".trash")),
+    ).resolves.toEqual([]);
   });
 });

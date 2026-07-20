@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 
 import sharp from "sharp";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReviewImage, ReviewImageInput } from "../db/review-repository";
 import { ReviewFileStore } from "../storage/review-file-store";
@@ -223,6 +223,57 @@ describe("ImageService", () => {
       ).rejects.toMatchObject({ code: "ENOENT" });
     }
     expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
+  });
+
+  it("旧文件清理失败不回滚 DB 切换，并持久排队到同 review 下次操作重试", async () => {
+    await service.upload("review-1", [
+      { originalName: "old.jpg", mimeType: "image/jpeg", data: await jpeg() },
+    ]);
+    const oldFilenames = [
+      repository.images[0].originalPath,
+      repository.images[0].annotationPath,
+      repository.images[0].aiPath,
+    ].map((storedPath) => path.basename(storedPath));
+    const deleteFile = store.deleteFile.bind(store);
+    const deleteSpy = vi.spyOn(store, "deleteFile").mockImplementation(
+      async (reviewId, kind, filename) => {
+        if (oldFilenames.includes(filename)) {
+          throw new Error("cleanup failed");
+        }
+        await deleteFile(reviewId, kind, filename);
+      },
+    );
+
+    await expect(
+      service.upload("review-1", [
+        { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
+      ]),
+    ).resolves.toMatchObject({ images: [{ originalName: "new.jpg" }] });
+    expect(repository.images[0].originalName).toBe("new.jpg");
+    const queued = JSON.parse(
+      await readFile(path.join(store.rootDirectory, ".cleanup-queue.json"), "utf8"),
+    ) as Array<{ reviewId: string; filename: string }>;
+    expect(queued).toEqual(
+      expect.arrayContaining(
+        oldFilenames.map((filename) => ({ reviewId: "review-1", filename })),
+      ),
+    );
+
+    deleteSpy.mockRestore();
+    store = new ReviewFileStore(path.join(temporaryDirectory, "reviews"));
+    service = new ImageService(store, repository);
+    await service.update("review-1", {
+      images: [{ id: repository.images[0].id, position: 0 }],
+    });
+
+    for (const filename of oldFilenames) {
+      await expect(
+        stat(path.join(store.getReviewPaths("review-1").imagesDirectory, filename)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    await expect(
+      readFile(path.join(store.rootDirectory, ".cleanup-queue.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("有效 HEIC 在当前 Sharp 缺少解码器时返回 UNSUPPORTED_HEIC", async () => {
