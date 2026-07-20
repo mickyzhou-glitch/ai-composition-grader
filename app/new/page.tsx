@@ -1,0 +1,248 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+
+import type { AssignmentConfig, NormalizedCrop } from "@/src/domain/contracts";
+import { AppHeader } from "../components/AppHeader";
+import { AsyncButton } from "../components/AsyncButton";
+import { ErrorBanner } from "../components/ErrorBanner";
+import { apiFetch, errorMessage } from "../lib/api";
+
+const presetConfig: AssignmentConfig = {
+  title: "为自己鼓掌",
+  grade: "上海五四学制六年级",
+  writingRequirements: "写一件让自己获得成长或勇气的亲身经历，叙事具体，感情真实。",
+  targetCharacters: 600,
+  structureRequirements: "围绕一件事展开，过程有波折，结尾写出成长感受。",
+  scoringFocus: "审题立意、事件完整、细节描写与真情实感。",
+  templateType: "preset_self_applause",
+};
+
+const customConfig: AssignmentConfig = {
+  title: "",
+  grade: "上海五四学制六年级",
+  writingRequirements: "",
+  targetCharacters: 600,
+  structureRequirements: "",
+  scoringFocus: "",
+  templateType: "custom",
+};
+
+interface CropEdges { left: number; top: number; right: number; bottom: number }
+interface PendingImage {
+  key: string;
+  file: File;
+  previewUrl: string;
+  rotation: 0 | 90 | 180 | 270;
+  crop: CropEdges;
+}
+
+interface UploadedImage { id: number; position: number }
+
+function asCrop(edges: CropEdges): NormalizedCrop | null {
+  const { left, top, right, bottom } = edges;
+  if (left === 0 && top === 0 && right === 0 && bottom === 0) return null;
+  return {
+    x: left / 100,
+    y: top / 100,
+    width: (100 - left - right) / 100,
+    height: (100 - top - bottom) / 100,
+  };
+}
+
+function validateConfig(config: AssignmentConfig): string {
+  if (!config.title.trim()) return "请填写作文题目";
+  if (!config.grade.trim()) return "请填写适用年级";
+  if (!config.writingRequirements.trim()) return "请填写写作要求";
+  if (!Number.isInteger(config.targetCharacters) || config.targetCharacters <= 0) return "目标字数必须是正整数";
+  if (!config.structureRequirements.trim()) return "请填写结构要求";
+  if (!config.scoringFocus.trim()) return "请填写评分侧重";
+  return "";
+}
+
+export default function NewReviewPage() {
+  const router = useRouter();
+  const [step, setStep] = useState(1);
+  const [config, setConfig] = useState<AssignmentConfig>(presetConfig);
+  const [images, setImages] = useState<PendingImage[]>([]);
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [uploaded, setUploaded] = useState<UploadedImage[] | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function updateConfig<K extends keyof AssignmentConfig>(key: K, value: AssignmentConfig[K]) {
+    setConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  function chooseFiles(files: File[]) {
+    setError("");
+    if (files.length < 1 || files.length > 3) {
+      setError("请选择 1 至 3 张作文图片");
+      return;
+    }
+    images.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
+    setImages(files.map((file, index) => ({
+      key: `${file.name}-${file.lastModified}-${index}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      rotation: 0,
+      crop: { left: 0, top: 0, right: 0, bottom: 0 },
+    })));
+    setUploaded(null);
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    const destination = index + direction;
+    if (destination < 0 || destination >= images.length) return;
+    setImages((current) => {
+      const copy = [...current];
+      [copy[index], copy[destination]] = [copy[destination], copy[index]];
+      return copy;
+    });
+    setUploaded(null);
+  }
+
+  function updateImage(index: number, change: Partial<PendingImage>) {
+    setImages((current) => current.map((image, imageIndex) => imageIndex === index ? { ...image, ...change } : image));
+    setUploaded(null);
+  }
+
+  function removeImage(index: number) {
+    URL.revokeObjectURL(images[index].previewUrl);
+    setImages((current) => current.filter((_, imageIndex) => imageIndex !== index));
+    setUploaded(null);
+  }
+
+  async function submit() {
+    setBusy(true);
+    setError("");
+    try {
+      let id = reviewId;
+      if (!id) {
+        const created = await apiFetch<{ id: string }>("/api/reviews", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ config }),
+        });
+        id = created.id;
+        setReviewId(id);
+      }
+      let serverImages = uploaded;
+      if (!serverImages) {
+        const form = new FormData();
+        images.forEach(({ file }) => form.append("images", file));
+        const uploadResult = await apiFetch<{ images: UploadedImage[] }>(`/api/reviews/${encodeURIComponent(id)}/images`, {
+          method: "POST",
+          body: form,
+        });
+        serverImages = [...uploadResult.images].sort((a, b) => a.position - b.position);
+        setUploaded(serverImages);
+      }
+      await apiFetch(`/api/reviews/${encodeURIComponent(id)}/images`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          images: images.map((image, position) => ({
+            id: serverImages[position].id,
+            position,
+            rotation: image.rotation,
+            crop: asCrop(image.crop),
+          })),
+        }),
+      });
+      router.push(`/reviews/${encodeURIComponent(id)}`);
+    } catch (caught) {
+      setError(`${errorMessage(caught)}。已保留当前内容，可直接重试。`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function nextFromConfig() {
+    const message = validateConfig(config);
+    setError(message);
+    if (!message) setStep(2);
+  }
+
+  return (
+    <div className="app-shell">
+      <AppHeader compact />
+      <main className="flow-page">
+        <div className="page-title"><p className="eyebrow">新建批改</p><h1>把作文铺到案头</h1><p>三步完成题目设定、图片整理与提交。</p></div>
+        <ol className="stepper" aria-label="新建进度">
+          {["题目", "作文图片", "确认"].map((label, index) => (
+            <li key={label} aria-current={step === index + 1 ? "step" : undefined} className={step >= index + 1 ? "stepper-active" : ""}><span>{index + 1}</span>{label}</li>
+          ))}
+        </ol>
+        {error ? <ErrorBanner message={error} /> : null}
+
+        {step === 1 ? (
+          <section className="paper-card flow-card" aria-labelledby="assignment-heading">
+            <div className="section-heading"><div><p className="eyebrow">第一步</p><h2 id="assignment-heading">选择作文题目</h2></div></div>
+            <div className="template-grid">
+              <button type="button" aria-label="使用内置题目《为自己鼓掌》" className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setError(""); }}>
+                <span className="template-mark" aria-hidden="true">荐</span><strong>《为自己鼓掌》</strong><small>六年级 · 600 字 · 记叙文</small>
+              </button>
+              <button type="button" aria-label="自定义题目" className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setError(""); }}>
+                <span className="template-mark" aria-hidden="true">+</span><strong>自定义题目</strong><small>自行设置年级、结构与评分重点</small>
+              </button>
+            </div>
+            {config.templateType === "custom" ? (
+              <div className="form-grid">
+                <label>作文题目<input value={config.title} onChange={(event) => updateConfig("title", event.target.value)} /></label>
+                <label>适用年级<input value={config.grade} onChange={(event) => updateConfig("grade", event.target.value)} /></label>
+                <label>目标字数<input aria-label="目标字数" type="number" min={1} value={config.targetCharacters} onChange={(event) => updateConfig("targetCharacters", Number(event.target.value))} /></label>
+                <label className="wide">写作要求<textarea value={config.writingRequirements} onChange={(event) => updateConfig("writingRequirements", event.target.value)} /></label>
+                <label className="wide">结构要求<textarea value={config.structureRequirements} onChange={(event) => updateConfig("structureRequirements", event.target.value)} /></label>
+                <label className="wide">评分侧重<textarea value={config.scoringFocus} onChange={(event) => updateConfig("scoringFocus", event.target.value)} /></label>
+              </div>
+            ) : <div className="assignment-preview"><p><b>写作要求：</b>{config.writingRequirements}</p><p><b>重点：</b>{config.scoringFocus}</p></div>}
+            <div className="form-actions"><button className="button button--primary" type="button" onClick={nextFromConfig}>下一步：上传作文</button></div>
+          </section>
+        ) : null}
+
+        {step === 2 ? (
+          <section className="paper-card flow-card" aria-labelledby="upload-heading">
+            <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">整理作文图片</h2></div><span className="muted">{images.length}/3 张</span></div>
+            <label className="upload-zone">选择作文图片<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>点击选择 1 至 3 张图片</span><small>支持 JPG、PNG、WebP、HEIC / HEIF，单张不超过 20MB</small></label>
+            <div className="image-sort-list">
+              {images.map((image, index) => (
+                <article className="image-sort-card" key={image.key}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={image.previewUrl} alt={`${image.file.name} 预览`} style={{ transform: `rotate(${image.rotation}deg)` }} />
+                  <div className="image-controls">
+                    <div><b>第 {index + 1} 页 · {image.file.name}</b><small>{Math.max(1, Math.round(image.file.size / 1024))} KB</small></div>
+                    <div className="compact-actions">
+                      <button type="button" aria-label={`上移 ${image.file.name}`} disabled={index === 0} onClick={() => move(index, -1)}>上移</button>
+                      <button type="button" aria-label={`下移 ${image.file.name}`} disabled={index === images.length - 1} onClick={() => move(index, 1)}>下移</button>
+                      <button type="button" aria-label={`旋转 ${image.file.name}`} onClick={() => updateImage(index, { rotation: ((image.rotation + 90) % 360) as PendingImage["rotation"] })}>旋转 90°</button>
+                      <button type="button" aria-label={`删除 ${image.file.name}`} onClick={() => removeImage(index)}>删除</button>
+                    </div>
+                    <fieldset className="crop-controls"><legend>裁剪边界（百分比）</legend>
+                      {(["left", "top", "right", "bottom"] as const).map((edge) => {
+                        const labels = { left: "左", top: "上", right: "右", bottom: "下" };
+                        return <label key={edge}>{labels[edge]}<input aria-label={`${image.file.name} 裁剪${labels[edge]}边界（%）`} type="number" min={0} max={49} value={image.crop[edge]} onChange={(event) => updateImage(index, { crop: { ...image.crop, [edge]: Math.max(0, Math.min(49, Number(event.target.value))) } })} /></label>;
+                      })}
+                    </fieldset>
+                  </div>
+                </article>
+              ))}
+            </div>
+            <div className="form-actions"><button className="button button--quiet" type="button" onClick={() => setStep(1)}>上一步</button><button className="button button--primary" type="button" disabled={images.length < 1} onClick={() => { setError(""); setStep(3); }}>下一步：确认提交</button></div>
+          </section>
+        ) : null}
+
+        {step === 3 ? (
+          <section className="paper-card flow-card" aria-labelledby="confirm-heading">
+            <p className="eyebrow">第三步</p><h2 id="confirm-heading">确认批改内容</h2>
+            <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span></div>
+            <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°{asCrop(image.crop) ? " · 已裁剪" : ""}</small></li>)}</ol>
+            <p className="privacy-note">图片与模型设置仅在本机处理和保存。提交后仍可调整批注和报告。</p>
+            <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel="正在建立批改…" onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
+          </section>
+        ) : null}
+      </main>
+    </div>
+  );
+}
