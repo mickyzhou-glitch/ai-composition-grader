@@ -90,4 +90,49 @@ describe("新建作文批改", () => {
     expect(transforms.images[2]).toMatchObject({ id: 13, position: 2, rotation: 90 });
     expect(transforms.images[2].crop.x).toBe(0.1);
   });
+
+  it("上传失败后改题重试会先 PATCH 最新配置，再上传图片", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ id: "review-retry" }, 201))
+      .mockImplementationOnce(() => json({ code: "UPLOAD_FAILED", message: "上传失败" }, 502))
+      .mockImplementationOnce(() => json({ id: "review-retry" }))
+      .mockImplementationOnce(() => json({ images: [{ id: 31, position: 0 }] }))
+      .mockImplementationOnce(() => json({ images: [] }));
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+
+    await user.click(screen.getByRole("button", { name: "自定义题目" }));
+    await user.type(screen.getByLabelText("作文题目"), "第一次题目");
+    await user.type(screen.getByLabelText("写作要求"), "写一件具体的事。");
+    await user.type(screen.getByLabelText("结构要求"), "开头点题，结尾升华。");
+    await user.type(screen.getByLabelText("评分侧重"), "细节描写。");
+    await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
+    await user.upload(
+      screen.getByLabelText("选择作文图片"),
+      new File(["image"], "first.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("上传失败");
+
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    await user.clear(screen.getByLabelText("作文题目"));
+    await user.type(screen.getByLabelText("作文题目"), "修订后的题目");
+    await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      "/api/reviews/review-retry",
+      expect.objectContaining({ method: "PATCH" }),
+    ));
+    const configRequest = fetchMock.mock.calls.find(([url, init]) =>
+      url === "/api/reviews/review-retry" && (init as RequestInit).method === "PATCH",
+    );
+    expect(JSON.parse((configRequest?.[1] as RequestInit).body as string)).toMatchObject({
+      config: { title: "修订后的题目" },
+    });
+  });
 });

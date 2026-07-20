@@ -23,7 +23,7 @@ export default function ReviewPage() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [activePage, setActivePage] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"save" | "analyze" | null>(null);
+  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | null>(null);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -36,6 +36,10 @@ export default function ReviewPage() {
   }, []);
 
   const refresh = useCallback(async (showLoading = true) => {
+    if (dirty) {
+      setNotice("本地复核内容尚未保存，已保留当前草稿。");
+      return;
+    }
     if (showLoading) setLoading(true);
     setError("");
     try {
@@ -46,7 +50,7 @@ export default function ReviewPage() {
     } finally {
       if (showLoading) setLoading(false);
     }
-  }, [applyReview, reviewId]);
+  }, [applyReview, dirty, reviewId]);
 
   useEffect(() => {
     let active = true;
@@ -120,6 +124,9 @@ export default function ReviewPage() {
   }
 
   async function analyze() {
+    if (dirty && !window.confirm("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？")) {
+      return;
+    }
     setBusy("analyze");
     setError("");
     setNotice("");
@@ -135,6 +142,59 @@ export default function ReviewPage() {
     }
   }
 
+  async function replaceImages(files: File[]) {
+    if (files.length < 1 || files.length > 3) {
+      setError("请选择 1 至 3 张作文图片");
+      return;
+    }
+    setBusy("replace");
+    setError("");
+    setNotice("");
+    try {
+      const form = new FormData();
+      files.forEach((file) => form.append("images", file));
+      const uploaded = await apiFetch<{ images: ReviewView["images"] }>(
+        `/api/reviews/${encodeURIComponent(reviewId)}/images`,
+        { method: "POST", body: form },
+      );
+      setReview((current) => current ? {
+        ...current,
+        images: uploaded.images,
+        status: "draft",
+        report: null,
+        annotations: [],
+        revision: current.revision + 1,
+      } : current);
+      setReport(null);
+      setAnnotations([]);
+      setActivePage(0);
+      setDirty(false);
+      setNotice("作文图片已替换，可重新开始 AI 分析。");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function replacementControl(className = "button button--quiet") {
+    return <label className={className}>
+      替换/重拍作文
+      <input
+        className="visually-hidden"
+        aria-label="替换/重拍作文图片"
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        multiple
+        disabled={busy === "replace"}
+        onChange={(event) => {
+          void replaceImages(Array.from(event.target.files ?? []));
+          event.currentTarget.value = "";
+        }}
+      />
+    </label>;
+  }
+
   if (loading) return <div className="app-shell"><AppHeader compact /><main className="review-loading" role="status">正在展开作文与批改报告…</main></div>;
   if (!review) return <div className="app-shell"><AppHeader compact /><main className="narrow-page"><ErrorBanner message={error || "批改记录不存在"} onRetry={() => void refresh()} /></main></div>;
 
@@ -144,11 +204,11 @@ export default function ReviewPage() {
       <main className="review-page">
         <header className="review-heading">
           <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
-          <div className="review-actions"><AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" onClick={() => void analyze()}>重新分析</AsyncButton>{report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty} onClick={() => void save()}>保存复核</AsyncButton> : null}</div>
+          <div className="review-actions"><AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" onClick={() => void analyze()}>重新分析</AsyncButton>{review.status !== "needs_better_images" ? replacementControl() : null}{report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty} onClick={() => void save()}>保存复核</AsyncButton> : null}</div>
         </header>
         {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void refresh() : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
-        {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请回到新建流程重新拍摄：保持平整、光线均匀并拍全纸张边缘。</span></div> : null}
+        {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
 
         <section className="review-grid" aria-label="作文复核工作区">
           <div className="photo-pane">

@@ -127,6 +127,12 @@ export default function NewReviewPage() {
         });
         id = created.id;
         setReviewId(id);
+      } else {
+        await apiFetch(`/api/reviews/${encodeURIComponent(id)}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ config }),
+        });
       }
       let serverImages = uploaded;
       if (!serverImages) {
