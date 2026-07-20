@@ -96,12 +96,50 @@ function isHeicMime(mimeType: string): boolean {
   return mimeType === "image/heic" || mimeType === "image/heif";
 }
 
-function hasHeicSignature(data: Uint8Array): boolean {
-  if (data.byteLength < 12) return false;
+const HEIC_HEIF_BRANDS = new Set([
+  "heic",
+  "heix",
+  "hevc",
+  "hevx",
+  "heif",
+  "mif1",
+  "msf1",
+]);
+const AVIF_BRANDS = new Set(["avif", "avis"]);
+
+function fileTypeBrands(data: Uint8Array): string[] | null {
+  if (data.byteLength < 12) return null;
   const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-  if (buffer.toString("ascii", 4, 8) !== "ftyp") return false;
-  return new Set(["heic", "heix", "hevc", "hevx", "heif", "mif1", "msf1"])
-    .has(buffer.toString("ascii", 8, 12));
+  if (buffer.toString("ascii", 4, 8) !== "ftyp") return null;
+  const declaredSize = buffer.readUInt32BE(0);
+  const end = Math.min(
+    declaredSize === 0 ? buffer.length : declaredSize,
+    buffer.length,
+  );
+  const brands = [buffer.toString("ascii", 8, 12)];
+  for (let offset = 16; offset + 4 <= end; offset += 4) {
+    brands.push(buffer.toString("ascii", offset, offset + 4));
+  }
+  return brands;
+}
+
+function hasHeicSignature(data: Uint8Array): boolean {
+  const brands = fileTypeBrands(data);
+  return (
+    brands !== null &&
+    !brands.some((brand) => AVIF_BRANDS.has(brand)) &&
+    brands.some((brand) => HEIC_HEIF_BRANDS.has(brand))
+  );
+}
+
+function assertActualHeicOrHeif(data: Uint8Array): void {
+  if (!hasHeicSignature(data)) {
+    throw new ImageServiceError(
+      "INVALID_IMAGE",
+      "图片实际格式不是 HEIC/HEIF",
+      422,
+    );
+  }
 }
 
 function canonicalExtension(format: DecodedImage["format"]): string {
@@ -347,6 +385,7 @@ export class ImageService {
       const metadata = await sharp(file.data, { failOn: "error" }).metadata();
       if (!metadata.format || !metadata.width || !metadata.height) throw new Error("missing metadata");
       assertMimeMatchesFormat(file.mimeType as AllowedMimeType, metadata.format);
+      if (isHeicMime(file.mimeType)) assertActualHeicOrHeif(file.data);
       if (!["jpeg", "png", "webp", "heif"].includes(metadata.format)) {
         throw new ImageServiceError("INVALID_IMAGE", "图片实际格式不受支持", 422);
       }

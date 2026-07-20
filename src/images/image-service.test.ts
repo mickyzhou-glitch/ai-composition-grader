@@ -147,6 +147,24 @@ describe("ImageService", () => {
     ).rejects.toMatchObject({ code: "UNSUPPORTED_HEIC", status: 422 });
   });
 
+  it.each(["image/heic", "image/heif"])(
+    "拒绝用 %s MIME 伪装的可解码 AVIF",
+    async (mimeType) => {
+      const avif = await sharp({
+        create: { width: 16, height: 16, channels: 3, background: "white" },
+      })
+        .avif()
+        .toBuffer();
+
+      await expect(
+        service.upload("review-1", [
+          { originalName: "spoofed.heic", mimeType, data: avif },
+        ]),
+      ).rejects.toMatchObject({ code: "INVALID_IMAGE", status: 422 });
+      expect(repository.images).toEqual([]);
+    },
+  );
+
   it("生成最长边受限的高质量批注底图和带 10x10 网格的 AI 副本", async () => {
     await service.upload("review-1", [
       {

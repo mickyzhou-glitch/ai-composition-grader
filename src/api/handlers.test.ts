@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -128,6 +128,38 @@ describe("settings route handlers", () => {
     });
   });
 
+  it("PUT 连接测试失败时不保存候选设置", async () => {
+    const settingsService = {
+      get: vi.fn(),
+      getSecret: vi.fn(),
+      save: vi.fn(),
+    };
+    const handlers = createSettingsRouteHandlers({
+      settingsService,
+      testConnection: vi.fn(async () => {
+        throw Object.assign(new Error("provider failed"), {
+          code: "AI_REQUEST_FAILED",
+          status: 502,
+        });
+      }),
+    });
+
+    const response = await handlers.PUT(
+      jsonRequest("http://localhost/api/settings", "PUT", {
+        baseUrl: "https://ai.test/v1",
+        model: "m",
+        apiKey: "bad-key",
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    expect(await json(response)).toMatchObject({
+      ok: false,
+      error: { code: "AI_REQUEST_FAILED" },
+    });
+    expect(settingsService.save).not.toHaveBeenCalled();
+  });
+
   it("POST /test 测试失败不保存并返回 502", async () => {
     const settingsService = {
       get: vi.fn(),
@@ -230,10 +262,14 @@ describe("review route handlers", () => {
       data: { config: { title: "我为自己喝彩" } },
     });
 
+    const reviewDirectory = fileStore.getReviewPaths("review-1").reviewDirectory;
+    await expect(stat(reviewDirectory)).resolves.toMatchObject({});
+
     const deleted = await item.DELETE(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
     expect(deleted.status).toBe(200);
+    await expect(stat(reviewDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     const missing = await item.GET(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
@@ -269,6 +305,37 @@ describe("review route handlers", () => {
       width: 60,
       height: 80,
     });
+
+    const current = repository.getById("review-1")?.images ?? [];
+    const patched = await handlers.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1/images", "PATCH", {
+        images: current.map((image, index) => ({
+          id: image.id,
+          position: current.length - index - 1,
+          ...(index === 0
+            ? {
+                rotation: 90,
+                crop: { x: 0, y: 0, width: 0.5, height: 1 },
+              }
+            : {}),
+        })),
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+
+    expect(patched.status).toBe(200);
+    expect(repository.getById("review-1")?.images).toMatchObject([
+      { originalName: "page-3.jpg", position: 0 },
+      { originalName: "page-2.jpg", position: 1 },
+      {
+        originalName: "page-1.jpg",
+        position: 2,
+        rotation: 90,
+        crop: { x: 0, y: 0, width: 0.5, height: 1 },
+        width: 40,
+        height: 60,
+      },
+    ]);
   });
 
   it("analyze 保存 report/annotations 并管理成功和不可辨认状态", async () => {

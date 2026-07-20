@@ -128,6 +128,15 @@ describe("OpenAIReviewAdapter", () => {
     ).resolves.toEqual(successEnvelope);
   });
 
+  it("兼容无语言标签的完整 fenced JSON", async () => {
+    const harness = setup([`\n\`\`\`\n${JSON.stringify(successEnvelope)}\n\`\`\`\n`]);
+
+    await expect(
+      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
+    ).resolves.toEqual(successEnvelope);
+    expect(harness.create).toHaveBeenCalledOnce();
+  });
+
   it("无法辨认时返回无 report 的信封", async () => {
     const unreadable = {
       readable: false,
