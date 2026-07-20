@@ -56,6 +56,15 @@ describe("复核页", () => {
     );
   });
 
+  it("替换图片控件使用 file-label 显示键盘焦点", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json(review));
+
+    render(<ReviewPage />);
+
+    const fileInput = await screen.findByLabelText("替换/重拍作文图片");
+    expect(fileInput.closest("label")).toHaveClass("file-label");
+  });
+
   it("有未保存修改时重新分析先确认，取消后不发请求", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json(review));
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);

@@ -171,6 +171,7 @@ textarea { min-height: 100px; resize: vertical; }
 .form-grid .wide { grid-column: 1 / -1; }
 .upload-zone { display: grid; min-height: 148px; margin-bottom: 22px; padding: 28px; place-items: center; align-content: center; gap: 6px; border: 1px dashed #c9baa8; border-radius: 12px; background: #faf6ef; color: var(--red); cursor: pointer; text-align: center; font-weight: 800; }
 .upload-zone:focus-within { outline: 3px solid rgb(180 35 24 / 45%); outline-offset: 3px; }
+.file-label:focus-within { outline: 3px solid rgb(180 35 24 / 45%); outline-offset: 3px; }
 .upload-zone small { color: var(--muted); font-weight: 400; }
 .visually-hidden { position: absolute !important; overflow: hidden; width: 1px; height: 1px; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
 .image-sort-list { display: grid; gap: 12px; }

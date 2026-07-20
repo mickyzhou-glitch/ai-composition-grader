@@ -186,7 +186,7 @@ export default function ReviewPage() {
   }
 
   function replacementControl(className = "button button--quiet") {
-    return <label className={className}>
+    return <label className={`${className} file-label`}>
       替换/重拍作文
       <input
         className="visually-hidden"
