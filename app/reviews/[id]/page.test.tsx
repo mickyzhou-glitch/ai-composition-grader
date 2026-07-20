@@ -50,6 +50,10 @@ describe("复核页", () => {
     expect(JSON.parse((request[1] as RequestInit).body as string)).toMatchObject({
       report: { personalizedComment: "观察细致，继续保持" }, annotations: [],
     });
+    expect(screen.getByAltText("第 1 页作文")).toHaveAttribute(
+      "src",
+      "/api/reviews/review-1/files?imageId=1&variant=annotation",
+    );
   });
 
   it("有未保存修改时重新分析先确认，取消后不发请求", async () => {

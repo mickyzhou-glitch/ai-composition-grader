@@ -4,13 +4,13 @@
   --paper: #f7f3ea;
   --ivory: #fffdf8;
   --ink: #241f1b;
-  --muted: #746b62;
+  --muted: #62594f;
   --red: #b42318;
   --red-dark: #8f1c14;
   --red-soft: #f8e9e5;
   --green: #52735c;
   --green-soft: #e7eee7;
-  --gold: #98782f;
+  --gold: #6d541c;
   --gold-soft: #f3ecd9;
   --line: #e3dbcf;
   --shadow: 0 12px 30px rgb(63 47 35 / 8%);
@@ -151,7 +151,7 @@ textarea { min-height: 100px; resize: vertical; }
 
 .flow-page { width: min(900px, calc(100% - 48px)); margin: 0 auto; padding: 46px 0 90px; }
 .stepper { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin: 0 0 24px; padding: 0; list-style: none; }
-.stepper li { display: flex; position: relative; align-items: center; justify-content: center; gap: 8px; color: #9a9085; font-size: .84rem; font-weight: 700; }
+.stepper li { display: flex; position: relative; align-items: center; justify-content: center; gap: 8px; color: var(--muted); font-size: .84rem; font-weight: 700; }
 .stepper li:not(:last-child)::after { position: absolute; z-index: -1; top: 50%; left: 60%; width: 80%; height: 1px; background: var(--line); content: ""; }
 .stepper li span { display: grid; width: 28px; height: 28px; place-items: center; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); }
 .stepper li.stepper-active { color: var(--red); }
@@ -207,8 +207,9 @@ textarea { min-height: 100px; resize: vertical; }
 .page-tabs button { min-height: 38px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 9px 9px 0 0; background: #eee7dc; color: var(--muted); cursor: pointer; }
 .page-tabs button[aria-selected="true"] { border-color: var(--red); background: var(--ivory); color: var(--red); font-weight: 800; }
 .annotation-workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, .65fr); gap: 16px; align-items: start; }
-.annotation-canvas { position: sticky; top: 12px; overflow: hidden; min-height: 520px; border: 1px solid #d7cec1; border-radius: 12px; background: #dcd4ca; box-shadow: var(--shadow); cursor: crosshair; }
-.annotation-canvas > img { display: block; width: 100%; min-height: 520px; max-height: 78vh; object-fit: contain; background: #e8e1d8; }
+.annotation-canvas { position: sticky; top: 12px; overflow: hidden; border: 1px solid #d7cec1; border-radius: 12px; background: #dcd4ca; box-shadow: var(--shadow); cursor: crosshair; }
+.annotation-canvas:focus-visible { outline: 3px solid rgb(180 35 24 / 45%); outline-offset: 3px; }
+.annotation-canvas > img { display: block; width: 100%; height: auto; background: #e8e1d8; }
 .annotation-svg { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .comment-circle { fill: rgb(180 35 24 / 15%); stroke: var(--red); stroke-width: .45; vector-effect: non-scaling-stroke; }
 .highlight-circle { fill: rgb(152 120 47 / 20%); stroke: var(--gold); stroke-width: .45; vector-effect: non-scaling-stroke; }
@@ -290,8 +291,7 @@ textarea { min-height: 100px; resize: vertical; }
   .review-actions { width: 100%; justify-content: stretch; }
   .review-actions .button { flex: 1; }
   .annotation-workspace { grid-template-columns: 1fr; }
-  .annotation-canvas { position: relative; min-height: 420px; top: 0; }
-  .annotation-canvas > img { min-height: 420px; max-height: none; }
+  .annotation-canvas { position: relative; top: 0; }
   .report-section { padding: 18px; }
   .report-arrays, .score-layout, .sample-card { grid-template-columns: 1fr; }
   .score-inputs { grid-template-columns: repeat(2, 1fr); }

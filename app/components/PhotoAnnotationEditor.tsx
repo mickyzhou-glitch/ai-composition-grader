@@ -1,6 +1,7 @@
 "use client";
 
-import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { useRef } from "react";
+import type { KeyboardEvent, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 
 import type { Annotation } from "@/src/domain/contracts";
 
@@ -35,6 +36,7 @@ interface PhotoAnnotationEditorProps {
 }
 
 export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChange }: PhotoAnnotationEditorProps) {
+  const draggingPointerId = useRef<number | null>(null);
   const pageAnnotations = annotations
     .map((annotation, index) => ({ annotation, index }))
     .filter(({ annotation }) => annotation.pageIndex === pageIndex)
@@ -44,9 +46,7 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
     onChange(annotations.map((annotation, current) => current === index ? { ...annotation, ...change } : annotation));
   }
 
-  function add(event: MouseEvent<HTMLDivElement>) {
-    if ((event.target as Element).closest("button")) return;
-    const point = normalizedPoint(event, event.currentTarget.getBoundingClientRect());
+  function addAt(point: { x: number; y: number }) {
     onChange([...annotations, {
       pageIndex,
       ...point,
@@ -57,19 +57,54 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
     }]);
   }
 
-  function drag(event: ReactPointerEvent<HTMLButtonElement>, index: number) {
-    if (event.type === "pointerdown") {
-      event.currentTarget.setPointerCapture?.(event.pointerId);
+  function add(event: MouseEvent<HTMLDivElement>) {
+    if ((event.target as Element).closest("button")) return;
+    addAt(normalizedPoint(event, event.currentTarget.getBoundingClientRect()));
+  }
+
+  function addByKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) {
       return;
     }
-    if (!event.currentTarget.hasPointerCapture?.(event.pointerId)) return;
+    event.preventDefault();
+    addAt({ x: 0.5, y: 0.5 });
+  }
+
+  function startDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    draggingPointerId.current = event.pointerId;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  function drag(event: ReactPointerEvent<HTMLButtonElement>, index: number) {
+    if (draggingPointerId.current !== event.pointerId) return;
     const canvas = event.currentTarget.closest(".annotation-canvas") as HTMLElement | null;
     if (canvas) replace(index, normalizedPoint(event, canvas.getBoundingClientRect()));
   }
 
+  function stopDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (draggingPointerId.current === event.pointerId) draggingPointerId.current = null;
+  }
+
+  function nudge(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const shifts: Record<string, Partial<Pick<Annotation, "x" | "y">>> = {
+      ArrowLeft: { x: -0.01 },
+      ArrowRight: { x: 0.01 },
+      ArrowUp: { y: -0.01 },
+      ArrowDown: { y: 0.01 },
+    };
+    const shift = shifts[event.key];
+    if (!shift) return;
+    event.preventDefault();
+    const annotation = annotations[index];
+    replace(index, {
+      x: Math.max(0, Math.min(1, annotation.x + (shift.x ?? 0))),
+      y: Math.max(0, Math.min(1, annotation.y + (shift.y ?? 0))),
+    });
+  }
+
   return (
     <div className="annotation-workspace">
-      <div className="annotation-canvas" aria-label={`第 ${pageIndex + 1} 页作文批注画布`} onClick={add}>
+      <div className="annotation-canvas" aria-label={`第 ${pageIndex + 1} 页作文批注画布`} tabIndex={0} onClick={add} onKeyDown={addByKeyboard}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt={`第 ${pageIndex + 1} 页作文`} />
         <svg className="annotation-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -84,8 +119,11 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
             className={`annotation-marker ${annotation.isHighlight ? "annotation-marker--highlight" : ""}`}
             style={{ left: `${annotation.x * 100}%`, top: `${annotation.y * 100}%` }}
             aria-label={`拖动批注 ${markerIndex + 1}`}
-            onPointerDown={(event) => drag(event, index)}
+            onPointerDown={startDrag}
             onPointerMove={(event) => drag(event, index)}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
+            onKeyDown={(event) => nudge(event, index)}
           >{markerIndex + 1}</button>
         ))}
         <span className="canvas-hint">点击作文空白处添加批注</span>

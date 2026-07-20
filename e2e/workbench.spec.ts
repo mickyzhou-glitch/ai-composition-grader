@@ -4,10 +4,10 @@ test("renders the teacher workbench", async ({ page }) => {
   await page.goto("/");
 
   await expect(
-    page.getByRole("heading", { name: "AI 作业批改助手" }),
+    page.getByRole("heading", { name: "新建作文批改" }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "教师工作台" }),
   ).toBeVisible();
-  await expect(page.getByText("系统准备就绪")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "批改历史" })).toBeVisible();
 });
