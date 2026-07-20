@@ -122,6 +122,46 @@ describe("ReviewService analysis CAS", () => {
     });
   });
 
+  it.each([
+    ["report", { report: readyEnvelope.report }, { report: readyEnvelope.report }],
+    [
+      "annotations",
+      {
+        annotations: [{
+          pageIndex: 0,
+          x: 0.2,
+          y: 0.3,
+          category: "sentence" as const,
+          anchorText: "我跑得很快",
+          comment: "补充动作细节。",
+          isHighlight: false,
+        }],
+      },
+      { annotations: [{ category: "sentence" }] },
+    ],
+  ])("分析期间教师修改 %s 时使旧分析 CAS 失效", async (_field, edits, saved) => {
+    const ai = deferred<AiReviewEnvelope>();
+    const analyze = vi.fn(() => ai.promise);
+    const service = serviceFor(analyze);
+
+    const pending = service.analyze("review-1");
+    await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
+    const edited = service.update("review-1", edits);
+    ai.resolve(readyEnvelope);
+
+    expect(edited).toMatchObject({
+      revision: 2,
+      analysisRunId: null,
+      ...saved,
+    });
+    await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
+    expect(repository.getById("review-1")).toMatchObject({
+      revision: 2,
+      analysisRunId: null,
+      ...saved,
+    });
+  });
+
   it("分析期间换图时旧结果不能覆盖新图片状态", async () => {
     const ai = deferred<AiReviewEnvelope>();
     const analyze = vi.fn(() => ai.promise);

@@ -74,7 +74,7 @@ describe("settings route handlers", () => {
         keyConfigured: true,
       })),
       getSecret: vi.fn(async () => "must-not-leak"),
-      save: vi.fn(),
+      testCandidate: vi.fn(),
     };
     const handlers = createSettingsRouteHandlers({
       settingsService,
@@ -98,17 +98,19 @@ describe("settings route handlers", () => {
 
   it("PUT 先测试候选连接，成功后才保存", async () => {
     const calls: string[] = [];
+    const testConnection = vi.fn(async () => calls.push("test"));
     const settingsService = {
       get: vi.fn(),
-      getSecret: vi.fn(),
-      save: vi.fn(async () => {
+      testCandidate: vi.fn(async (input, tester, save) => {
+        await tester({ ...input, apiKey: input.apiKey ?? "stored-key" });
+        expect(save).toBe(true);
         calls.push("save");
         return { baseUrl: "https://ai.test/v1", model: "m", keyConfigured: true };
       }),
     };
     const handlers = createSettingsRouteHandlers({
       settingsService,
-      testConnection: vi.fn(async () => calls.push("test")),
+      testConnection,
     });
 
     const response = await handlers.PUT(
@@ -121,27 +123,31 @@ describe("settings route handlers", () => {
 
     expect(response.status).toBe(200);
     expect(calls).toEqual(["test", "save"]);
-    expect(settingsService.save).toHaveBeenCalledWith({
+    expect(settingsService.testCandidate).toHaveBeenCalledWith({
       baseUrl: "https://ai.test/v1",
       model: "m",
       apiKey: "new-key",
-    });
+    }, testConnection, true);
   });
 
   it("PUT 连接测试失败时不保存候选设置", async () => {
     const settingsService = {
       get: vi.fn(),
-      getSecret: vi.fn(),
-      save: vi.fn(),
+      testCandidate: vi.fn(async (_input, tester) => tester({
+        baseUrl: "https://ai.test/v1",
+        model: "m",
+        apiKey: "bad-key",
+      })),
     };
+    const testConnection = vi.fn(async () => {
+      throw Object.assign(new Error("provider failed"), {
+        code: "AI_REQUEST_FAILED",
+        status: 502,
+      });
+    });
     const handlers = createSettingsRouteHandlers({
       settingsService,
-      testConnection: vi.fn(async () => {
-        throw Object.assign(new Error("provider failed"), {
-          code: "AI_REQUEST_FAILED",
-          status: 502,
-        });
-      }),
+      testConnection,
     });
 
     const response = await handlers.PUT(
@@ -157,23 +163,31 @@ describe("settings route handlers", () => {
       ok: false,
       error: { code: "AI_REQUEST_FAILED" },
     });
-    expect(settingsService.save).not.toHaveBeenCalled();
+    expect(settingsService.testCandidate).toHaveBeenCalledWith({
+      baseUrl: "https://ai.test/v1",
+      model: "m",
+      apiKey: "bad-key",
+    }, testConnection, true);
   });
 
   it("POST /test 测试失败不保存并返回 502", async () => {
     const settingsService = {
       get: vi.fn(),
-      getSecret: vi.fn(),
-      save: vi.fn(),
+      testCandidate: vi.fn(async (_input, tester) => tester({
+        baseUrl: "https://ai.test/v1",
+        model: "m",
+        apiKey: "bad-key",
+      })),
     };
+    const testConnection = vi.fn(async () => {
+      throw Object.assign(new Error("provider failed"), {
+        code: "AI_REQUEST_FAILED",
+        status: 502,
+      });
+    });
     const handlers = createSettingsRouteHandlers({
       settingsService,
-      testConnection: vi.fn(async () => {
-        throw Object.assign(new Error("provider failed"), {
-          code: "AI_REQUEST_FAILED",
-          status: 502,
-        });
-      }),
+      testConnection,
     });
 
     const response = await handlers.POST_TEST(
@@ -189,7 +203,11 @@ describe("settings route handlers", () => {
       ok: false,
       error: { code: "AI_REQUEST_FAILED" },
     });
-    expect(settingsService.save).not.toHaveBeenCalled();
+    expect(settingsService.testCandidate).toHaveBeenCalledWith({
+      baseUrl: "https://ai.test/v1",
+      model: "m",
+      apiKey: "bad-key",
+    }, testConnection, false);
   });
 });
 
@@ -389,6 +407,44 @@ describe("review route handlers", () => {
 
     expect(response.status).toBe(413);
     expect(formData).not.toHaveBeenCalled();
+  });
+
+  it("无 Content-Length 的分块 multipart 也按实际读取字节硬拒绝", async () => {
+    const boundary = "grader-boundary";
+    const body = [
+      `--${boundary}\r\n`,
+      'Content-Disposition: form-data; name="images"; filename="page.jpg"\r\n',
+      "Content-Type: image/jpeg\r\n\r\n",
+      "123456789",
+      `\r\n--${boundary}--\r\n`,
+    ].join("");
+    const encoded = new TextEncoder().encode(body);
+    const request = new Request("http://localhost/api/reviews/review-1/images", {
+      method: "POST",
+      headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoded.subarray(0, 8));
+          controller.enqueue(encoded.subarray(8));
+          controller.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    expect(request.headers.get("content-length")).toBeNull();
+    const handlers = createReviewImagesRouteHandlers(
+      { imageService },
+      { maxMultipartBytes: 8 },
+    );
+
+    const response = await handlers.POST(request, {
+      params: Promise.resolve({ id: "review-1" }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(await json(response)).toMatchObject({
+      error: { code: "PAYLOAD_TOO_LARGE" },
+    });
   });
 
   it("在读取 File 内容前检查单张 20MB 上限", async () => {

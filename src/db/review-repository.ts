@@ -385,6 +385,10 @@ export class ReviewRepository {
         ? "ready_for_review"
         : input.config !== undefined
           ? "draft"
+          : current.status === "analyzing"
+            ? report === null
+              ? "draft"
+              : "ready_for_review"
           : current.status;
     const now = this.now();
 
@@ -396,12 +400,8 @@ export class ReviewRepository {
           report,
           status,
           updatedAt: now,
-          ...(input.config !== undefined
-            ? {
-                revision: sql`${reviews.revision} + 1`,
-                analysisRunId: null,
-              }
-            : {}),
+          revision: sql`${reviews.revision} + 1`,
+          analysisRunId: null,
         })
         .where(eq(reviews.id, id))
         .run();

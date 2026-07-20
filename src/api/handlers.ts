@@ -8,7 +8,12 @@ import {
   evaluationReportSchema,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
-import { normalizeBaseUrl, type SaveSettingsInput, type SettingsView } from "../settings/settings-service";
+import {
+  normalizeBaseUrl,
+  type SaveSettingsInput,
+  type SettingsCandidateTester,
+  type SettingsView,
+} from "../settings/settings-service";
 import type { ReviewService } from "../services/review-service";
 
 const MAX_MULTIPART_BYTES = 64 * 1024 * 1024;
@@ -28,6 +33,52 @@ function ok(data: unknown, status = 200): Response {
 
 function routeError(code: string, message: string, status: number): Error {
   return Object.assign(new Error(message), { code, status });
+}
+
+export async function readMultipartWithLimit(
+  request: Request,
+  maxBytes = MAX_MULTIPART_BYTES,
+): Promise<FormData> {
+  const contentLength = request.headers.get("content-length");
+  if (
+    contentLength !== null &&
+    /^\d+$/.test(contentLength) &&
+    Number(contentLength) > maxBytes
+  ) {
+    throw routeError("PAYLOAD_TOO_LARGE", "上传请求不能超过 64MB", 413);
+  }
+  if (!request.body) return request.formData();
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The size error remains authoritative if cancelling the source fails.
+        }
+        throw routeError("PAYLOAD_TOO_LARGE", "上传请求不能超过 64MB", 413);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const headers = new Headers(request.headers);
+  headers.set("content-length", String(totalBytes));
+  const bufferedRequest = new Request(request.url, {
+    method: request.method,
+    headers,
+    body: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes),
+  });
+  return bufferedRequest.formData();
 }
 
 function failure(error: unknown): Response {
@@ -93,8 +144,11 @@ const settingsTestSchema = settingsWriteSchema.extend({
 
 interface SettingsRouteService {
   get(): Promise<SettingsView | null>;
-  getSecret(): Promise<string | null>;
-  save(input: SaveSettingsInput): Promise<SettingsView>;
+  testCandidate(
+    input: SaveSettingsInput,
+    tester: SettingsCandidateTester,
+    save: boolean,
+  ): Promise<SettingsView | void>;
 }
 
 interface SettingsHandlerDependencies {
@@ -111,18 +165,15 @@ export function createSettingsRouteHandlers(
     ((input: TestConnectionInput) =>
       testOpenAIConnection(input, dependencies.clientFactory));
 
-  async function resolveInput(
+  async function readCandidate(
     request: Request,
     schema: typeof settingsWriteSchema | typeof settingsTestSchema,
   ) {
     const parsed = schema.parse(await readJson(request));
-    const apiKey = parsed.apiKey ?? (await dependencies.settingsService.getSecret());
-    if (!apiKey) throw new TypeError("apiKey must be configured");
     return {
       baseUrl: normalizeBaseUrl(parsed.baseUrl),
       model: parsed.model.trim(),
-      apiKey,
-      suppliedApiKey: parsed.apiKey,
+      ...(parsed.apiKey === undefined ? {} : { apiKey: parsed.apiKey }),
     };
   }
 
@@ -136,20 +187,12 @@ export function createSettingsRouteHandlers(
     },
     async PUT(request: Request) {
       try {
-        const input = await resolveInput(request, settingsWriteSchema);
-        await connectionTest({
-          baseUrl: input.baseUrl,
-          model: input.model,
-          apiKey: input.apiKey,
-        });
         return ok(
-          await dependencies.settingsService.save({
-            baseUrl: input.baseUrl,
-            model: input.model,
-            ...(input.suppliedApiKey === undefined
-              ? {}
-              : { apiKey: input.suppliedApiKey }),
-          }),
+          await dependencies.settingsService.testCandidate(
+            await readCandidate(request, settingsWriteSchema),
+            connectionTest,
+            true,
+          ),
         );
       } catch (error) {
         return failure(error);
@@ -157,12 +200,11 @@ export function createSettingsRouteHandlers(
     },
     async POST_TEST(request: Request) {
       try {
-        const input = await resolveInput(request, settingsTestSchema);
-        await connectionTest({
-          baseUrl: input.baseUrl,
-          model: input.model,
-          apiKey: input.apiKey,
-        });
+        await dependencies.settingsService.testCandidate(
+          await readCandidate(request, settingsTestSchema),
+          connectionTest,
+          false,
+        );
         return ok({ connected: true });
       } catch (error) {
         return failure(error);
@@ -241,25 +283,17 @@ export function createReviewRouteHandlers(dependencies: {
   };
 }
 
-export function createReviewImagesRouteHandlers(dependencies: {
-  imageService: ImageService;
-}) {
+export function createReviewImagesRouteHandlers(
+  dependencies: { imageService: ImageService },
+  options: { maxMultipartBytes?: number } = {},
+) {
   return {
     async POST(request: Request, context: RouteContext) {
       try {
-        const contentLength = request.headers.get("content-length");
-        if (
-          contentLength !== null &&
-          /^\d+$/.test(contentLength) &&
-          Number(contentLength) > MAX_MULTIPART_BYTES
-        ) {
-          throw routeError(
-            "PAYLOAD_TOO_LARGE",
-            "上传请求不能超过 64MB",
-            413,
-          );
-        }
-        const form = await request.formData();
+        const form = await readMultipartWithLimit(
+          request,
+          options.maxMultipartBytes ?? MAX_MULTIPART_BYTES,
+        );
         const entries = form.getAll("images").length > 0
           ? form.getAll("images")
           : form.getAll("files");

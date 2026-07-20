@@ -183,6 +183,70 @@ describe("SettingsService", () => {
     });
   });
 
+  it("testCandidate 将取 key、连接测试和可选保存放在同一队列操作中", async () => {
+    repository.save({ baseUrl: "https://old.example/v1", model: "old-model" });
+    let secret = "sk-old";
+    let releaseOldTest = () => {};
+    let markOldTestStarted = () => {};
+    const oldTestStarted = new Promise<void>((resolve) => {
+      markOldTestStarted = resolve;
+    });
+    const oldTestGate = new Promise<void>((resolve) => {
+      releaseOldTest = resolve;
+    });
+    const statefulStore: SecretStore = {
+      get: vi.fn(async () => secret),
+      set: vi.fn(async (value) => {
+        secret = value;
+      }),
+      delete: vi.fn(async () => {
+        secret = "";
+      }),
+    };
+    service = new SettingsService(repository, statefulStore);
+    const oldTester = vi.fn(async (candidate) => {
+      expect(candidate).toEqual({
+        baseUrl: "https://old.example/v1",
+        model: "old-model",
+        apiKey: "sk-old",
+      });
+      markOldTestStarted();
+      await oldTestGate;
+    });
+    const newTester = vi.fn(async () => {});
+
+    const testingOld = service.testCandidate(
+      { baseUrl: "https://old.example/v1", model: "old-model" },
+      oldTester,
+      false,
+    );
+    await oldTestStarted;
+    const savingNew = service.testCandidate(
+      {
+        baseUrl: "https://new.example/v1",
+        model: "new-model",
+        apiKey: "sk-new",
+      },
+      newTester,
+      true,
+    );
+    await Promise.resolve();
+
+    expect(newTester).not.toHaveBeenCalled();
+    releaseOldTest();
+    await testingOld;
+    await expect(savingNew).resolves.toEqual({
+      baseUrl: "https://new.example/v1",
+      model: "new-model",
+      keyConfigured: true,
+    });
+    expect(newTester).toHaveBeenCalledWith({
+      baseUrl: "https://new.example/v1",
+      model: "new-model",
+      apiKey: "sk-new",
+    });
+  });
+
   it("数据库保存失败时恢复原有密钥", async () => {
     let secret: string | null = "sk-old";
     const statefulStore: SecretStore = {

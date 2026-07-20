@@ -26,6 +26,10 @@ export interface RuntimeSettings {
   apiKey: string;
 }
 
+export type SettingsCandidateTester = (
+  input: RuntimeSettings,
+) => Promise<unknown>;
+
 export function normalizeBaseUrl(input: string): string {
   let url: URL;
   try {
@@ -56,15 +60,54 @@ export class SettingsService {
   ) {}
 
   async save(input: SaveSettingsInput): Promise<SettingsView> {
+    const normalized = this.normalizeInput(input);
+    return this.enqueue(() => this.saveExclusive(normalized));
+  }
+
+  testCandidate(
+    input: SaveSettingsInput,
+    tester: SettingsCandidateTester,
+    save: true,
+  ): Promise<SettingsView>;
+  testCandidate(
+    input: SaveSettingsInput,
+    tester: SettingsCandidateTester,
+    save: false,
+  ): Promise<void>;
+  testCandidate(
+    input: SaveSettingsInput,
+    tester: SettingsCandidateTester,
+    save: boolean,
+  ): Promise<SettingsView | void>;
+  async testCandidate(
+    input: SaveSettingsInput,
+    tester: SettingsCandidateTester,
+    save: boolean,
+  ): Promise<SettingsView | void> {
+    const normalized = this.normalizeInput(input);
+    return this.enqueue(async () => {
+      const apiKey =
+        normalized.apiKey === undefined
+          ? await this.secretStore.get()
+          : normalized.apiKey;
+      if (!apiKey) throw new TypeError("apiKey must be configured");
+      await tester({
+        baseUrl: normalized.baseUrl,
+        model: normalized.model,
+        apiKey,
+      });
+      if (save) return this.saveExclusive(normalized);
+    });
+  }
+
+  private normalizeInput(input: SaveSettingsInput): SaveSettingsInput {
     const baseUrl = normalizeBaseUrl(input.baseUrl);
     const model = input.model.trim();
     if (model.length === 0) throw new TypeError("model must not be empty");
     if (input.apiKey !== null && input.apiKey !== undefined && input.apiKey.length === 0) {
       throw new TypeError("apiKey must not be empty");
     }
-
-    const normalized = { ...input, baseUrl, model };
-    return this.enqueue(() => this.saveExclusive(normalized));
+    return { ...input, baseUrl, model };
   }
 
   private async saveExclusive(input: SaveSettingsInput): Promise<SettingsView> {
