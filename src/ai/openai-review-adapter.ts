@@ -5,7 +5,7 @@ import {
   type AiReviewEnvelope,
   type AssignmentConfig,
 } from "../domain/contracts";
-import { validateReport } from "../domain/report-validation";
+import { deriveLevel, validateReport } from "../domain/report-validation";
 
 const AI_TIMEOUT_MS = 180_000;
 const AI_MAX_RETRIES = 1;
@@ -91,6 +91,27 @@ function buildPrompt(config: AssignmentConfig): string {
   ].join("\n\n");
 }
 
+function buildRepairPrompt(
+  content: string,
+  config: AssignmentConfig,
+  pageCount: number,
+): string {
+  const sampleRule =
+    config.templateType === "preset_self_applause"
+      ? "预设《为自己喝彩》的 sampleParagraphs 必须恰好五段，合计 550-650 个汉字。"
+      : "sampleParagraphs 必须符合当前 AssignmentConfig 的全部写作要求。";
+
+  return [
+    "修复以下无效文本，使其严格符合 schema 和全部业务不变量，并只返回 JSON。",
+    `无效文本：\n${content}`,
+    `运行时页面约束：pageCount=${pageCount}，annotation.pageIndex 必须是整数 0..${pageCount - 1}。`,
+    `当前 AssignmentConfig：${JSON.stringify(config)}`,
+    "评分不变量：themeIntent 0..10、contentSelection 0..10、structure 0..8、languageExpression 0..8、writingConventions 0..4；total 必须等于五项之和；0-29 重写、30-35 二类作文、36-40 优秀作文；偏题或事件不完整时 total 不得超过 29。",
+    sampleRule,
+    `schema 摘要：\n${ENVELOPE_SCHEMA_SUMMARY}`,
+  ].join("\n\n");
+}
+
 function parseJsonResponse(content: string): unknown {
   const trimmed = content.trim();
   const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
@@ -109,11 +130,22 @@ function validateEnvelope(
     }
   }
   if (!envelope.readable) return envelope;
+  const scores = envelope.report.scores;
+  const total =
+    scores.themeIntent +
+    scores.contentSelection +
+    scores.structure +
+    scores.languageExpression +
+    scores.writingConventions;
   return {
     ...envelope,
-    report: validateReport(envelope.report, {
-      templateType: config.templateType,
-    }),
+    report: validateReport(
+      {
+        ...envelope.report,
+        scores: { ...scores, total, level: deriveLevel(total) },
+      },
+      { templateType: config.templateType },
+    ),
   };
 }
 
@@ -197,7 +229,11 @@ export class OpenAIReviewAdapter {
         messages: [
           {
             role: "user",
-            content: `修复以下无效文本，使其严格符合 schema 并只返回 JSON。\n\n无效文本：\n${content}\n\nschema 摘要：\n${ENVELOPE_SCHEMA_SUMMARY}`,
+            content: buildRepairPrompt(
+              content,
+              input.config,
+              input.imageDataUrls.length,
+            ),
           },
         ],
       });

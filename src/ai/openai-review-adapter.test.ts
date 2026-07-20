@@ -206,6 +206,59 @@ describe("OpenAIReviewAdapter", () => {
     expect(JSON.stringify(repair.messages)).not.toContain("data:image");
   });
 
+  it("语义校验失败时修复提示包含动态页数、当前配置和全部评分不变量", async () => {
+    const offTopicHighScore = {
+      ...successEnvelope,
+      report: { ...report, themeFit: "off_topic" },
+    };
+    const harness = setup([
+      JSON.stringify(offTopicHighScore),
+      JSON.stringify(successEnvelope),
+    ]);
+
+    await expect(
+      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
+    ).resolves.toEqual(successEnvelope);
+
+    const repair = harness.create.mock.calls[1][0] as {
+      messages: Array<{ content: string }>;
+    };
+    const prompt = repair.messages[0].content;
+    expect(prompt).toContain("pageCount=1");
+    expect(prompt).toContain("pageIndex");
+    expect(prompt).toContain("0..0");
+    expect(prompt).toContain(JSON.stringify(config));
+    expect(prompt).toContain("themeIntent");
+    expect(prompt).toContain("total 必须等于");
+    expect(prompt).toContain("0-29");
+    expect(prompt).toContain("偏题");
+    expect(prompt).toContain("29");
+    expect(prompt).toContain("五段");
+    expect(prompt).toContain("550-650");
+  });
+
+  it("五项分数有效时本地重算 total/level 后校验，不浪费修复请求", async () => {
+    const deterministicMistake = {
+      ...successEnvelope,
+      report: {
+        ...report,
+        scores: { ...report.scores, total: 1, level: "重写" },
+      },
+    };
+    const harness = setup([JSON.stringify(deterministicMistake)]);
+
+    const result = await harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    expect(result).toMatchObject({
+      readable: true,
+      report: { scores: { total: 36, level: "优秀作文" } },
+    });
+    expect(harness.create).toHaveBeenCalledOnce();
+  });
+
   it("二次响应仍无效时抛 AI_INVALID_RESPONSE", async () => {
     const harness = setup(["not-json", JSON.stringify({ readable: true })]);
 
