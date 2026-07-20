@@ -15,9 +15,10 @@ async function fixture() {
   roots.push(root);
   const store = new ReviewFileStore(root);
   await store.writeFile("review-1", "images", "safe.jpg", new Uint8Array([1, 2, 3]));
+  await store.writeFile("review-1", "images", "marked.jpg", new Uint8Array([4, 5, 6]));
   const record = {
     id: "review-1",
-    images: [{ originalPath: "images/safe.jpg", annotationPath: "images/marked.jpg", aiPath: "images/ai.jpg" }],
+    images: [{ id: 7, originalPath: "images/safe.jpg", annotationPath: "images/marked.jpg", aiPath: "images/ai.jpg" }],
   };
   const repository = { getById: (id: string) => (id === "review-1" ? record : null) };
   const reviewer = { analyze: async () => { throw new Error("unused"); } };
@@ -30,22 +31,26 @@ describe("review files route", () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
-  it("只返回记录中登记的图片并设置 Content-Type", async () => {
+  it("用不透明 imageId 和 variant 返回当前记录中登记的图片", async () => {
     const handlers = await fixture();
     const response = await handlers.GET(
-      new Request("http://local/api/reviews/review-1/files?path=images%2Fsafe.jpg"),
+      new Request("http://local/api/reviews/review-1/files?imageId=7&variant=annotation"),
       { params: Promise.resolve({ id: "review-1" }) },
     );
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/jpeg");
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([4, 5, 6]));
   });
 
-  it.each(["images/not-listed.jpg", "../secret", "/tmp/secret"])("拒绝未登记或越界路径 %s", async (filePath) => {
+  it.each([
+    "imageId=999&variant=annotation",
+    "imageId=7&variant=unknown",
+    "imageId=../../secret&variant=original",
+  ])("拒绝越权 id 或无效 variant：%s", async (query) => {
     const handlers = await fixture();
     const response = await handlers.GET(
-      new Request(`http://local/api/reviews/review-1/files?path=${encodeURIComponent(filePath)}`),
+      new Request(`http://local/api/reviews/review-1/files?${query}`),
       { params: Promise.resolve({ id: "review-1" }) },
     );
 

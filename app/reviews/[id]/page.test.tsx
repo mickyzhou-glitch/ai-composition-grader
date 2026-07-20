@@ -11,7 +11,7 @@ const review = {
   status: "ready_for_review",
   revision: 1,
   config: { title: "为自己鼓掌", templateType: "custom" },
-  images: [{ id: 1, position: 0, annotationPath: "images/a.jpg", originalName: "作文.jpg" }],
+  images: [{ id: 1, position: 0, originalName: "作文.jpg", mimeType: "image/jpeg", width: 100, height: 100, rotation: 0, crop: null }],
   annotations: [],
   report: {
     themeFit: "fits",
@@ -19,7 +19,7 @@ const review = {
     personalizedComment: "真诚",
     painPoints: ["结尾快"], commonIssues: ["句式单一"], revisionSuggestions: ["补感受"],
     scores: { themeIntent: 8, contentSelection: 8, structure: 7, languageExpression: 7, writingConventions: 3, total: 33, level: "二类作文" },
-    sampleParagraphs: ["示范段"],
+    sampleParagraphs: [{ title: "示范段", text: "示范正文", suggestion: "修改建议" }],
   },
 };
 

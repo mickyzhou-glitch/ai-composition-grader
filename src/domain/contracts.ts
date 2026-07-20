@@ -76,6 +76,13 @@ export const scoreBreakdownSchema = z.object({
 });
 export type ScoreBreakdown = z.infer<typeof scoreBreakdownSchema>;
 
+export const sampleParagraphSchema = z.object({
+  title: z.string().trim().min(1),
+  text: z.string().trim().min(1),
+  suggestion: z.string().trim().min(1),
+});
+export type SampleParagraph = z.infer<typeof sampleParagraphSchema>;
+
 export const evaluationReportSchema = z.object({
   themeFit: z.enum(["fits", "partial", "off_topic"]),
   themeReason: z.string().trim().min(1),
@@ -84,7 +91,7 @@ export const evaluationReportSchema = z.object({
   commonIssues: z.array(z.string()),
   revisionSuggestions: z.array(z.string()),
   scores: scoreBreakdownSchema,
-  sampleParagraphs: z.array(z.string().trim().min(1)).min(1).max(10),
+  sampleParagraphs: z.array(sampleParagraphSchema).min(1).max(10),
 });
 
 export const EvaluationReportSchema = evaluationReportSchema;
@@ -109,7 +116,7 @@ export function createEvaluationReportSchema(templateType: TemplateType) {
     }
 
     const totalCharacters = report.sampleParagraphs.reduce(
-      (total, paragraph) => total + countChineseCharacters(paragraph),
+      (total, paragraph) => total + countChineseCharacters(paragraph.text),
       0,
     );
     if (totalCharacters < 550 || totalCharacters > 650) {

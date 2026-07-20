@@ -10,14 +10,11 @@ export interface ReviewImageView {
   id: number;
   position: number;
   originalName: string;
-  mimeType?: string;
-  originalPath?: string;
-  annotationPath: string;
-  aiPath?: string;
-  width?: number;
-  height?: number;
-  rotation?: 0 | 90 | 180 | 270;
-  crop?: NormalizedCrop | null;
+  mimeType: string;
+  width: number;
+  height: number;
+  rotation: 0 | 90 | 180 | 270;
+  crop: NormalizedCrop | null;
 }
 
 export interface ReviewView {

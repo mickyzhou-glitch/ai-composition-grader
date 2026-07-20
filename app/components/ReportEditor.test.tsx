@@ -19,7 +19,11 @@ const report = {
     total: 29,
     level: "重写" as const,
   },
-  sampleParagraphs: Array.from({ length: 5 }, (_, index) => `第${index + 1}段`),
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第${index + 1}段`,
+    text: "示范正文",
+    suggestion: "修改建议",
+  })),
 };
 
 describe("ReportEditor", () => {
@@ -37,6 +41,36 @@ describe("ReportEditor", () => {
 
     expect(onChange).toHaveBeenLastCalledWith(
       expect.objectContaining({ scores: expect.objectContaining({ total: 30, level: "二类作文" }) }),
+    );
+  });
+
+  it("分数截断为整数并在偏题时将总分压到重写区间", () => {
+    const onChange = vi.fn();
+    const highReport = {
+      ...report,
+      scores: {
+        themeIntent: 10,
+        contentSelection: 10,
+        structure: 8,
+        languageExpression: 8,
+        writingConventions: 4,
+        total: 40,
+        level: "优秀作文" as const,
+      },
+    };
+    render(<ReportEditor report={highReport} onChange={onChange} />);
+
+    fireEvent.change(screen.getByLabelText("主题立意（0-10）"), { target: { value: "8.9" } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ scores: expect.objectContaining({ themeIntent: 8 }) }),
+    );
+
+    fireEvent.change(screen.getByRole("combobox", { name: "主题判断" }), { target: { value: "off_topic" } });
+    expect(onChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        themeFit: "off_topic",
+        scores: expect.objectContaining({ total: 29, level: "重写" }),
+      }),
     );
   });
 });

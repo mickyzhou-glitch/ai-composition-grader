@@ -70,13 +70,13 @@ const ENVELOPE_SCHEMA_SUMMARY = [
   "{readable:false,pageWarnings:string[],annotations:Annotation[]}",
   "| {readable:true,pageWarnings:string[],report:EvaluationReport,annotations:Annotation[]};",
   "Annotation={pageIndex:integer,x:0..1,y:0..1,category:typo|punctuation|sentence|expression|structure|highlight,anchorText:string,comment:string,isHighlight:boolean};",
-  "EvaluationReport={themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],scores:{themeIntent:0..10,contentSelection:0..10,structure:0..8,languageExpression:0..8,writingConventions:0..4,total:0..40,level:优秀作文|二类作文|重写},sampleParagraphs:string[]}",
+  "EvaluationReport={themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],scores:{themeIntent:0..10,contentSelection:0..10,structure:0..8,languageExpression:0..8,writingConventions:0..4,total:0..40,level:优秀作文|二类作文|重写},sampleParagraphs:{title:string,text:string,suggestion:string}[]}",
 ].join("\n");
 
 function buildPrompt(config: AssignmentConfig): string {
   const presetRule =
     config.templateType === "preset_self_applause"
-      ? "预设《为自己喝彩》的修改后范文必须恰好五段，合计 550-650 个汉字。"
+      ? "预设《为自己喝彩》的示范段必须恰好五段，且仅 text 字段合计 550-650 个汉字。"
       : "自定义模板按用户的全部写作要求生成修改示例。";
   return [
     "你是一名面向上海五四学制六年级学生的作文老师，请使用学生友好、具体且鼓励性的语气。",
@@ -98,7 +98,7 @@ function buildRepairPrompt(
 ): string {
   const sampleRule =
     config.templateType === "preset_self_applause"
-      ? "预设《为自己喝彩》的 sampleParagraphs 必须恰好五段，合计 550-650 个汉字。"
+      ? "预设《为自己喝彩》的 sampleParagraphs 必须恰好五段对象，且仅 text 字段合计 550-650 个汉字。"
       : "sampleParagraphs 必须符合当前 AssignmentConfig 的全部写作要求。";
 
   return [

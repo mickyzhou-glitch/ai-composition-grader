@@ -15,6 +15,7 @@ import {
   type SettingsView,
 } from "../settings/settings-service";
 import type { ReviewService } from "../services/review-service";
+import { reviewImageVariants, type ReviewImageVariant } from "../services/review-service";
 
 const MAX_MULTIPART_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -33,6 +34,40 @@ function ok(data: unknown, status = 200): Response {
 
 function routeError(code: string, message: string, status: number): Error {
   return Object.assign(new Error(message), { code, status });
+}
+
+function reviewImageDto(image: {
+  id: number;
+  position: number;
+  originalName: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  rotation: 0 | 90 | 180 | 270;
+  crop: unknown;
+}) {
+  return {
+    id: image.id,
+    position: image.position,
+    originalName: image.originalName,
+    mimeType: image.mimeType,
+    width: image.width,
+    height: image.height,
+    rotation: image.rotation,
+    crop: image.crop,
+  };
+}
+
+function reviewDto(review: {
+  images: Array<Parameters<typeof reviewImageDto>[0]>;
+}) {
+  return { ...review, images: review.images.map(reviewImageDto) };
+}
+
+function imageCollectionDto(result: {
+  images: Array<Parameters<typeof reviewImageDto>[0]>;
+}) {
+  return { ...result, images: result.images.map(reviewImageDto) };
 }
 
 export async function readMultipartWithLimit(
@@ -237,7 +272,7 @@ export function createReviewsRouteHandlers(dependencies: {
   return {
     async GET() {
       try {
-        return ok(dependencies.reviewService.list());
+        return ok(dependencies.reviewService.list().map(reviewDto));
       } catch (error) {
         return failure(error);
       }
@@ -245,7 +280,7 @@ export function createReviewsRouteHandlers(dependencies: {
     async POST(request: Request) {
       try {
         const input = createReviewSchema.parse(await readJson(request));
-        return ok(await dependencies.reviewService.create(input.config), 201);
+        return ok(reviewDto(await dependencies.reviewService.create(input.config)), 201);
       } catch (error) {
         return failure(error);
       }
@@ -259,7 +294,7 @@ export function createReviewRouteHandlers(dependencies: {
   return {
     async GET(_request: Request, context: RouteContext) {
       try {
-        return ok(dependencies.reviewService.get((await context.params).id));
+        return ok(reviewDto(dependencies.reviewService.get((await context.params).id)));
       } catch (error) {
         return failure(error);
       }
@@ -267,7 +302,7 @@ export function createReviewRouteHandlers(dependencies: {
     async PATCH(request: Request, context: RouteContext) {
       try {
         const input = updateReviewSchema.parse(await readJson(request));
-        return ok(dependencies.reviewService.update((await context.params).id, input));
+        return ok(reviewDto(dependencies.reviewService.update((await context.params).id, input)));
       } catch (error) {
         return failure(error);
       }
@@ -324,21 +359,21 @@ export function createReviewImagesRouteHandlers(
             };
           }),
         );
-        return ok(
+        return ok(imageCollectionDto(
           await dependencies.imageService.upload((await context.params).id, files),
-        );
+        ));
       } catch (error) {
         return failure(error);
       }
     },
     async PATCH(request: Request, context: RouteContext) {
       try {
-        return ok(
+        return ok(imageCollectionDto(
           await dependencies.imageService.update(
             (await context.params).id,
             (await readJson(request)) as never,
           ),
-        );
+        ));
       } catch (error) {
         return failure(error);
       }
@@ -352,7 +387,8 @@ export function createAnalyzeRouteHandlers(dependencies: {
   return {
     async POST(_request: Request, context: RouteContext) {
       try {
-        return ok(await dependencies.reviewService.analyze((await context.params).id));
+        const result = await dependencies.reviewService.analyze((await context.params).id);
+        return ok({ ...result, review: reviewDto(result.review) });
       } catch (error) {
         return failure(error);
       }
@@ -366,13 +402,19 @@ export function createReviewFilesRouteHandlers(dependencies: {
   return {
     async GET(request: Request, context: RouteContext) {
       try {
-        const storedPath = new URL(request.url).searchParams.get("path");
-        if (!storedPath) {
-          throw routeError("INVALID_FILE_PATH", "缺少图片路径", 400);
+        const params = new URL(request.url).searchParams;
+        const rawImageId = params.get("imageId");
+        const variant = params.get("variant");
+        if (!rawImageId || !/^[1-9]\d*$/.test(rawImageId)) {
+          throw routeError("INVALID_FILE_PATH", "图片 id 无效", 400);
+        }
+        if (!variant || !(reviewImageVariants as readonly string[]).includes(variant)) {
+          throw routeError("INVALID_FILE_PATH", "图片版本无效", 400);
         }
         const file = await dependencies.reviewService.readImageFile(
           (await context.params).id,
-          storedPath,
+          Number(rawImageId),
+          variant as ReviewImageVariant,
         );
         const bytes = Uint8Array.from(file.data).buffer;
         return new Response(bytes, {

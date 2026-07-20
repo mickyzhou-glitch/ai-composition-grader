@@ -37,6 +37,9 @@ export class ReviewServiceError extends Error {
   }
 }
 
+export const reviewImageVariants = ["original", "annotation", "ai"] as const;
+export type ReviewImageVariant = (typeof reviewImageVariants)[number];
+
 export class ReviewService {
   private readonly createId: () => string;
   private readonly createRunId: () => string;
@@ -67,19 +70,22 @@ export class ReviewService {
     return review;
   }
 
-  async readImageFile(id: string, storedPath: string): Promise<{
+  async readImageFile(
+    id: string,
+    imageId: number,
+    variant: ReviewImageVariant,
+  ): Promise<{
     data: Buffer;
     contentType: string;
   }> {
     const review = this.get(id);
+    const image = review.images.find((candidate) => candidate.id === imageId);
+    if (!image) {
+      throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
+    }
+    const storedPath = image[`${variant}Path`];
     if (!/^images\/[^/\\\0]+$/.test(storedPath)) {
       throw new ReviewServiceError("INVALID_FILE_PATH", "图片路径无效", 400);
-    }
-    const registered = review.images.some((image) =>
-      [image.originalPath, image.annotationPath, image.aiPath].includes(storedPath),
-    );
-    if (!registered) {
-      throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
     }
     const extension = storedPath.split(".").at(-1)?.toLowerCase();
     const contentTypes: Record<string, string> = {

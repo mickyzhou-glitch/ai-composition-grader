@@ -44,7 +44,11 @@ const readyEnvelope: AiReviewEnvelope = {
       total: 36,
       level: "优秀作文",
     },
-    sampleParagraphs: Array.from({ length: 5 }, () => "我".repeat(110)),
+    sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: "我".repeat(110),
+      suggestion: "补充细节。",
+    })),
   },
   annotations: [],
 };

@@ -50,7 +50,11 @@ const report = {
     total: 36,
     level: "优秀作文" as const,
   },
-  sampleParagraphs: Array.from({ length: 5 }, () => "我".repeat(110)),
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第 ${index + 1} 段`,
+    text: "我".repeat(110),
+    suggestion: "补充细节。",
+  })),
 };
 
 async function json(response: Response) {
@@ -329,6 +333,70 @@ describe("review route handlers", () => {
       params: Promise.resolve({ id: "review-1" }),
     });
     expect(missing.status).toBe(404);
+  });
+
+  it("列表和详情 DTO 不泄漏图片内部存储路径", async () => {
+    const internalImage = {
+      id: 3,
+      position: 0,
+      originalName: "作文.jpg",
+      mimeType: "image/jpeg",
+      originalPath: "images/internal-original.jpg",
+      annotationPath: "images/internal-annotation.jpg",
+      aiPath: "images/internal-ai.jpg",
+      width: 60,
+      height: 80,
+      rotation: 0 as const,
+      crop: null,
+    };
+    const internalReview = {
+      id: "review-safe",
+      status: "draft" as const,
+      config,
+      report: null,
+      revision: 0,
+      analysisRunId: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      images: [internalImage],
+      annotations: [],
+    };
+    const collection = createReviewsRouteHandlers({
+      reviewService: { list: () => [internalReview] } as never,
+    });
+    const detail = createReviewRouteHandlers({
+      reviewService: { get: () => internalReview } as never,
+    });
+
+    const listed = await collection.GET();
+    const shown = await detail.GET(new Request("http://localhost"), {
+      params: Promise.resolve({ id: "review-safe" }),
+    });
+
+    for (const response of [listed, shown]) {
+      const serialized = JSON.stringify(await json(response));
+      expect(serialized).not.toContain("images/internal-original.jpg");
+      expect(serialized).not.toContain("images/internal-annotation.jpg");
+      expect(serialized).not.toContain("images/internal-ai.jpg");
+    }
+  });
+
+  it("教师提交不符合业务评分约束的报告时返回 400", async () => {
+    repository.create({ id: "review-1", config });
+    const item = createReviewRouteHandlers({ reviewService });
+
+    const response = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        report: { ...report, themeFit: "off_topic" },
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({
+      ok: false,
+      error: { code: "VALIDATION_ERROR" },
+    });
   });
 
   it("multipart 一次上传三图并保存处理后的字段", async () => {

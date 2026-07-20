@@ -1,6 +1,11 @@
 import type { EvaluationReport, TemplateType } from "./contracts";
 import { createEvaluationReportSchema } from "./contracts";
 
+export class ReportValidationError extends Error {
+  readonly code = "VALIDATION_ERROR";
+  readonly status = 400;
+}
+
 export function deriveLevel(total: number) {
   if (!Number.isInteger(total) || total < 0 || total > 40) {
     throw new RangeError("total must be an integer from 0 to 40");
@@ -31,14 +36,14 @@ export function validateReport(
     scores.writingConventions;
 
   if (scores.total !== calculatedTotal) {
-    throw new Error(
+    throw new ReportValidationError(
       `scores.total must equal the sum of score items (${calculatedTotal})`,
     );
   }
 
   const expectedLevel = deriveLevel(scores.total);
   if (scores.level !== expectedLevel) {
-    throw new Error(
+    throw new ReportValidationError(
       `scores.level must be ${expectedLevel} when total is ${scores.total}`,
     );
   }
@@ -47,7 +52,7 @@ export function validateReport(
     (report.themeFit === "off_topic" || options.incompleteEvent === true) &&
     scores.total > 29
   ) {
-    throw new Error(
+    throw new ReportValidationError(
       "off_topic or incompleteEvent reports must have a total no greater than 29",
     );
   }

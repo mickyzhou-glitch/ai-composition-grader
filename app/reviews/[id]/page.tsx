@@ -153,7 +153,7 @@ export default function ReviewPage() {
         <section className="review-grid" aria-label="作文复核工作区">
           <div className="photo-pane">
             {review.images.length > 1 ? <div className="page-tabs" role="tablist" aria-label="作文页码">{review.images.map((image, index) => <button role="tab" aria-selected={activePage === index} key={image.id} onClick={() => setActivePage(index)}>第 {index + 1} 页</button>)}</div> : null}
-            {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?path=${encodeURIComponent(activeImage.annotationPath)}`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 3 张图片后再分析。</p></div>}
+            {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 3 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
             {report ? <ReportEditor report={report} onChange={changeReport} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={review.images.length === 0} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}

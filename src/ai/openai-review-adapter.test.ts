@@ -36,7 +36,11 @@ const report: EvaluationReport = {
     total: 36,
     level: "优秀作文",
   },
-  sampleParagraphs: Array.from({ length: 5 }, () => "我".repeat(110)),
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第 ${index + 1} 段`,
+    text: "我".repeat(110),
+    suggestion: "补充细节。",
+  })),
 };
 
 const successEnvelope = {
@@ -156,6 +160,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("学生友好");
     expect(serialized).toContain("五段");
     expect(serialized).toContain("550-650");
+    expect(serialized).toContain("sampleParagraphs:{title:string,text:string,suggestion:string}[]");
   });
 
   it("兼容 ```json fenced JSON", async () => {

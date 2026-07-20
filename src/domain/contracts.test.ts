@@ -27,7 +27,11 @@ const validReport = {
   commonIssues: ["个别句子较长"],
   revisionSuggestions: ["补充结尾感受"],
   scores: validScores,
-  sampleParagraphs: Array.from({ length: 5 }, () => paragraph),
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第 ${index + 1} 段`,
+    text: paragraph,
+    suggestion: "补充动作细节。",
+  })),
 };
 
 describe("assignmentConfigSchema", () => {
@@ -74,6 +78,36 @@ describe("annotationSchema", () => {
 });
 
 describe("evaluationReportSchema", () => {
+  it("示范段落是有标题、正文和修改建议的结构化对象", () => {
+    const samples = Array.from({ length: 5 }, (_, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: paragraph,
+      suggestion: "补充动作细节。",
+    }));
+
+    expect(
+      createEvaluationReportSchema("preset_self_applause").parse({
+        ...validReport,
+        sampleParagraphs: samples,
+      }),
+    ).toMatchObject({ sampleParagraphs: samples });
+  });
+
+  it("预设模板只计算示范正文的中文字符数", () => {
+    const samples = Array.from({ length: 5 }, (_, index) => ({
+      title: "题".repeat(200),
+      text: "文".repeat(index === 4 ? 110 : 110),
+      suggestion: "建议".repeat(200),
+    }));
+
+    expect(
+      createEvaluationReportSchema("preset_self_applause").parse({
+        ...validReport,
+        sampleParagraphs: samples,
+      }),
+    ).toMatchObject({ sampleParagraphs: samples });
+  });
+
   it("接受预设模板的5段、550个中文字范文", () => {
     expect(
       createEvaluationReportSchema("preset_self_applause").parse(validReport),
@@ -96,7 +130,11 @@ describe("evaluationReportSchema", () => {
       expect(() =>
         createEvaluationReportSchema("preset_self_applause").parse({
           ...validReport,
-          sampleParagraphs: lengths.map((length) => "文".repeat(length)),
+          sampleParagraphs: lengths.map((length, index) => ({
+            title: `第 ${index + 1} 段`,
+            text: "文".repeat(length),
+            suggestion: "修改建议。",
+          })),
         }),
       ).toThrow();
     },
@@ -106,14 +144,14 @@ describe("evaluationReportSchema", () => {
     expect(
       createEvaluationReportSchema("custom").parse({
         ...validReport,
-        sampleParagraphs: ["简短示例"],
+        sampleParagraphs: [{ title: "示例", text: "简短示例", suggestion: "补充细节。" }],
       }).sampleParagraphs,
     ).toHaveLength(1);
 
     expect(
       createEvaluationReportSchema("custom").parse({
         ...validReport,
-        sampleParagraphs: Array.from({ length: 10 }, () => "示例"),
+        sampleParagraphs: Array.from({ length: 10 }, () => ({ title: "示例", text: "示例", suggestion: "建议" })),
       }).sampleParagraphs,
     ).toHaveLength(10);
   });
