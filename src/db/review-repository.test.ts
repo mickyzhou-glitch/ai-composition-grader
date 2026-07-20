@@ -158,9 +158,10 @@ describe("ReviewRepository", () => {
     ]);
   });
 
-  it("更新报告、状态和配置", () => {
+  it("更新配置即使仍兼容旧报告也清理分析结果并回到 draft", () => {
     repository.create({ id: "review-1", config });
     repository.updateReport("review-1", report);
+    repository.replaceAnnotations("review-1", [annotation]);
     repository.updateStatus("review-1", "ready_for_review");
     repository.updateConfig("review-1", {
       ...config,
@@ -168,8 +169,10 @@ describe("ReviewRepository", () => {
     });
 
     const updated = repository.getById("review-1");
-    expect(updated?.report).toEqual(report);
-    expect(updated?.status).toBe("ready_for_review");
+    expect(updated?.report).toBeNull();
+    expect(updated?.annotations).toEqual([]);
+    expect(updated?.status).toBe("draft");
+    expect(updated?.revision).toBe(1);
     expect(updated?.config.title).toBe("我为自己喝彩");
     expect(updated?.updatedAt.getTime()).toBeGreaterThan(
       updated?.createdAt.getTime() ?? Number.POSITIVE_INFINITY,

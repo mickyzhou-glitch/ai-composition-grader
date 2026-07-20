@@ -340,35 +340,25 @@ export class ReviewRepository {
     const updatedAt = this.now();
     this.database.transaction((transaction) => {
       const current = transaction
-        .select({ report: reviews.report })
+        .select({ id: reviews.id })
         .from(reviews)
         .where(eq(reviews.id, id))
         .get();
       if (!current) throw new ReviewNotFoundError(id);
 
-      let reportIsValid = true;
-      if (current.report !== null) {
-        try {
-          validateReport(current.report, { templateType: config.templateType });
-        } catch {
-          reportIsValid = false;
-        }
-      }
-
       transaction
         .update(reviews)
         .set({
           config,
+          report: null,
+          status: "draft",
           updatedAt,
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
-          ...(reportIsValid ? {} : { report: null, status: "draft" as const }),
         })
         .where(eq(reviews.id, id))
         .run();
-      if (!reportIsValid) {
-        transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
-      }
+      transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
     });
     return this.requireById(id);
   }
