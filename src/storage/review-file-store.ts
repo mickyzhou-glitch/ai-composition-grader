@@ -55,20 +55,77 @@ function isMissing(error: unknown): boolean {
   );
 }
 
-async function ensureRealDirectory(directory: string): Promise<void> {
+async function assertRealDirectory(
+  parent: string,
+  directory: string,
+): Promise<boolean> {
+  let info;
   try {
-    const info = await lstat(directory);
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw new UnsafeStoragePathError(directory);
-    }
+    info = await lstat(directory);
   } catch (error) {
-    if (!isMissing(error)) throw error;
+    if (isMissing(error)) return false;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new UnsafeStoragePathError(directory);
+  }
+
+  const [realDirectory, realParent] = await Promise.all([
+    realpath(directory),
+    realpath(parent),
+  ]);
+  if (
+    path.dirname(realDirectory) !== realParent ||
+    path.basename(realDirectory) !== path.basename(directory)
+  ) {
+    throw new UnsafeStoragePathError(directory);
+  }
+  return true;
+}
+
+async function ensureRealDirectory(
+  parent: string,
+  directory: string,
+): Promise<void> {
+  if (!(await assertRealDirectory(parent, directory))) {
     await mkdir(directory);
-    const created = await lstat(directory);
-    if (created.isSymbolicLink() || !created.isDirectory()) {
+    if (!(await assertRealDirectory(parent, directory))) {
       throw new UnsafeStoragePathError(directory);
     }
   }
+}
+
+async function assertSafeFile(parent: string, filename: string): Promise<void> {
+  let info;
+  try {
+    info = await lstat(filename);
+  } catch (error) {
+    if (isMissing(error)) return;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new UnsafeStoragePathError(filename);
+  }
+
+  const [realFile, realParent] = await Promise.all([
+    realpath(filename),
+    realpath(parent),
+  ]);
+  if (
+    path.dirname(realFile) !== realParent ||
+    path.basename(realFile) !== path.basename(filename)
+  ) {
+    throw new UnsafeStoragePathError(filename);
+  }
+}
+
+function isSymlinkError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "ELOOP"
+  );
 }
 
 export class ReviewFileStore {
@@ -90,10 +147,10 @@ export class ReviewFileStore {
   async createReview(reviewId: string): Promise<ReviewStoragePaths> {
     const paths = this.getReviewPaths(reviewId);
     await this.assertSafeRoot(true);
-    await ensureRealDirectory(paths.reviewDirectory);
+    await ensureRealDirectory(this.rootDirectory, paths.reviewDirectory);
     await Promise.all([
-      ensureRealDirectory(paths.imagesDirectory),
-      ensureRealDirectory(paths.pdfDirectory),
+      ensureRealDirectory(paths.reviewDirectory, paths.imagesDirectory),
+      ensureRealDirectory(paths.reviewDirectory, paths.pdfDirectory),
     ]);
     return paths;
   }
@@ -109,14 +166,21 @@ export class ReviewFileStore {
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
     const destination = resolveInside(directory, filename);
-    const file = await open(
-      destination,
-      constants.O_WRONLY |
-        constants.O_CREAT |
-        constants.O_TRUNC |
-        constants.O_NOFOLLOW,
-      0o600,
-    );
+    await assertSafeFile(directory, destination);
+    let file;
+    try {
+      file = await open(
+        destination,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_TRUNC |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+    } catch (error) {
+      if (isSymlinkError(error)) throw new UnsafeStoragePathError(destination);
+      throw error;
+    }
     try {
       await file.writeFile(data);
     } finally {
@@ -135,10 +199,17 @@ export class ReviewFileStore {
     const paths = this.getReviewPaths(reviewId);
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
-    const file = await open(
-      resolveInside(directory, filename),
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
+    await assertRealDirectory(this.rootDirectory, paths.reviewDirectory);
+    await assertRealDirectory(paths.reviewDirectory, directory);
+    const source = resolveInside(directory, filename);
+    await assertSafeFile(directory, source);
+    let file;
+    try {
+      file = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error) {
+      if (isSymlinkError(error)) throw new UnsafeStoragePathError(source);
+      throw error;
+    }
     try {
       return await file.readFile();
     } finally {
@@ -149,36 +220,15 @@ export class ReviewFileStore {
   async deleteReview(reviewId: string): Promise<void> {
     if (!(await this.assertSafeRoot(false))) return;
     const { reviewDirectory } = this.getReviewPaths(reviewId);
+    if (!(await assertRealDirectory(this.rootDirectory, reviewDirectory))) return;
     await rm(reviewDirectory, { recursive: true, force: true });
   }
 
   private async assertSafeRoot(create: boolean): Promise<boolean> {
     if (create) {
       await mkdir(path.dirname(this.rootDirectory), { recursive: true });
-      await ensureRealDirectory(this.rootDirectory);
+      await ensureRealDirectory(path.dirname(this.rootDirectory), this.rootDirectory);
     }
-
-    let rootInfo;
-    try {
-      rootInfo = await lstat(this.rootDirectory);
-    } catch (error) {
-      if (!create && isMissing(error)) return false;
-      throw error;
-    }
-    if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
-      throw new UnsafeStoragePathError(this.rootDirectory);
-    }
-
-    const [realRoot, realParent] = await Promise.all([
-      realpath(this.rootDirectory),
-      realpath(path.dirname(this.rootDirectory)),
-    ]);
-    if (
-      path.dirname(realRoot) !== realParent ||
-      path.basename(realRoot) !== path.basename(this.rootDirectory)
-    ) {
-      throw new UnsafeStoragePathError(this.rootDirectory);
-    }
-    return true;
+    return assertRealDirectory(path.dirname(this.rootDirectory), this.rootDirectory);
   }
 }

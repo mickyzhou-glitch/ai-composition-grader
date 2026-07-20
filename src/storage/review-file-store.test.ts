@@ -71,7 +71,7 @@ describe("ReviewFileStore", () => {
     expect((await stat(store.rootDirectory)).isDirectory()).toBe(true);
   });
 
-  it("拒绝通过符号链接读写根目录外文件", async () => {
+  it("拒绝通过中间目录符号链接写入根目录外", async () => {
     const outside = path.join(temporaryDirectory, "outside");
     await store.createReview("review-1");
     await rm(store.getReviewPaths("review-1").imagesDirectory, { recursive: true });
@@ -79,6 +79,30 @@ describe("ReviewFileStore", () => {
 
     await expect(
       store.writeFile("review-1", "images", "escaped.txt", "secret"),
+    ).rejects.toBeInstanceOf(UnsafeStoragePathError);
+  });
+
+  it("拒绝通过中间目录符号链接读取外部 secret", async () => {
+    const outside = path.join(temporaryDirectory, "outside");
+    await mkdir(outside);
+    await writeFile(path.join(outside, "secret.txt"), "do-not-read");
+    await store.createReview("review-1");
+    await rm(store.getReviewPaths("review-1").imagesDirectory, { recursive: true });
+    await symlink(outside, store.getReviewPaths("review-1").imagesDirectory);
+
+    await expect(
+      store.readFile("review-1", "images", "secret.txt"),
+    ).rejects.toBeInstanceOf(UnsafeStoragePathError);
+  });
+
+  it("拒绝读取指向外部文件的最终符号链接", async () => {
+    const outside = path.join(temporaryDirectory, "secret.txt");
+    await writeFile(outside, "do-not-read");
+    const paths = await store.createReview("review-1");
+    await symlink(outside, path.join(paths.imagesDirectory, "page.txt"));
+
+    await expect(
+      store.readFile("review-1", "images", "page.txt"),
     ).rejects.toBeInstanceOf(UnsafeStoragePathError);
   });
 
@@ -102,6 +126,20 @@ describe("ReviewFileStore", () => {
     await mkdir(externalReview, { recursive: true });
     await writeFile(marker, "keep");
     await symlink(outside, store.rootDirectory);
+
+    await expect(store.deleteReview("review-1")).rejects.toBeInstanceOf(
+      UnsafeStoragePathError,
+    );
+    await expect(readFile(marker, "utf8")).resolves.toBe("keep");
+  });
+
+  it("review 目录是符号链接时拒绝删除且不触及链接目标", async () => {
+    const outside = path.join(temporaryDirectory, "outside-review");
+    const marker = path.join(outside, "keep.txt");
+    await mkdir(outside);
+    await writeFile(marker, "keep");
+    await mkdir(store.rootDirectory);
+    await symlink(outside, store.getReviewPaths("review-1").reviewDirectory);
 
     await expect(store.deleteReview("review-1")).rejects.toBeInstanceOf(
       UnsafeStoragePathError,
