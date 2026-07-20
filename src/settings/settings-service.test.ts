@@ -75,6 +75,67 @@ describe("SettingsService", () => {
     expect(secretStore.set).not.toHaveBeenCalled();
   });
 
+  it("空 apiKey 在访问 Keychain 前就被拒绝", async () => {
+    await expect(
+      service.save({
+        baseUrl: "https://api.example.com",
+        model: "model",
+        apiKey: "",
+      }),
+    ).rejects.toThrow("apiKey must not be empty");
+    expect(secretStore.get).not.toHaveBeenCalled();
+  });
+
+  it("串行化并发 save 的保存与失败补偿", async () => {
+    let secret: string | null = "sk-old";
+    let releaseFirstSet = () => {};
+    let markFirstSetStarted = () => {};
+    const firstSetStarted = new Promise<void>((resolve) => {
+      markFirstSetStarted = resolve;
+    });
+    const firstSetGate = new Promise<void>((resolve) => {
+      releaseFirstSet = resolve;
+    });
+    const statefulStore: SecretStore = {
+      get: vi.fn(async () => secret),
+      set: vi.fn(async (value: string) => {
+        secret = value;
+        if (value === "sk-first") {
+          markFirstSetStarted();
+          await firstSetGate;
+        }
+      }),
+      delete: vi.fn(async () => {
+        secret = null;
+      }),
+    };
+    const saveSettings = repository.save.bind(repository);
+    vi.spyOn(repository, "save").mockImplementation((input) => {
+      if (input.model === "first") throw new Error("first database failed");
+      return saveSettings(input);
+    });
+    service = new SettingsService(repository, statefulStore);
+
+    const first = service.save({
+      baseUrl: "https://api.example.com",
+      model: "first",
+      apiKey: "sk-first",
+    });
+    await firstSetStarted;
+    const second = service.save({
+      baseUrl: "https://api.example.com",
+      model: "second",
+      apiKey: "sk-second",
+    });
+    await Promise.resolve();
+
+    expect(statefulStore.get).toHaveBeenCalledTimes(1);
+    releaseFirstSet();
+    await expect(first).rejects.toThrow("first database failed");
+    await expect(second).resolves.toMatchObject({ model: "second" });
+    expect(secret).toBe("sk-second");
+  });
+
   it("数据库保存失败时恢复原有密钥", async () => {
     let secret: string | null = "sk-old";
     const statefulStore: SecretStore = {

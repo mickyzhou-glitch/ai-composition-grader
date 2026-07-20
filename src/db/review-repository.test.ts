@@ -2,7 +2,7 @@
 
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   Annotation,
@@ -10,7 +10,10 @@ import type {
   EvaluationReport,
 } from "../domain/contracts";
 import { initializeSchema } from "./init";
-import { ReviewRepository } from "./review-repository";
+import {
+  CorruptReviewDataError,
+  ReviewRepository,
+} from "./review-repository";
 import * as schema from "./schema";
 
 const config: AssignmentConfig = {
@@ -105,6 +108,29 @@ describe("ReviewRepository", () => {
         { pageIndex: 1, path: "images/page-2.jpg" },
       ],
     );
+  });
+
+  it("在一个同步读事务内聚合 review 快照", () => {
+    repository.create({ id: "review-1", config });
+    const database = drizzle(sqlite, { schema });
+    const transaction = vi.spyOn(database, "transaction");
+    repository = new ReviewRepository(database);
+
+    expect(repository.getById("review-1")?.id).toBe("review-1");
+    expect(transaction).toHaveBeenCalledOnce();
+  });
+
+  it("SQLite 查询错误保持原错误而不伪装成损坏数据", () => {
+    repository.create({ id: "review-1", config });
+    sqlite.exec("ALTER TABLE reviews RENAME COLUMN config TO broken_config");
+
+    try {
+      repository.getById("review-1");
+      throw new Error("expected getById to fail");
+    } catch (error) {
+      expect(error).not.toBeInstanceOf(CorruptReviewDataError);
+      expect(error).toMatchObject({ code: "SQLITE_ERROR" });
+    }
   });
 
   it("按更新时间倒序列出历史记录", () => {

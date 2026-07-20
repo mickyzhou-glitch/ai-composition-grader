@@ -42,6 +42,8 @@ export function normalizeBaseUrl(input: string): string {
 }
 
 export class SettingsService {
+  private saveQueue: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly repository: SettingsRepository,
     private readonly secretStore: SecretStore,
@@ -51,14 +53,27 @@ export class SettingsService {
     const baseUrl = normalizeBaseUrl(input.baseUrl);
     const model = input.model.trim();
     if (model.length === 0) throw new TypeError("model must not be empty");
+    if (input.apiKey !== null && input.apiKey !== undefined && input.apiKey.length === 0) {
+      throw new TypeError("apiKey must not be empty");
+    }
 
+    const normalized = { ...input, baseUrl, model };
+    const operation = this.saveQueue.then(
+      () => this.saveExclusive(normalized),
+      () => this.saveExclusive(normalized),
+    );
+    this.saveQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
+  private async saveExclusive(input: SaveSettingsInput): Promise<SettingsView> {
     let previousSecret: string | null | undefined;
     let secretMutationAttempted = false;
     if (input.apiKey !== undefined) {
       previousSecret = await this.secretStore.get();
-      if (input.apiKey !== null && input.apiKey.length === 0) {
-        throw new TypeError("apiKey must not be empty");
-      }
     }
 
     try {
@@ -69,7 +84,7 @@ export class SettingsService {
         secretMutationAttempted = true;
         await this.secretStore.set(input.apiKey);
       }
-      this.repository.save({ baseUrl, model });
+      this.repository.save({ baseUrl: input.baseUrl, model: input.model });
     } catch (error) {
       if (secretMutationAttempted) {
         try {

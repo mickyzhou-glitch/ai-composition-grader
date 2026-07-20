@@ -1,4 +1,5 @@
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
+import { ZodError } from "zod";
 
 import {
   annotationSchema,
@@ -116,7 +117,8 @@ export class ReviewRepository {
   }
 
   getById(id: string): ReviewRecord | null {
-    const review = this.database
+    return this.database.transaction((database) => {
+    const review = database
       .select({
         id: reviews.id,
         status: reviews.status,
@@ -131,36 +133,45 @@ export class ReviewRepository {
 
     let storedConfig: unknown;
     try {
-      storedConfig = this.database
-        .select({ config: reviews.config })
+      const configJson = database
+        .select({ config: sql<string>`${reviews.config}` })
         .from(reviews)
         .where(eq(reviews.id, id))
         .get()?.config;
-    } catch {
+      storedConfig = configJson === undefined ? undefined : JSON.parse(configJson);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
       throw new CorruptReviewDataError(id, "config");
     }
 
     let config: AssignmentConfig;
     try {
       config = assignmentConfigSchema.parse(storedConfig);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ZodError)) throw error;
       throw new CorruptReviewDataError(id, "config");
     }
     let status: ReviewStatus;
     try {
       status = reviewStatusSchema.parse(review.status);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ZodError)) throw error;
       throw new CorruptReviewDataError(id, "status");
     }
     let report: EvaluationReport | null = null;
     let storedReport: unknown;
     try {
-      storedReport = this.database
-        .select({ report: reviews.report })
+      const reportJson = database
+        .select({ report: sql<string | null>`${reviews.report}` })
         .from(reviews)
         .where(eq(reviews.id, id))
         .get()?.report;
-    } catch {
+      storedReport =
+        reportJson === null || reportJson === undefined
+          ? reportJson
+          : JSON.parse(reportJson);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
       throw new CorruptReviewDataError(id, "report");
     }
     if (storedReport !== null) {
@@ -173,13 +184,13 @@ export class ReviewRepository {
       }
     }
 
-    const images = this.database
+    const images = database
       .select()
       .from(reviewImages)
       .where(eq(reviewImages.reviewId, id))
       .orderBy(reviewImages.pageIndex, reviewImages.id)
       .all();
-    const storedAnnotations = this.database
+    const storedAnnotations = database
       .select()
       .from(annotations)
       .where(eq(annotations.reviewId, id))
@@ -202,6 +213,7 @@ export class ReviewRepository {
         isHighlight: annotation.isHighlight,
       })),
     };
+    });
   }
 
   getReview(id: string): ReviewRecord | null {
