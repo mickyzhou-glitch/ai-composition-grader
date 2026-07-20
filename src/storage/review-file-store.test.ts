@@ -1,6 +1,14 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -72,5 +80,32 @@ describe("ReviewFileStore", () => {
     await expect(
       store.writeFile("review-1", "images", "escaped.txt", "secret"),
     ).rejects.toBeInstanceOf(UnsafeStoragePathError);
+  });
+
+  it("reviews 根目录是符号链接时拒绝写入", async () => {
+    const outside = path.join(temporaryDirectory, "outside");
+    await mkdir(outside);
+    await symlink(outside, store.rootDirectory);
+
+    await expect(
+      store.writeFile("review-1", "images", "escaped.txt", "secret"),
+    ).rejects.toBeInstanceOf(UnsafeStoragePathError);
+    await expect(stat(path.join(outside, "review-1"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("reviews 根目录是符号链接时拒绝删除且不触及链接目标", async () => {
+    const outside = path.join(temporaryDirectory, "outside");
+    const externalReview = path.join(outside, "review-1");
+    const marker = path.join(externalReview, "keep.txt");
+    await mkdir(externalReview, { recursive: true });
+    await writeFile(marker, "keep");
+    await symlink(outside, store.rootDirectory);
+
+    await expect(store.deleteReview("review-1")).rejects.toBeInstanceOf(
+      UnsafeStoragePathError,
+    );
+    await expect(readFile(marker, "utf8")).resolves.toBe("keep");
   });
 });

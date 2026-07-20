@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, rm } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_REVIEWS_DIRECTORY = path.resolve(
@@ -64,6 +64,10 @@ async function ensureRealDirectory(directory: string): Promise<void> {
   } catch (error) {
     if (!isMissing(error)) throw error;
     await mkdir(directory);
+    const created = await lstat(directory);
+    if (created.isSymbolicLink() || !created.isDirectory()) {
+      throw new UnsafeStoragePathError(directory);
+    }
   }
 }
 
@@ -85,7 +89,7 @@ export class ReviewFileStore {
 
   async createReview(reviewId: string): Promise<ReviewStoragePaths> {
     const paths = this.getReviewPaths(reviewId);
-    await mkdir(this.rootDirectory, { recursive: true });
+    await this.assertSafeRoot(true);
     await ensureRealDirectory(paths.reviewDirectory);
     await Promise.all([
       ensureRealDirectory(paths.imagesDirectory),
@@ -127,6 +131,7 @@ export class ReviewFileStore {
     filename: string,
   ): Promise<Buffer> {
     assertSafeSegment(filename);
+    await this.assertSafeRoot(false);
     const paths = this.getReviewPaths(reviewId);
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
@@ -142,7 +147,38 @@ export class ReviewFileStore {
   }
 
   async deleteReview(reviewId: string): Promise<void> {
+    if (!(await this.assertSafeRoot(false))) return;
     const { reviewDirectory } = this.getReviewPaths(reviewId);
     await rm(reviewDirectory, { recursive: true, force: true });
+  }
+
+  private async assertSafeRoot(create: boolean): Promise<boolean> {
+    if (create) {
+      await mkdir(path.dirname(this.rootDirectory), { recursive: true });
+      await ensureRealDirectory(this.rootDirectory);
+    }
+
+    let rootInfo;
+    try {
+      rootInfo = await lstat(this.rootDirectory);
+    } catch (error) {
+      if (!create && isMissing(error)) return false;
+      throw error;
+    }
+    if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+      throw new UnsafeStoragePathError(this.rootDirectory);
+    }
+
+    const [realRoot, realParent] = await Promise.all([
+      realpath(this.rootDirectory),
+      realpath(path.dirname(this.rootDirectory)),
+    ]);
+    if (
+      path.dirname(realRoot) !== realParent ||
+      path.basename(realRoot) !== path.basename(this.rootDirectory)
+    ) {
+      throw new UnsafeStoragePathError(this.rootDirectory);
+    }
+    return true;
   }
 }
