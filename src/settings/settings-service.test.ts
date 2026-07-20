@@ -136,6 +136,53 @@ describe("SettingsService", () => {
     expect(secret).toBe("sk-second");
   });
 
+  it("getRuntimeConfig 与 save 共用队列，绝不拼出旧 URL 和新 key", async () => {
+    repository.save({ baseUrl: "https://old.example/v1", model: "old-model" });
+    let secret = "sk-old";
+    let releaseSet = () => {};
+    let markSetStarted = () => {};
+    const setStarted = new Promise<void>((resolve) => {
+      markSetStarted = resolve;
+    });
+    const setGate = new Promise<void>((resolve) => {
+      releaseSet = resolve;
+    });
+    const statefulStore: SecretStore = {
+      get: vi.fn(async () => secret),
+      set: vi.fn(async (value) => {
+        secret = value;
+        markSetStarted();
+        await setGate;
+      }),
+      delete: vi.fn(async () => {
+        secret = "";
+      }),
+    };
+    service = new SettingsService(repository, statefulStore);
+
+    const saving = service.save({
+      baseUrl: "https://new.example/v1",
+      model: "new-model",
+      apiKey: "sk-new",
+    });
+    await setStarted;
+    let snapshotSettled = false;
+    const snapshot = service.getRuntimeConfig().then((value) => {
+      snapshotSettled = true;
+      return value;
+    });
+    await Promise.resolve();
+
+    expect(snapshotSettled).toBe(false);
+    releaseSet();
+    await saving;
+    await expect(snapshot).resolves.toEqual({
+      baseUrl: "https://new.example/v1",
+      model: "new-model",
+      apiKey: "sk-new",
+    });
+  });
+
   it("数据库保存失败时恢复原有密钥", async () => {
     let secret: string | null = "sk-old";
     const statefulStore: SecretStore = {

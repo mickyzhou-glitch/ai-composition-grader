@@ -70,12 +70,11 @@ function setup(contents: Array<string | null | Error>) {
     },
   );
   const settings = {
-    get: vi.fn(async () => ({
+    getRuntimeConfig: vi.fn(async () => ({
       baseUrl: "https://ai.example.test/v1",
       model: "vision-model",
-      keyConfigured: true,
+      apiKey: "secret-key",
     })),
-    getSecret: vi.fn(async () => "secret-key"),
   };
   return {
     create,
@@ -85,6 +84,45 @@ function setup(contents: Array<string | null | Error>) {
 }
 
 describe("OpenAIReviewAdapter", () => {
+  it("只读取 SettingsService 的原子运行时快照", async () => {
+    const create = vi.fn(async (input: unknown) => {
+      void input;
+      return { choices: [{ message: { content: JSON.stringify(successEnvelope) } }] };
+    });
+    const factory = vi.fn(
+      (options: Parameters<OpenAIClientFactory>[0]): OpenAICompatibleClient => {
+        void options;
+        return { chat: { completions: { create } } };
+      },
+    );
+    const settings = {
+      getRuntimeConfig: vi.fn(async () => ({
+        baseUrl: "https://atomic.example/v1",
+        model: "atomic-model",
+        apiKey: "atomic-key",
+      })),
+      get: vi.fn(() => {
+        throw new Error("non-atomic get must not be called");
+      }),
+      getSecret: vi.fn(() => {
+        throw new Error("non-atomic getSecret must not be called");
+      }),
+    };
+    const adapter = new OpenAIReviewAdapter(settings as never, {
+      clientFactory: factory,
+    });
+
+    await adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] });
+
+    expect(settings.getRuntimeConfig).toHaveBeenCalledOnce();
+    expect(settings.get).not.toHaveBeenCalled();
+    expect(settings.getSecret).not.toHaveBeenCalled();
+    expect(factory).toHaveBeenCalledWith(expect.objectContaining({
+      baseURL: "https://atomic.example/v1",
+      apiKey: "atomic-key",
+    }));
+  });
+
   it("用设置中的 endpoint/model/key、固定超时重试和全部 data URL 发起批改", async () => {
     const harness = setup([JSON.stringify(successEnvelope)]);
     const images = [

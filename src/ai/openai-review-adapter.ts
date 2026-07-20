@@ -35,12 +35,11 @@ const defaultClientFactory: OpenAIClientFactory = (options) =>
   new OpenAI(options) as unknown as OpenAICompatibleClient;
 
 export interface AiSettingsSource {
-  get(): Promise<{
+  getRuntimeConfig(): Promise<{
     baseUrl: string;
     model: string;
-    keyConfigured: boolean;
+    apiKey: string;
   } | null>;
-  getSecret(): Promise<string | null>;
 }
 
 export interface AnalyzeCompositionInput {
@@ -153,11 +152,8 @@ export class OpenAIReviewAdapter {
     ) {
       throw new TypeError("every composition page must be an image data URL");
     }
-    const [settings, apiKey] = await Promise.all([
-      this.settings.get(),
-      this.settings.getSecret(),
-    ]);
-    if (!settings || !apiKey) {
+    const settings = await this.settings.getRuntimeConfig();
+    if (!settings) {
       throw new AiAdapterError(
         "AI_SETTINGS_INCOMPLETE",
         "请先配置 AI 服务地址、模型和 API Key",
@@ -165,7 +161,7 @@ export class OpenAIReviewAdapter {
       );
     }
     const client = this.clientFactory({
-      apiKey,
+      apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
       timeout: AI_TIMEOUT_MS,
       maxRetries: AI_MAX_RETRIES,

@@ -20,6 +20,12 @@ export interface SettingsView {
   keyConfigured: boolean;
 }
 
+export interface RuntimeSettings {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}
+
 export function normalizeBaseUrl(input: string): string {
   let url: URL;
   try {
@@ -42,7 +48,7 @@ export function normalizeBaseUrl(input: string): string {
 }
 
 export class SettingsService {
-  private saveQueue: Promise<void> = Promise.resolve();
+  private operationQueue: Promise<void> = Promise.resolve();
 
   constructor(
     private readonly repository: SettingsRepository,
@@ -58,15 +64,7 @@ export class SettingsService {
     }
 
     const normalized = { ...input, baseUrl, model };
-    const operation = this.saveQueue.then(
-      () => this.saveExclusive(normalized),
-      () => this.saveExclusive(normalized),
-    );
-    this.saveQueue = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    return operation;
+    return this.enqueue(() => this.saveExclusive(normalized));
   }
 
   private async saveExclusive(input: SaveSettingsInput): Promise<SettingsView> {
@@ -117,5 +115,28 @@ export class SettingsService {
 
   async getSecret(): Promise<string | null> {
     return this.secretStore.get();
+  }
+
+  async getRuntimeConfig(): Promise<RuntimeSettings | null> {
+    return this.enqueue(async () => {
+      const settings = this.repository.get();
+      if (!settings) return null;
+      const apiKey = await this.secretStore.get();
+      if (!apiKey) return null;
+      return {
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+        apiKey,
+      };
+    });
+  }
+
+  private enqueue<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.operationQueue.then(operation, operation);
+    this.operationQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 }
