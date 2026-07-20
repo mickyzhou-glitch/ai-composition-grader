@@ -11,6 +11,7 @@
 
 ```bash
 npm install
+npm run db:init
 npm run dev
 ```
 
@@ -41,6 +42,10 @@ npx playwright install chromium
 ## 项目结构
 
 - `app/`：Next.js App Router 页面与全局样式
+- `src/domain/`：作业配置、批注与评价报告契约
+- `src/db/`：SQLite/Drizzle schema 与强类型 repository
+- `src/storage/`：按 review 隔离的本地文件存储
+- `src/settings/`：基础设置与 macOS Keychain 密钥适配器
 - `e2e/`：Playwright smoke 测试
 - `test/`：Vitest 测试初始化
 - `playwright.config.ts`：端到端测试与本地服务配置

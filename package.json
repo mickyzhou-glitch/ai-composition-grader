@@ -2,12 +2,14 @@
   "name": "ai-composition-grader",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "db:init": "node scripts/init-db.mts",
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
