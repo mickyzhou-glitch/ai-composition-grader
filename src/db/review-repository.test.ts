@@ -281,6 +281,43 @@ describe("ReviewRepository", () => {
     ]);
   });
 
+  it("替换图片会清理旧分析并回到 draft", () => {
+    repository.create({ id: "review-1", config });
+    repository.updateReport("review-1", report);
+    repository.replaceAnnotations("review-1", [annotation]);
+    repository.updateStatus("review-1", "ready_for_review");
+
+    const updated = repository.replaceImages("review-1", []);
+
+    expect(updated).toMatchObject({ status: "draft", report: null, annotations: [] });
+  });
+
+  it("原子保存可辨认或不可辨认的 AI 分析结果", () => {
+    repository.create({ id: "review-1", config });
+    const ready = repository.saveAnalysis("review-1", {
+      readable: true,
+      pageWarnings: [],
+      report,
+      annotations: [annotation],
+    });
+    expect(ready).toMatchObject({
+      status: "ready_for_review",
+      report,
+      annotations: [annotation],
+    });
+
+    const unreadable = repository.saveAnalysis("review-1", {
+      readable: false,
+      pageWarnings: ["图片模糊"],
+      annotations: [],
+    });
+    expect(unreadable).toMatchObject({
+      status: "needs_better_images",
+      report: null,
+      annotations: [],
+    });
+  });
+
   it("删除 review 并级联删除图片和批注记录", () => {
     repository.create({
       id: "review-1",

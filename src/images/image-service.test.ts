@@ -172,6 +172,21 @@ describe("ImageService", () => {
     expect([...data.subarray(gridPixel, gridPixel + 3)]).not.toEqual([255, 255, 255]);
   });
 
+  it("上传时按 EXIF 自动方向纠正尺寸", async () => {
+    const oriented = await sharp({
+      create: { width: 400, height: 200, channels: 3, background: "white" },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+
+    await service.upload("review-1", [
+      { originalName: "phone.jpg", mimeType: "image/jpeg", data: oriented },
+    ]);
+
+    expect(repository.images[0]).toMatchObject({ width: 200, height: 400 });
+  });
+
   it("按 90 度旋转后应用 0..1 归一化裁剪并重新处理", async () => {
     await service.upload("review-1", [
       {

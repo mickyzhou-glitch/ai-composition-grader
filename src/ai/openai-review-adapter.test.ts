@@ -196,6 +196,18 @@ describe("OpenAIReviewAdapter", () => {
     ).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
+
+  it("拒绝把远程 URL 当作作文页面发送", async () => {
+    const harness = setup([JSON.stringify(successEnvelope)]);
+
+    await expect(
+      harness.adapter.analyze({
+        config,
+        imageDataUrls: ["https://files.example.test/student.jpg"],
+      }),
+    ).rejects.toThrow(/data URL/i);
+    expect(harness.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("testOpenAIConnection", () => {

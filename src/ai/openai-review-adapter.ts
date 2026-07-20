@@ -153,6 +153,13 @@ export class OpenAIReviewAdapter {
     if (input.imageDataUrls.length < 1 || input.imageDataUrls.length > 3) {
       throw new TypeError("imageDataUrls must contain 1 to 3 pages");
     }
+    if (
+      input.imageDataUrls.some(
+        (url) => !/^data:image\/(?:jpeg|jpg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(url),
+      )
+    ) {
+      throw new TypeError("every composition page must be an image data URL");
+    }
     const [settings, apiKey] = await Promise.all([
       this.settings.get(),
       this.settings.getSecret(),

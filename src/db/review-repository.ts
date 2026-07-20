@@ -6,6 +6,7 @@ import {
   assignmentConfigSchema,
   reviewStatusSchema,
   type Annotation,
+  type AiReviewEnvelope,
   type AssignmentConfig,
   type EvaluationReport,
   type NormalizedCrop,
@@ -349,6 +350,7 @@ export class ReviewRepository {
     const now = this.now();
     this.database.transaction((transaction) => {
       transaction.delete(reviewImages).where(eq(reviewImages.reviewId, id)).run();
+      transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
       if (images.length > 0) {
         transaction.insert(reviewImages).values(
           images.map((image) => ({
@@ -362,7 +364,39 @@ export class ReviewRepository {
       }
       transaction
         .update(reviews)
-        .set({ updatedAt: now })
+        .set({ updatedAt: now, status: "draft", report: null })
+        .where(eq(reviews.id, id))
+        .run();
+    });
+    return this.requireById(id);
+  }
+
+  saveAnalysis(id: string, input: AiReviewEnvelope): ReviewRecord {
+    const review = this.requireById(id);
+    const parsedAnnotations = input.annotations.map((annotation) =>
+      annotationSchema.parse(annotation),
+    );
+    const report = input.readable
+      ? validateReport(input.report, { templateType: review.config.templateType })
+      : null;
+    const status = input.readable ? "ready_for_review" : "needs_better_images";
+    const savedAnnotations = input.readable ? parsedAnnotations : [];
+    const now = this.now();
+
+    this.database.transaction((transaction) => {
+      transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
+      if (savedAnnotations.length > 0) {
+        transaction.insert(annotations).values(
+          savedAnnotations.map((annotation, position) => ({
+            reviewId: id,
+            position,
+            ...annotation,
+          })),
+        ).run();
+      }
+      transaction
+        .update(reviews)
+        .set({ report, status, updatedAt: now })
         .where(eq(reviews.id, id))
         .run();
     });
