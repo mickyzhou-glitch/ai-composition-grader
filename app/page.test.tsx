@@ -13,5 +13,7 @@ describe("Home", () => {
     expect(
       screen.getByRole("heading", { name: "教师工作台" }),
     ).toBeInTheDocument();
+    expect(screen.getByLabelText("主导航")).toBeInTheDocument();
+    expect(screen.getByText("系统准备就绪")).toBeInTheDocument();
   });
 });
