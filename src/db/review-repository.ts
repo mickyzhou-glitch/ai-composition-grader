@@ -8,6 +8,7 @@ import {
   type Annotation,
   type AssignmentConfig,
   type EvaluationReport,
+  type NormalizedCrop,
   type ReviewStatus,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
@@ -15,8 +16,16 @@ import type { AppDatabase } from "./client";
 import { annotations, reviewImages, reviews } from "./schema";
 
 export interface ReviewImageInput {
-  pageIndex: number;
-  path: string;
+  position: number;
+  originalName: string;
+  mimeType: string;
+  originalPath: string;
+  annotationPath: string;
+  aiPath: string;
+  width: number;
+  height: number;
+  rotation: 0 | 90 | 180 | 270;
+  crop: NormalizedCrop | null;
 }
 
 export interface ReviewImage extends ReviewImageInput {
@@ -62,13 +71,28 @@ export class CorruptReviewDataError extends Error {
 }
 
 function validateImage(image: ReviewImageInput): ReviewImageInput {
-  if (!Number.isInteger(image.pageIndex) || image.pageIndex < 0) {
-    throw new TypeError("image.pageIndex must be a non-negative integer");
+  if (!Number.isInteger(image.position) || image.position < 0) {
+    throw new TypeError("image.position must be a non-negative integer");
   }
-  if (image.path.trim().length === 0) {
-    throw new TypeError("image.path must not be empty");
+  for (const [field, value] of Object.entries({
+    originalName: image.originalName,
+    mimeType: image.mimeType,
+    originalPath: image.originalPath,
+    annotationPath: image.annotationPath,
+    aiPath: image.aiPath,
+  })) {
+    if (value.trim().length === 0) throw new TypeError(`image.${field} must not be empty`);
   }
-  return { pageIndex: image.pageIndex, path: image.path };
+  if (!Number.isInteger(image.width) || image.width <= 0) {
+    throw new TypeError("image.width must be a positive integer");
+  }
+  if (!Number.isInteger(image.height) || image.height <= 0) {
+    throw new TypeError("image.height must be a positive integer");
+  }
+  if (![0, 90, 180, 270].includes(image.rotation)) {
+    throw new TypeError("image.rotation must be 0, 90, 180, or 270");
+  }
+  return { ...image };
 }
 
 export class ReviewRepository {
@@ -101,8 +125,9 @@ export class ReviewRepository {
         transaction.insert(reviewImages).values(
           images.map((image) => ({
             reviewId: input.id,
-            pageIndex: image.pageIndex,
-            path: image.path,
+            pageIndex: image.position,
+            path: image.annotationPath,
+            ...image,
             createdAt: now,
           })),
         ).run();
@@ -188,7 +213,7 @@ export class ReviewRepository {
       .select()
       .from(reviewImages)
       .where(eq(reviewImages.reviewId, id))
-      .orderBy(reviewImages.pageIndex, reviewImages.id)
+      .orderBy(reviewImages.position, reviewImages.id)
       .all();
     const storedAnnotations = database
       .select()
@@ -308,8 +333,9 @@ export class ReviewRepository {
         transaction.insert(reviewImages).values(
           images.map((image) => ({
             reviewId: id,
-            pageIndex: image.pageIndex,
-            path: image.path,
+            pageIndex: image.position,
+            path: image.annotationPath,
+            ...image,
             createdAt: now,
           })),
         ).run();

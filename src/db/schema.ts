@@ -5,6 +5,7 @@ import type {
   Annotation,
   AssignmentConfig,
   EvaluationReport,
+  NormalizedCrop,
   ReviewStatus,
 } from "../domain/contracts";
 
@@ -33,6 +34,16 @@ export const reviewImages = sqliteTable("review_images", {
     .references(() => reviews.id, { onDelete: "cascade" }),
   pageIndex: integer("page_index").notNull(),
   path: text("path").notNull(),
+  position: integer("position").notNull(),
+  originalName: text("original_name").notNull(),
+  mimeType: text("mime_type").notNull(),
+  originalPath: text("original_path").notNull(),
+  annotationPath: text("annotation_path").notNull(),
+  aiPath: text("ai_path").notNull(),
+  width: integer("width").notNull(),
+  height: integer("height").notNull(),
+  rotation: integer("rotation").notNull(),
+  crop: text("crop", { mode: "json" }).$type<NormalizedCrop>(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
 });
 
@@ -50,4 +61,3 @@ export const annotations = sqliteTable("annotations", {
   comment: text("comment").notNull(),
   isHighlight: integer("is_highlight", { mode: "boolean" }).notNull(),
 });
-

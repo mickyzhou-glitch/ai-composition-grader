@@ -47,6 +47,21 @@ export const annotationSchema = z.object({
 });
 export type Annotation = z.infer<typeof annotationSchema>;
 
+export const normalizedCropSchema = z
+  .object({
+    x: z.number().min(0).max(1),
+    y: z.number().min(0).max(1),
+    width: z.number().positive().max(1),
+    height: z.number().positive().max(1),
+  })
+  .refine((crop) => crop.x + crop.width <= 1, {
+    message: "crop.x + crop.width must be at most 1",
+  })
+  .refine((crop) => crop.y + crop.height <= 1, {
+    message: "crop.y + crop.height must be at most 1",
+  });
+export type NormalizedCrop = z.infer<typeof normalizedCropSchema>;
+
 export const scoreLevelSchema = z.enum(["优秀作文", "二类作文", "重写"]);
 export type ScoreLevel = z.infer<typeof scoreLevelSchema>;
 

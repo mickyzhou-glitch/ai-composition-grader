@@ -88,8 +88,18 @@ describe("ReviewRepository", () => {
       id: "review-1",
       config,
       images: [
-        { pageIndex: 0, path: "images/page-1.jpg" },
-        { pageIndex: 1, path: "images/page-2.jpg" },
+        {
+          position: 0,
+          originalName: "第一页.jpg",
+          mimeType: "image/jpeg",
+          originalPath: "images/page-1-original.jpg",
+          annotationPath: "images/page-1-annotation.jpg",
+          aiPath: "images/page-1-ai.jpg",
+          width: 1200,
+          height: 1600,
+          rotation: 0,
+          crop: null,
+        },
       ],
     });
 
@@ -102,12 +112,15 @@ describe("ReviewRepository", () => {
       report: null,
     });
     expect(saved?.createdAt).toBeInstanceOf(Date);
-    expect(saved?.images.map(({ pageIndex, path }) => ({ pageIndex, path }))).toEqual(
-      [
-        { pageIndex: 0, path: "images/page-1.jpg" },
-        { pageIndex: 1, path: "images/page-2.jpg" },
-      ],
-    );
+    expect(saved?.images[0]).toMatchObject({
+      position: 0,
+      originalName: "第一页.jpg",
+      originalPath: "images/page-1-original.jpg",
+      annotationPath: "images/page-1-annotation.jpg",
+      aiPath: "images/page-1-ai.jpg",
+      width: 1200,
+      height: 1600,
+    });
   });
 
   it("在一个同步读事务内聚合 review 快照", () => {
@@ -272,7 +285,18 @@ describe("ReviewRepository", () => {
     repository.create({
       id: "review-1",
       config,
-      images: [{ pageIndex: 0, path: "images/page-1.jpg" }],
+      images: [{
+        position: 0,
+        originalName: "page.jpg",
+        mimeType: "image/jpeg",
+        originalPath: "images/page-original.jpg",
+        annotationPath: "images/page-annotation.jpg",
+        aiPath: "images/page-ai.jpg",
+        width: 100,
+        height: 100,
+        rotation: 0,
+        crop: null,
+      }],
     });
     repository.replaceAnnotations("review-1", [annotation]);
 
