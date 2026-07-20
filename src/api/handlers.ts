@@ -3,8 +3,9 @@ import { z, ZodError } from "zod";
 import type { OpenAIClientFactory, TestConnectionInput } from "../ai/openai-review-adapter";
 import { testOpenAIConnection } from "../ai/openai-review-adapter";
 import {
+  annotationSchema,
   assignmentConfigSchema,
-  reviewStatusSchema,
+  evaluationReportSchema,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
 import { normalizeBaseUrl, type SaveSettingsInput, type SettingsView } from "../settings/settings-service";
@@ -167,12 +168,19 @@ const createReviewSchema = z.object({ config: assignmentConfigSchema }).strict()
 const updateReviewSchema = z
   .object({
     config: assignmentConfigSchema.optional(),
-    status: reviewStatusSchema.optional(),
+    report: evaluationReportSchema.optional(),
+    annotations: z.array(annotationSchema).optional(),
   })
   .strict()
-  .refine((input) => input.config !== undefined || input.status !== undefined, {
+  .refine(
+    (input) =>
+      input.config !== undefined ||
+      input.report !== undefined ||
+      input.annotations !== undefined,
+    {
     message: "at least one review field is required",
-  });
+    },
+  );
 
 export function createReviewsRouteHandlers(dependencies: {
   reviewService: ReviewService;

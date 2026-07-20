@@ -262,6 +262,43 @@ describe("review route handlers", () => {
       data: { config: { title: "我为自己喝彩" } },
     });
 
+    const illegalStatus = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        config: { ...config, title: "不应保存" },
+        status: "ready_for_review",
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(illegalStatus.status).toBe(400);
+    expect(repository.getById("review-1")).toMatchObject({
+      status: "draft",
+      config: { title: "我为自己喝彩" },
+    });
+
+    const teacherReview = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        report,
+        annotations: [
+          {
+            pageIndex: 0,
+            x: 0.2,
+            y: 0.3,
+            category: "sentence",
+            anchorText: "我跑得很快",
+            comment: "补充动作细节。",
+            isHighlight: false,
+          },
+        ],
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(teacherReview.status).toBe(200);
+    expect(repository.getById("review-1")).toMatchObject({
+      status: "ready_for_review",
+      report,
+      annotations: [{ category: "sentence" }],
+    });
+
     const reviewDirectory = fileStore.getReviewPaths("review-1").reviewDirectory;
     await expect(stat(reviewDirectory)).resolves.toMatchObject({});
 

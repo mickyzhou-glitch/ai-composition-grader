@@ -53,6 +53,12 @@ export interface CreateReviewInput {
   images?: ReviewImageInput[];
 }
 
+export interface TeacherReviewEdits {
+  config?: AssignmentConfig;
+  report?: EvaluationReport;
+  annotations?: Annotation[];
+}
+
 interface ReviewRepositoryOptions {
   now?: () => Date;
 }
@@ -339,6 +345,51 @@ export class ReviewRepository {
         .run();
       if (!reportIsValid) {
         transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
+      }
+    });
+    return this.requireById(id);
+  }
+
+  updateTeacherEdits(id: string, input: TeacherReviewEdits): ReviewRecord {
+    const current = this.requireById(id);
+    const config = input.config
+      ? assignmentConfigSchema.parse(input.config)
+      : current.config;
+    const report =
+      input.report !== undefined
+        ? validateReport(input.report, { templateType: config.templateType })
+        : input.config !== undefined
+          ? null
+          : current.report;
+    const savedAnnotations =
+      input.annotations !== undefined
+        ? input.annotations.map((annotation) => annotationSchema.parse(annotation))
+        : input.config !== undefined
+          ? []
+          : current.annotations;
+    const status =
+      input.report !== undefined
+        ? "ready_for_review"
+        : input.config !== undefined
+          ? "draft"
+          : current.status;
+    const now = this.now();
+
+    this.database.transaction((transaction) => {
+      transaction
+        .update(reviews)
+        .set({ config, report, status, updatedAt: now })
+        .where(eq(reviews.id, id))
+        .run();
+      transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
+      if (savedAnnotations.length > 0) {
+        transaction.insert(annotations).values(
+          savedAnnotations.map((annotation, position) => ({
+            reviewId: id,
+            position,
+            ...annotation,
+          })),
+        ).run();
       }
     });
     return this.requireById(id);

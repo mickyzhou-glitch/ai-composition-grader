@@ -318,6 +318,39 @@ describe("ReviewRepository", () => {
     });
   });
 
+  it("教师编辑 report/annotations 原子提交并由仓储置为 ready", () => {
+    repository.create({ id: "review-1", config });
+    sqlite.exec(`
+      CREATE TRIGGER reject_teacher_annotation
+      BEFORE INSERT ON annotations
+      BEGIN
+        SELECT RAISE(ABORT, 'forced teacher edit failure');
+      END;
+    `);
+
+    expect(() =>
+      repository.updateTeacherEdits("review-1", {
+        config: { ...config, title: "不应半保存" },
+        report,
+        annotations: [annotation],
+      }),
+    ).toThrow(/forced teacher edit failure/);
+    expect(repository.getById("review-1")).toMatchObject({
+      status: "draft",
+      report: null,
+      config,
+      annotations: [],
+    });
+
+    sqlite.exec("DROP TRIGGER reject_teacher_annotation");
+    expect(
+      repository.updateTeacherEdits("review-1", {
+        report,
+        annotations: [annotation],
+      }),
+    ).toMatchObject({ status: "ready_for_review", report });
+  });
+
   it("删除 review 并级联删除图片和批注记录", () => {
     repository.create({
       id: "review-1",

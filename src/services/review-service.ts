@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import type { AiReviewEnvelope, AssignmentConfig, ReviewStatus } from "../domain/contracts";
+import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
 import type {
   ReviewRecord,
   ReviewRepository,
+  TeacherReviewEdits,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
 
@@ -27,11 +28,6 @@ export class ReviewServiceError extends Error {
     super(message);
     this.name = "ReviewServiceError";
   }
-}
-
-export interface UpdateReviewInput {
-  config?: AssignmentConfig;
-  status?: ReviewStatus;
 }
 
 export class ReviewService {
@@ -67,11 +63,9 @@ export class ReviewService {
     }
   }
 
-  update(id: string, input: UpdateReviewInput): ReviewRecord {
-    let review = this.get(id);
-    if (input.config) review = this.repository.updateConfig(id, input.config);
-    if (input.status) review = this.repository.updateStatus(id, input.status);
-    return review;
+  update(id: string, input: TeacherReviewEdits): ReviewRecord {
+    this.get(id);
+    return this.repository.updateTeacherEdits(id, input);
   }
 
   async delete(id: string): Promise<void> {
