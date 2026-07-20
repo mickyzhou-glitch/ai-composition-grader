@@ -55,6 +55,8 @@ describe("openAppDatabase", () => {
       ai_path: "images/legacy.jpg",
       rotation: 0,
     });
+    const review = sqlite.prepare("select * from reviews where id = 'legacy'").get();
+    expect(review).toMatchObject({ revision: 0, analysis_run_id: null });
     sqlite.close();
   });
 });

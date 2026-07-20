@@ -1,4 +1,4 @@
-import { desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { ZodError } from "zod";
 
 import {
@@ -40,6 +40,8 @@ export interface ReviewRecord {
   status: ReviewStatus;
   config: AssignmentConfig;
   report: EvaluationReport | null;
+  revision: number;
+  analysisRunId: string | null;
   createdAt: Date;
   updatedAt: Date;
   images: ReviewImage[];
@@ -59,6 +61,11 @@ export interface TeacherReviewEdits {
   annotations?: Annotation[];
 }
 
+export interface AnalysisToken {
+  revision: number;
+  runId: string;
+}
+
 interface ReviewRepositoryOptions {
   now?: () => Date;
 }
@@ -74,6 +81,16 @@ export class CorruptReviewDataError extends Error {
   constructor(id: string, field: string) {
     super(`Corrupt review data in ${field} for review: ${id}`);
     this.name = "CorruptReviewDataError";
+  }
+}
+
+export class AnalysisConflictError extends Error {
+  readonly code = "ANALYSIS_CONFLICT";
+  readonly status = 409;
+
+  constructor(id: string) {
+    super(`Analysis result is stale for review: ${id}`);
+    this.name = "AnalysisConflictError";
   }
 }
 
@@ -124,6 +141,8 @@ export class ReviewRepository {
         config,
         status,
         report: null,
+        revision: 0,
+        analysisRunId: null,
         createdAt: now,
         updatedAt: now,
       }).run();
@@ -154,6 +173,8 @@ export class ReviewRepository {
       .select({
         id: reviews.id,
         status: reviews.status,
+        revision: reviews.revision,
+        analysisRunId: reviews.analysisRunId,
         createdAt: reviews.createdAt,
         updatedAt: reviews.updatedAt,
       })
@@ -339,6 +360,8 @@ export class ReviewRepository {
         .set({
           config,
           updatedAt,
+          revision: sql`${reviews.revision} + 1`,
+          analysisRunId: null,
           ...(reportIsValid ? {} : { report: null, status: "draft" as const }),
         })
         .where(eq(reviews.id, id))
@@ -378,7 +401,18 @@ export class ReviewRepository {
     this.database.transaction((transaction) => {
       transaction
         .update(reviews)
-        .set({ config, report, status, updatedAt: now })
+        .set({
+          config,
+          report,
+          status,
+          updatedAt: now,
+          ...(input.config !== undefined
+            ? {
+                revision: sql`${reviews.revision} + 1`,
+                analysisRunId: null,
+              }
+            : {}),
+        })
         .where(eq(reviews.id, id))
         .run();
       transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
@@ -415,14 +449,50 @@ export class ReviewRepository {
       }
       transaction
         .update(reviews)
-        .set({ updatedAt: now, status: "draft", report: null })
+        .set({
+          updatedAt: now,
+          status: "draft",
+          report: null,
+          revision: sql`${reviews.revision} + 1`,
+          analysisRunId: null,
+        })
         .where(eq(reviews.id, id))
         .run();
     });
     return this.requireById(id);
   }
 
-  saveAnalysis(id: string, input: AiReviewEnvelope): ReviewRecord {
+  beginAnalysis(
+    id: string,
+    runId: string,
+    expectedRevision: number,
+  ): AnalysisToken {
+    const result = this.database
+      .update(reviews)
+      .set({
+        status: "analyzing",
+        analysisRunId: runId,
+        updatedAt: this.now(),
+      })
+      .where(
+        and(
+          eq(reviews.id, id),
+          eq(reviews.revision, expectedRevision),
+        ),
+      )
+      .run();
+    if (result.changes === 0) {
+      if (!this.getById(id)) throw new ReviewNotFoundError(id);
+      throw new AnalysisConflictError(id);
+    }
+    return { revision: expectedRevision, runId };
+  }
+
+  saveAnalysis(
+    id: string,
+    token: AnalysisToken,
+    input: AiReviewEnvelope,
+  ): ReviewRecord {
     const review = this.requireById(id);
     const parsedAnnotations = input.annotations.map((annotation) =>
       annotationSchema.parse(annotation),
@@ -435,6 +505,18 @@ export class ReviewRepository {
     const now = this.now();
 
     this.database.transaction((transaction) => {
+      const update = transaction
+        .update(reviews)
+        .set({ report, status, updatedAt: now, analysisRunId: null })
+        .where(
+          and(
+            eq(reviews.id, id),
+            eq(reviews.revision, token.revision),
+            eq(reviews.analysisRunId, token.runId),
+          ),
+        )
+        .run();
+      if (update.changes === 0) throw new AnalysisConflictError(id);
       transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
       if (savedAnnotations.length > 0) {
         transaction.insert(annotations).values(
@@ -445,13 +527,24 @@ export class ReviewRepository {
           })),
         ).run();
       }
-      transaction
-        .update(reviews)
-        .set({ report, status, updatedAt: now })
-        .where(eq(reviews.id, id))
-        .run();
     });
     return this.requireById(id);
+  }
+
+  failAnalysis(id: string, token: AnalysisToken): boolean {
+    return (
+      this.database
+        .update(reviews)
+        .set({ status: "failed", updatedAt: this.now(), analysisRunId: null })
+        .where(
+          and(
+            eq(reviews.id, id),
+            eq(reviews.revision, token.revision),
+            eq(reviews.analysisRunId, token.runId),
+          ),
+        )
+        .run().changes > 0
+    );
   }
 
   replaceAnnotations(id: string, input: Annotation[]): Annotation[] {

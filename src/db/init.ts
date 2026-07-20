@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   ),
   config TEXT NOT NULL,
   report TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
+  analysis_run_id TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -71,7 +73,22 @@ CREATE INDEX IF NOT EXISTS annotations_review_id_idx
 
 export function initializeSchema(database: Database.Database): void {
   database.exec(INITIALIZE_SCHEMA_SQL);
+  migrateReviewAnalysisState(database);
   migrateLegacyReviewImages(database);
+}
+
+function migrateReviewAnalysisState(database: Database.Database): void {
+  const columns = new Set(
+    (database.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>).map(
+      ({ name }) => name,
+    ),
+  );
+  if (!columns.has("revision")) {
+    database.exec("ALTER TABLE reviews ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columns.has("analysis_run_id")) {
+    database.exec("ALTER TABLE reviews ADD COLUMN analysis_run_id TEXT");
+  }
 }
 
 function migrateLegacyReviewImages(database: Database.Database): void {

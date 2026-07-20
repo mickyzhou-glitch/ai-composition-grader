@@ -23,6 +23,8 @@ export const reviews = sqliteTable("reviews", {
   status: text("status").$type<ReviewStatus>().notNull(),
   config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
   report: text("report", { mode: "json" }).$type<EvaluationReport>(),
+  revision: integer("revision").notNull().default(0),
+  analysisRunId: text("analysis_run_id"),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

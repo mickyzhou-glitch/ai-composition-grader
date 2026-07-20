@@ -17,6 +17,7 @@ export interface AiReviewer {
 
 interface ReviewServiceOptions {
   createId?: () => string;
+  createRunId?: () => string;
 }
 
 export class ReviewServiceError extends Error {
@@ -32,6 +33,7 @@ export class ReviewServiceError extends Error {
 
 export class ReviewService {
   private readonly createId: () => string;
+  private readonly createRunId: () => string;
 
   constructor(
     private readonly repository: ReviewRepository,
@@ -40,6 +42,7 @@ export class ReviewService {
     options: ReviewServiceOptions = {},
   ) {
     this.createId = options.createId ?? randomUUID;
+    this.createRunId = options.createRunId ?? randomUUID;
   }
 
   list(): ReviewRecord[] {
@@ -86,7 +89,11 @@ export class ReviewService {
         422,
       );
     }
-    this.repository.updateStatus(id, "analyzing");
+    const token = this.repository.beginAnalysis(
+      id,
+      this.createRunId(),
+      review.revision,
+    );
     try {
       const imageDataUrls = await Promise.all(
         review.images.map(async (image) => {
@@ -100,11 +107,11 @@ export class ReviewService {
         imageDataUrls,
       });
       return {
-        review: this.repository.saveAnalysis(id, envelope),
+        review: this.repository.saveAnalysis(id, token, envelope),
         pageWarnings: envelope.pageWarnings,
       };
     } catch (error) {
-      this.repository.updateStatus(id, "failed");
+      this.repository.failAnalysis(id, token);
       throw error;
     }
   }

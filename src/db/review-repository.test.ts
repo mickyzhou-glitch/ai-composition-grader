@@ -108,6 +108,8 @@ describe("ReviewRepository", () => {
     expect(saved).toMatchObject({
       id: "review-1",
       status: "draft",
+      revision: 0,
+      analysisRunId: null,
       config,
       report: null,
     });
@@ -294,7 +296,8 @@ describe("ReviewRepository", () => {
 
   it("原子保存可辨认或不可辨认的 AI 分析结果", () => {
     repository.create({ id: "review-1", config });
-    const ready = repository.saveAnalysis("review-1", {
+    const firstRun = repository.beginAnalysis("review-1", "run-1", 0);
+    const ready = repository.saveAnalysis("review-1", firstRun, {
       readable: true,
       pageWarnings: [],
       report,
@@ -306,7 +309,8 @@ describe("ReviewRepository", () => {
       annotations: [annotation],
     });
 
-    const unreadable = repository.saveAnalysis("review-1", {
+    const secondRun = repository.beginAnalysis("review-1", "run-2", 0);
+    const unreadable = repository.saveAnalysis("review-1", secondRun, {
       readable: false,
       pageWarnings: ["图片模糊"],
       annotations: [],
@@ -315,6 +319,71 @@ describe("ReviewRepository", () => {
       status: "needs_better_images",
       report: null,
       annotations: [],
+    });
+  });
+
+  it("第二次分析用新 runId 使第一次结果失效", () => {
+    repository.create({ id: "review-1", config });
+    const first = repository.beginAnalysis("review-1", "run-first", 0);
+    const second = repository.beginAnalysis("review-1", "run-second", 0);
+
+    expect(() =>
+      repository.saveAnalysis("review-1", first, {
+        readable: true,
+        pageWarnings: [],
+        report,
+        annotations: [],
+      }),
+    ).toThrow(expect.objectContaining({ code: "ANALYSIS_CONFLICT", status: 409 }));
+    expect(repository.getById("review-1")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "run-second",
+    });
+    expect(
+      repository.saveAnalysis("review-1", second, {
+        readable: true,
+        pageWarnings: [],
+        report,
+        annotations: [],
+      }),
+    ).toMatchObject({ status: "ready_for_review", analysisRunId: null });
+  });
+
+  it("配置变化递增 revision 并使在途分析无法保存或标记失败", () => {
+    repository.create({ id: "review-1", config });
+    const run = repository.beginAnalysis("review-1", "run-old", 0);
+
+    const changed = repository.updateTeacherEdits("review-1", {
+      config: { ...config, title: "新题目" },
+    });
+
+    expect(changed).toMatchObject({
+      revision: 1,
+      analysisRunId: null,
+      status: "draft",
+    });
+    expect(repository.failAnalysis("review-1", run)).toBe(false);
+    expect(() =>
+      repository.saveAnalysis("review-1", run, {
+        readable: true,
+        pageWarnings: [],
+        report,
+        annotations: [],
+      }),
+    ).toThrow(expect.objectContaining({ code: "ANALYSIS_CONFLICT" }));
+    expect(repository.getById("review-1")?.status).toBe("draft");
+  });
+
+  it("图片变化递增 revision、清理 runId 并回到 draft", () => {
+    repository.create({ id: "review-1", config });
+    repository.beginAnalysis("review-1", "run-old", 0);
+
+    const changed = repository.replaceImages("review-1", []);
+
+    expect(changed).toMatchObject({
+      revision: 1,
+      analysisRunId: null,
+      status: "draft",
     });
   });
 
