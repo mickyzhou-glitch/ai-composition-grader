@@ -56,6 +56,7 @@ export interface CreateReviewInput {
 }
 
 export interface TeacherReviewEdits {
+  expectedRevision: number;
   config?: AssignmentConfig;
   report?: EvaluationReport;
   annotations?: Annotation[];
@@ -91,6 +92,16 @@ export class AnalysisConflictError extends Error {
   constructor(id: string) {
     super(`Analysis result is stale for review: ${id}`);
     this.name = "AnalysisConflictError";
+  }
+}
+
+export class RevisionConflictError extends Error {
+  readonly code = "REVISION_CONFLICT";
+  readonly status = 409;
+
+  constructor(id: string) {
+    super(`Review revision is stale: ${id}`);
+    this.name = "RevisionConflictError";
   }
 }
 
@@ -393,7 +404,7 @@ export class ReviewRepository {
     const now = this.now();
 
     this.database.transaction((transaction) => {
-      transaction
+      const update = transaction
         .update(reviews)
         .set({
           config,
@@ -403,8 +414,17 @@ export class ReviewRepository {
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
         })
-        .where(eq(reviews.id, id))
+        .where(and(eq(reviews.id, id), eq(reviews.revision, input.expectedRevision)))
         .run();
+      if (update.changes === 0) {
+        const exists = transaction
+          .select({ id: reviews.id })
+          .from(reviews)
+          .where(eq(reviews.id, id))
+          .get();
+        if (!exists) throw new ReviewNotFoundError(id);
+        throw new RevisionConflictError(id);
+      }
       transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
       if (savedAnnotations.length > 0) {
         transaction.insert(annotations).values(

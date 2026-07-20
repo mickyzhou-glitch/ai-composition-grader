@@ -361,6 +361,7 @@ describe("ReviewRepository", () => {
     const run = repository.beginAnalysis("review-1", "run-old", 0);
 
     const changed = repository.updateTeacherEdits("review-1", {
+      expectedRevision: 0,
       config: { ...config, title: "新题目" },
     });
 
@@ -406,6 +407,7 @@ describe("ReviewRepository", () => {
 
     expect(() =>
       repository.updateTeacherEdits("review-1", {
+        expectedRevision: 0,
         config: { ...config, title: "不应半保存" },
         report,
         annotations: [annotation],
@@ -421,6 +423,7 @@ describe("ReviewRepository", () => {
     sqlite.exec("DROP TRIGGER reject_teacher_annotation");
     expect(
       repository.updateTeacherEdits("review-1", {
+        expectedRevision: 0,
         report,
         annotations: [annotation],
       }),

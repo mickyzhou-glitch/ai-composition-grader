@@ -59,9 +59,27 @@ function reviewImageDto(image: {
 }
 
 function reviewDto(review: {
+  id: string;
+  status: unknown;
+  config: unknown;
+  report: unknown;
+  revision: number;
+  createdAt: unknown;
+  updatedAt: unknown;
+  annotations: unknown;
   images: Array<Parameters<typeof reviewImageDto>[0]>;
 }) {
-  return { ...review, images: review.images.map(reviewImageDto) };
+  return {
+    id: review.id,
+    status: review.status,
+    config: review.config,
+    report: review.report,
+    revision: review.revision,
+    createdAt: review.createdAt,
+    updatedAt: review.updatedAt,
+    annotations: review.annotations,
+    images: review.images.map(reviewImageDto),
+  };
 }
 
 function imageCollectionDto(result: {
@@ -251,6 +269,7 @@ export function createSettingsRouteHandlers(
 const createReviewSchema = z.object({ config: assignmentConfigSchema }).strict();
 const updateReviewSchema = z
   .object({
+    expectedRevision: z.number().int().nonnegative(),
     config: assignmentConfigSchema.optional(),
     report: evaluationReportSchema.optional(),
     annotations: z.array(annotationSchema).optional(),

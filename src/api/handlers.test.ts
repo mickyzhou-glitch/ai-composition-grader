@@ -275,6 +275,7 @@ describe("review route handlers", () => {
 
     const patched = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: 0,
         config: { ...config, title: "我为自己喝彩" },
       }),
       { params: Promise.resolve({ id: "review-1" }) },
@@ -286,6 +287,7 @@ describe("review route handlers", () => {
 
     const illegalStatus = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: 1,
         config: { ...config, title: "不应保存" },
         status: "ready_for_review",
       }),
@@ -299,6 +301,7 @@ describe("review route handlers", () => {
 
     const teacherReview = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: 1,
         report,
         annotations: [
           {
@@ -333,6 +336,49 @@ describe("review route handlers", () => {
       params: Promise.resolve({ id: "review-1" }),
     });
     expect(missing.status).toBe(404);
+  });
+
+  it("教师 PATCH 要求版本号，并拒绝跨页提交的过期版本", async () => {
+    repository.create({ id: "review-1", config });
+    const item = createReviewRouteHandlers({ reviewService });
+
+    const missingRevision = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        config: { ...config, title: "缺少版本号" },
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(missingRevision.status).toBe(400);
+
+    const firstPageSave = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: 0,
+        config: { ...config, title: "第一页已保存" },
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(firstPageSave.status).toBe(200);
+    expect(await json(firstPageSave)).toMatchObject({
+      ok: true,
+      data: { revision: 1, config: { title: "第一页已保存" } },
+    });
+
+    const staleSecondPageSave = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: 0,
+        config: { ...config, title: "过期的第二页保存" },
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(staleSecondPageSave.status).toBe(409);
+    expect(await json(staleSecondPageSave)).toMatchObject({
+      ok: false,
+      error: { code: "REVISION_CONFLICT" },
+    });
+    expect(repository.getById("review-1")).toMatchObject({
+      revision: 1,
+      config: { title: "第一页已保存" },
+    });
   });
 
   it("列表和详情 DTO 不泄漏图片内部存储路径", async () => {
@@ -387,6 +433,7 @@ describe("review route handlers", () => {
 
     const response = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: 0,
         report: { ...report, themeFit: "off_topic" },
       }),
       { params: Promise.resolve({ id: "review-1" }) },

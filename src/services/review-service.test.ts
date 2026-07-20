@@ -113,7 +113,7 @@ describe("ReviewService analysis CAS", () => {
 
     const pending = service.analyze("review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    service.update("review-1", { config: { ...config, title: "新题目" } });
+    service.update("review-1", { expectedRevision: 1, config: { ...config, title: "新题目" } });
     ai.resolve(readyEnvelope);
 
     await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
@@ -150,7 +150,7 @@ describe("ReviewService analysis CAS", () => {
 
     const pending = service.analyze("review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    const edited = service.update("review-1", edits);
+    const edited = service.update("review-1", { ...edits, expectedRevision: 1 });
     ai.resolve(readyEnvelope);
 
     expect(edited).toMatchObject({
