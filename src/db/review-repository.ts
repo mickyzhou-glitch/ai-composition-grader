@@ -53,6 +53,13 @@ export class ReviewNotFoundError extends Error {
   }
 }
 
+export class CorruptReviewDataError extends Error {
+  constructor(id: string, field: string) {
+    super(`Corrupt review data in ${field} for review: ${id}`);
+    this.name = "CorruptReviewDataError";
+  }
+}
+
 function validateImage(image: ReviewImageInput): ReviewImageInput {
   if (!Number.isInteger(image.pageIndex) || image.pageIndex < 0) {
     throw new TypeError("image.pageIndex must be a non-negative integer");
@@ -110,12 +117,61 @@ export class ReviewRepository {
 
   getById(id: string): ReviewRecord | null {
     const review = this.database
-      .select()
+      .select({
+        id: reviews.id,
+        status: reviews.status,
+        createdAt: reviews.createdAt,
+        updatedAt: reviews.updatedAt,
+      })
       .from(reviews)
       .where(eq(reviews.id, id))
       .get();
 
     if (!review) return null;
+
+    let storedConfig: unknown;
+    try {
+      storedConfig = this.database
+        .select({ config: reviews.config })
+        .from(reviews)
+        .where(eq(reviews.id, id))
+        .get()?.config;
+    } catch {
+      throw new CorruptReviewDataError(id, "config");
+    }
+
+    let config: AssignmentConfig;
+    try {
+      config = assignmentConfigSchema.parse(storedConfig);
+    } catch {
+      throw new CorruptReviewDataError(id, "config");
+    }
+    let status: ReviewStatus;
+    try {
+      status = reviewStatusSchema.parse(review.status);
+    } catch {
+      throw new CorruptReviewDataError(id, "status");
+    }
+    let report: EvaluationReport | null = null;
+    let storedReport: unknown;
+    try {
+      storedReport = this.database
+        .select({ report: reviews.report })
+        .from(reviews)
+        .where(eq(reviews.id, id))
+        .get()?.report;
+    } catch {
+      throw new CorruptReviewDataError(id, "report");
+    }
+    if (storedReport !== null) {
+      try {
+        report = validateReport(storedReport, {
+          templateType: config.templateType,
+        });
+      } catch {
+        throw new CorruptReviewDataError(id, "report");
+      }
+    }
 
     const images = this.database
       .select()
@@ -132,7 +188,9 @@ export class ReviewRepository {
 
     return {
       ...review,
-      report: review.report ?? null,
+      config,
+      status,
+      report,
       images,
       annotations: storedAnnotations.map((annotation) => ({
         pageIndex: annotation.pageIndex,
@@ -193,13 +251,38 @@ export class ReviewRepository {
   }
 
   updateConfig(id: string, input: AssignmentConfig): ReviewRecord {
-    this.requireById(id);
     const config = assignmentConfigSchema.parse(input);
-    this.database
-      .update(reviews)
-      .set({ config, updatedAt: this.now() })
-      .where(eq(reviews.id, id))
-      .run();
+    const updatedAt = this.now();
+    this.database.transaction((transaction) => {
+      const current = transaction
+        .select({ report: reviews.report })
+        .from(reviews)
+        .where(eq(reviews.id, id))
+        .get();
+      if (!current) throw new ReviewNotFoundError(id);
+
+      let reportIsValid = true;
+      if (current.report !== null) {
+        try {
+          validateReport(current.report, { templateType: config.templateType });
+        } catch {
+          reportIsValid = false;
+        }
+      }
+
+      transaction
+        .update(reviews)
+        .set({
+          config,
+          updatedAt,
+          ...(reportIsValid ? {} : { report: null, status: "draft" as const }),
+        })
+        .where(eq(reviews.id, id))
+        .run();
+      if (!reportIsValid) {
+        transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
+      }
+    });
     return this.requireById(id);
   }
 

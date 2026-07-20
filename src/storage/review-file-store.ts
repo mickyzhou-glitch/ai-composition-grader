@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, realpath, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 export const DEFAULT_REVIEWS_DIRECTORY = path.resolve(
@@ -55,6 +56,15 @@ function isMissing(error: unknown): boolean {
   );
 }
 
+function isAlreadyExists(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "EEXIST"
+  );
+}
+
 async function assertRealDirectory(
   parent: string,
   directory: string,
@@ -88,7 +98,11 @@ async function ensureRealDirectory(
   directory: string,
 ): Promise<void> {
   if (!(await assertRealDirectory(parent, directory))) {
-    await mkdir(directory);
+    try {
+      await mkdir(directory, { mode: 0o700 });
+    } catch (error) {
+      if (!isAlreadyExists(error)) throw error;
+    }
     if (!(await assertRealDirectory(parent, directory))) {
       throw new UnsafeStoragePathError(directory);
     }
@@ -167,24 +181,36 @@ export class ReviewFileStore {
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
     const destination = resolveInside(directory, filename);
     await assertSafeFile(directory, destination);
-    let file;
+    await this.assertSafeReviewPaths(paths, kind);
+    const temporary = resolveInside(directory, `.tmp-${randomUUID()}`);
     try {
-      file = await open(
-        destination,
-        constants.O_WRONLY |
-          constants.O_CREAT |
-          constants.O_TRUNC |
-          constants.O_NOFOLLOW,
-        0o600,
-      );
+      let file;
+      try {
+        file = await open(
+          temporary,
+          constants.O_WRONLY |
+            constants.O_CREAT |
+            constants.O_EXCL |
+            constants.O_NOFOLLOW,
+          0o600,
+        );
+      } catch (error) {
+        if (isSymlinkError(error)) {
+          throw new UnsafeStoragePathError(destination);
+        }
+        throw error;
+      }
+      try {
+        await file.writeFile(data);
+        await file.sync();
+      } finally {
+        await file.close();
+      }
+      await this.assertSafeReviewPaths(paths, kind);
+      await rename(temporary, destination);
     } catch (error) {
-      if (isSymlinkError(error)) throw new UnsafeStoragePathError(destination);
+      await rm(temporary, { force: true });
       throw error;
-    }
-    try {
-      await file.writeFile(data);
-    } finally {
-      await file.close();
     }
     return destination;
   }
@@ -195,12 +221,10 @@ export class ReviewFileStore {
     filename: string,
   ): Promise<Buffer> {
     assertSafeSegment(filename);
-    await this.assertSafeRoot(false);
     const paths = this.getReviewPaths(reviewId);
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
-    await assertRealDirectory(this.rootDirectory, paths.reviewDirectory);
-    await assertRealDirectory(paths.reviewDirectory, directory);
+    await this.assertSafeReviewPaths(paths, kind);
     const source = resolveInside(directory, filename);
     await assertSafeFile(directory, source);
     let file;
@@ -218,17 +242,35 @@ export class ReviewFileStore {
   }
 
   async deleteReview(reviewId: string): Promise<void> {
-    if (!(await this.assertSafeRoot(false))) return;
-    const { reviewDirectory } = this.getReviewPaths(reviewId);
-    if (!(await assertRealDirectory(this.rootDirectory, reviewDirectory))) return;
-    await rm(reviewDirectory, { recursive: true, force: true });
+    const paths = this.getReviewPaths(reviewId);
+    if (!(await this.assertSafeReviewPaths(paths))) return;
+    await rm(paths.reviewDirectory, { recursive: true, force: true });
   }
 
   private async assertSafeRoot(create: boolean): Promise<boolean> {
     if (create) {
       await mkdir(path.dirname(this.rootDirectory), { recursive: true });
       await ensureRealDirectory(path.dirname(this.rootDirectory), this.rootDirectory);
+      await chmod(this.rootDirectory, 0o700);
     }
     return assertRealDirectory(path.dirname(this.rootDirectory), this.rootDirectory);
+  }
+
+  private async assertSafeReviewPaths(
+    paths: ReviewStoragePaths,
+    kind?: ReviewStorageKind,
+  ): Promise<boolean> {
+    if (!(await this.assertSafeRoot(false))) return false;
+    if (!(await assertRealDirectory(this.rootDirectory, paths.reviewDirectory))) {
+      return false;
+    }
+    if (kind) {
+      const directory =
+        kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
+      if (!(await assertRealDirectory(paths.reviewDirectory, directory))) {
+        return false;
+      }
+    }
+    return true;
   }
 }

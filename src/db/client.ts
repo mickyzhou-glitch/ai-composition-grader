@@ -9,13 +9,25 @@ import * as schema from "./schema";
 
 export const DEFAULT_DATABASE_PATH = path.resolve(process.cwd(), ".data/app.db");
 
-export function openAppDatabase(filename = DEFAULT_DATABASE_PATH) {
+interface OpenAppDatabaseOptions {
+  initialize?: typeof initializeSchema;
+}
+
+export function openAppDatabase(
+  filename = DEFAULT_DATABASE_PATH,
+  options: OpenAppDatabaseOptions = {},
+) {
   if (filename !== ":memory:") {
     mkdirSync(path.dirname(path.resolve(filename)), { recursive: true });
   }
 
   const sqlite = new Database(filename);
-  initializeSchema(sqlite);
+  try {
+    (options.initialize ?? initializeSchema)(sqlite);
+  } catch (error) {
+    sqlite.close();
+    throw error;
+  }
 
   return {
     sqlite,
@@ -25,4 +37,3 @@ export function openAppDatabase(filename = DEFAULT_DATABASE_PATH) {
 }
 
 export type AppDatabase = ReturnType<typeof openAppDatabase>["db"];
-

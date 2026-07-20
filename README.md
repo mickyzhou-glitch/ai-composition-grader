@@ -52,3 +52,5 @@ npx playwright install chromium
 - `vitest.config.ts`：jsdom 与 Testing Library 配置
 
 本地运行数据存放在 `.data/`，测试产物与环境文件均不会提交到 Git。
+
+本地文件存储会将 reviews 根目录限制为 `0700`，逐级拒绝符号链接，并使用同目录临时文件原子替换。威胁模型以本地单用户应用为前提：防御非预期路径和符号链接逃逸，但不声称可抵御拥有同一 OS 用户权限的恶意进程并发篡改文件系统。

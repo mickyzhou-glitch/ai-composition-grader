@@ -52,6 +52,16 @@ const annotation: Annotation = {
   isHighlight: false,
 };
 
+const customConfig: AssignmentConfig = {
+  ...config,
+  templateType: "custom",
+};
+
+const customReport: EvaluationReport = {
+  ...report,
+  sampleParagraphs: ["自定义范文。"],
+};
+
 describe("ReviewRepository", () => {
   let sqlite: Database.Database;
   let repository: ReviewRepository;
@@ -131,6 +141,93 @@ describe("ReviewRepository", () => {
     expect(() =>
       repository.updateReport("review-1", report, { incompleteEvent: true }),
     ).toThrow(/29/);
+  });
+
+  it("从 custom 改为 preset 时清理不合规报告与批注并降级为 draft", () => {
+    repository.create({ id: "review-1", config: customConfig });
+    repository.updateReport("review-1", customReport);
+    repository.replaceAnnotations("review-1", [annotation]);
+    repository.updateStatus("review-1", "ready_for_review");
+
+    const updated = repository.updateConfig("review-1", config);
+
+    expect(updated.config.templateType).toBe("preset_self_applause");
+    expect(updated.report).toBeNull();
+    expect(updated.annotations).toEqual([]);
+    expect(updated.status).toBe("draft");
+  });
+
+  it("配置切换清理失败时回滚整个事务", () => {
+    repository.create({ id: "review-1", config: customConfig });
+    repository.updateReport("review-1", customReport);
+    repository.replaceAnnotations("review-1", [annotation]);
+    repository.updateStatus("review-1", "ready_for_review");
+    sqlite.exec(`
+      CREATE TRIGGER reject_annotation_delete
+      BEFORE DELETE ON annotations
+      BEGIN
+        SELECT RAISE(ABORT, 'forced annotation delete failure');
+      END;
+    `);
+
+    expect(() => repository.updateConfig("review-1", config)).toThrow(
+      /forced annotation delete failure/,
+    );
+    sqlite.exec("DROP TRIGGER reject_annotation_delete");
+
+    const unchanged = repository.getById("review-1");
+    expect(unchanged?.config).toEqual(customConfig);
+    expect(unchanged?.report).toEqual(customReport);
+    expect(unchanged?.annotations).toEqual([annotation]);
+    expect(unchanged?.status).toBe("ready_for_review");
+  });
+
+  it.each([
+    ["config", JSON.stringify({ title: "broken" })],
+    [
+      "report",
+      JSON.stringify({
+        ...report,
+        scores: { ...report.scores, total: 35 },
+      }),
+    ],
+  ])("读取损坏的 %s JSON 时抛出明确错误", (field, value) => {
+    repository.create({ id: "review-1", config });
+    sqlite.prepare(`update reviews set ${field} = ? where id = ?`).run(
+      value,
+      "review-1",
+    );
+
+    expect(() => repository.getById("review-1")).toThrow(
+      new RegExp(`corrupt.*${field}`, "i"),
+    );
+  });
+
+  it.each(["config", "report"])(
+    "读取语法损坏的 %s JSON 时指明字段",
+    (field) => {
+      repository.create({ id: "review-1", config });
+      sqlite.prepare(`update reviews set ${field} = ? where id = ?`).run(
+        "{not-json",
+        "review-1",
+      );
+
+      expect(() => repository.getById("review-1")).toThrow(
+        new RegExp(`corrupt.*${field}`, "i"),
+      );
+    },
+  );
+
+  it("配置更新在事务内清理 falsy 损坏报告", () => {
+    repository.create({ id: "review-1", config: customConfig });
+    sqlite.prepare("update reviews set report = 'false' where id = ?").run(
+      "review-1",
+    );
+
+    const updated = repository.updateConfig("review-1", config);
+
+    expect(updated.report).toBeNull();
+    expect(updated.status).toBe("draft");
   });
 
   it("原子替换一篇作文的全部批注", () => {

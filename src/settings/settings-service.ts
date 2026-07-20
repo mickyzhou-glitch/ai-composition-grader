@@ -52,16 +52,41 @@ export class SettingsService {
     const model = input.model.trim();
     if (model.length === 0) throw new TypeError("model must not be empty");
 
-    if (input.apiKey === null) {
-      await this.secretStore.delete();
-    } else if (input.apiKey !== undefined) {
-      if (input.apiKey.length === 0) {
+    let previousSecret: string | null | undefined;
+    let secretMutationAttempted = false;
+    if (input.apiKey !== undefined) {
+      previousSecret = await this.secretStore.get();
+      if (input.apiKey !== null && input.apiKey.length === 0) {
         throw new TypeError("apiKey must not be empty");
       }
-      await this.secretStore.set(input.apiKey);
     }
 
-    this.repository.save({ baseUrl, model });
+    try {
+      if (input.apiKey === null) {
+        secretMutationAttempted = true;
+        await this.secretStore.delete();
+      } else if (input.apiKey !== undefined) {
+        secretMutationAttempted = true;
+        await this.secretStore.set(input.apiKey);
+      }
+      this.repository.save({ baseUrl, model });
+    } catch (error) {
+      if (secretMutationAttempted) {
+        try {
+          if (previousSecret === null) {
+            await this.secretStore.delete();
+          } else if (previousSecret !== undefined) {
+            await this.secretStore.set(previousSecret);
+          }
+        } catch (compensationError) {
+          throw new AggregateError(
+            [error, compensationError],
+            "Settings save failed and the prior Keychain secret could not be restored",
+          );
+        }
+      }
+      throw error;
+    }
     return (await this.get()) as SettingsView;
   }
 

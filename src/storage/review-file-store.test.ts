@@ -44,6 +44,28 @@ describe("ReviewFileStore", () => {
     );
   });
 
+  it("以 0700 权限创建 storage root", async () => {
+    await store.createReview("review-1");
+
+    expect((await stat(store.rootDirectory)).mode & 0o777).toBe(0o700);
+  });
+
+  it("20 个并发首次写入不因 EEXIST 失败", async () => {
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) =>
+        store.writeFile("review-1", "images", `page-${index}.txt`, `${index}`),
+      ),
+    );
+
+    await expect(
+      Promise.all(
+        Array.from({ length: 20 }, (_, index) =>
+          store.readFile("review-1", "images", `page-${index}.txt`),
+        ),
+      ),
+    ).resolves.toHaveLength(20);
+  });
+
   it.each([
     ["../outside", "images", "page.jpg"],
     ["review/../../outside", "images", "page.jpg"],

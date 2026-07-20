@@ -75,6 +75,89 @@ describe("SettingsService", () => {
     expect(secretStore.set).not.toHaveBeenCalled();
   });
 
+  it("数据库保存失败时恢复原有密钥", async () => {
+    let secret: string | null = "sk-old";
+    const statefulStore: SecretStore = {
+      get: vi.fn(async () => secret),
+      set: vi.fn(async (value: string) => {
+        secret = value;
+      }),
+      delete: vi.fn(async () => {
+        secret = null;
+      }),
+    };
+    vi.spyOn(repository, "save").mockImplementation(() => {
+      throw new Error("database failed");
+    });
+    service = new SettingsService(repository, statefulStore);
+
+    await expect(
+      service.save({
+        baseUrl: "https://api.example.com",
+        model: "model",
+        apiKey: "sk-new",
+      }),
+    ).rejects.toThrow("database failed");
+    await expect(statefulStore.get()).resolves.toBe("sk-old");
+    expect(statefulStore.set).toHaveBeenNthCalledWith(1, "sk-new");
+    expect(statefulStore.set).toHaveBeenNthCalledWith(2, "sk-old");
+  });
+
+  it("无原有密钥且数据库保存失败时删除新密钥", async () => {
+    let secret: string | null = null;
+    const statefulStore: SecretStore = {
+      get: vi.fn(async () => secret),
+      set: vi.fn(async (value: string) => {
+        secret = value;
+      }),
+      delete: vi.fn(async () => {
+        secret = null;
+      }),
+    };
+    vi.spyOn(repository, "save").mockImplementation(() => {
+      throw new Error("database failed");
+    });
+    service = new SettingsService(repository, statefulStore);
+
+    await expect(
+      service.save({
+        baseUrl: "https://api.example.com",
+        model: "model",
+        apiKey: "sk-new",
+      }),
+    ).rejects.toThrow("database failed");
+    await expect(statefulStore.get()).resolves.toBeNull();
+    expect(statefulStore.delete).toHaveBeenCalledOnce();
+  });
+
+  it("删除密钥后数据库保存失败时恢复原有密钥", async () => {
+    let secret: string | null = "sk-old";
+    const statefulStore: SecretStore = {
+      get: vi.fn(async () => secret),
+      set: vi.fn(async (value: string) => {
+        secret = value;
+      }),
+      delete: vi.fn(async () => {
+        secret = null;
+      }),
+    };
+    vi.spyOn(repository, "save").mockImplementation(() => {
+      throw new Error("database failed");
+    });
+    service = new SettingsService(repository, statefulStore);
+
+    await expect(
+      service.save({
+        baseUrl: "https://api.example.com",
+        model: "model",
+        apiKey: null,
+      }),
+    ).rejects.toThrow("database failed");
+    await expect(statefulStore.get()).resolves.toBe("sk-old");
+    expect(statefulStore.delete).toHaveBeenCalledOnce();
+    expect(statefulStore.set).toHaveBeenCalledWith("sk-old");
+  });
+
   it.each([
     "ftp://api.example.com",
     "api.example.com/v1",
