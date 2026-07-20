@@ -128,3 +128,27 @@ export const AssignmentConfigSchema = assignmentConfigSchema;
 export const ReviewStatusSchema = reviewStatusSchema;
 export const AnnotationSchema = annotationSchema;
 export const ScoreBreakdownSchema = scoreBreakdownSchema;
+
+const readableAiReviewEnvelopeSchema = z
+  .object({
+    readable: z.literal(true),
+    pageWarnings: z.array(z.string().trim().min(1)),
+    report: evaluationReportSchema,
+    annotations: z.array(annotationSchema),
+  })
+  .strict();
+
+const unreadableAiReviewEnvelopeSchema = z
+  .object({
+    readable: z.literal(false),
+    pageWarnings: z.array(z.string().trim().min(1)).min(1),
+    annotations: z.array(annotationSchema),
+  })
+  .strict();
+
+export const aiReviewEnvelopeSchema = z.discriminatedUnion("readable", [
+  readableAiReviewEnvelopeSchema,
+  unreadableAiReviewEnvelopeSchema,
+]);
+export const AiReviewEnvelopeSchema = aiReviewEnvelopeSchema;
+export type AiReviewEnvelope = z.infer<typeof AiReviewEnvelopeSchema>;

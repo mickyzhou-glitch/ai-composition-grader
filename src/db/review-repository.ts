@@ -209,12 +209,32 @@ export class ReviewRepository {
       }
     }
 
-    const images = database
+    const storedImages = database
       .select()
       .from(reviewImages)
       .where(eq(reviewImages.reviewId, id))
       .orderBy(reviewImages.position, reviewImages.id)
       .all();
+    const images: ReviewImage[] = storedImages.map((image) => {
+      if (![0, 90, 180, 270].includes(image.rotation)) {
+        throw new CorruptReviewDataError(id, "images.rotation");
+      }
+      return {
+        id: image.id,
+        reviewId: image.reviewId,
+        position: image.position,
+        originalName: image.originalName,
+        mimeType: image.mimeType,
+        originalPath: image.originalPath,
+        annotationPath: image.annotationPath,
+        aiPath: image.aiPath,
+        width: image.width,
+        height: image.height,
+        rotation: image.rotation as ReviewImageInput["rotation"],
+        crop: image.crop,
+        createdAt: image.createdAt,
+      };
+    });
     const storedAnnotations = database
       .select()
       .from(annotations)

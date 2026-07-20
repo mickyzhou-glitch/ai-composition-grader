@@ -11,7 +11,6 @@ import type { ReviewImage, ReviewImageInput } from "../db/review-repository";
 import { ReviewFileStore } from "../storage/review-file-store";
 import {
   ImageService,
-  ImageServiceError,
   type ImageRepository,
 } from "./image-service";
 
@@ -128,7 +127,7 @@ describe("ImageService", () => {
         },
       ]),
     ).rejects.toEqual(
-      expect.objectContaining<ImageServiceError>({
+      expect.objectContaining({
         code: "INVALID_IMAGE",
         status: 422,
       }),
@@ -216,7 +215,7 @@ describe("ImageService", () => {
           {
             id,
             position: 0,
-            rotation: 45,
+            rotation: 45 as never,
             crop: { x: 0.8, y: 0, width: 0.3, height: 1 },
           },
         ],
