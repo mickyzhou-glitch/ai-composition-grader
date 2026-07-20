@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -16,12 +16,14 @@ import {
 
 class MemoryImageRepository implements ImageRepository {
   images: ReviewImage[] = [];
+  replaceError: Error | null = null;
 
   getById(id: string) {
     return id === "review-1" ? { images: this.images } : null;
   }
 
   replaceImages(reviewId: string, images: ReviewImageInput[]) {
+    if (this.replaceError) throw this.replaceError;
     this.images = images.map((image, index) => ({
       ...image,
       id: index + 1,
@@ -83,6 +85,32 @@ describe("ImageService", () => {
     ).rejects.toMatchObject({ code: "IMAGE_TOO_LARGE", status: 413 });
   });
 
+  it("拒绝超过 6000 万像素的解压炸弹并返回明确 422", async () => {
+    const oversizedPixels = await sharp({
+      create: {
+        width: 8000,
+        height: 8000,
+        channels: 3,
+        background: "white",
+      },
+    })
+      .png()
+      .toBuffer();
+
+    await expect(
+      service.upload("review-1", [
+        {
+          originalName: "too-many-pixels.png",
+          mimeType: "image/png",
+          data: oversizedPixels,
+        },
+      ]),
+    ).rejects.toMatchObject({
+      code: "IMAGE_PIXEL_LIMIT_EXCEEDED",
+      status: 422,
+    });
+  });
+
   it.each(["image/gif", "application/octet-stream", "image/jpgx"])(
     "拒绝不支持的 MIME %s",
     async (mimeType) => {
@@ -132,6 +160,69 @@ describe("ImageService", () => {
         status: 422,
       }),
     );
+  });
+
+  it("第二张图片处理失败时不遗留第一张的新文件", async () => {
+    await expect(
+      service.upload("review-1", [
+        { originalName: "valid.jpg", mimeType: "image/jpeg", data: await jpeg() },
+        {
+          originalName: "broken.jpg",
+          mimeType: "image/jpeg",
+          data: Buffer.from("broken"),
+        },
+      ]),
+    ).rejects.toMatchObject({ code: "INVALID_IMAGE" });
+
+    const imagesDirectory = store.getReviewPaths("review-1").imagesDirectory;
+    await expect(readdir(imagesDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(repository.images).toEqual([]);
+  });
+
+  it("DB 替换失败时清理新版本并完整保留旧图片文件", async () => {
+    await service.upload("review-1", [
+      { originalName: "old.jpg", mimeType: "image/jpeg", data: await jpeg() },
+    ]);
+    const old = repository.images[0];
+    const oldFiles = [old.originalPath, old.annotationPath, old.aiPath];
+    repository.replaceError = new Error("database failed");
+
+    await expect(
+      service.upload("review-1", [
+        { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
+      ]),
+    ).rejects.toThrow("database failed");
+
+    expect(repository.images).toEqual([old]);
+    for (const storedPath of oldFiles) {
+      await expect(
+        stat(path.join(store.rootDirectory, "review-1", storedPath)),
+      ).resolves.toMatchObject({});
+    }
+    expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
+  });
+
+  it("重传成功后数据库切换到新版本并清理全部旧文件", async () => {
+    await service.upload("review-1", [
+      { originalName: "old.jpg", mimeType: "image/jpeg", data: await jpeg() },
+    ]);
+    const oldPaths = [
+      repository.images[0].originalPath,
+      repository.images[0].annotationPath,
+      repository.images[0].aiPath,
+    ];
+
+    await service.upload("review-1", [
+      { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
+    ]);
+
+    expect(repository.images[0].originalName).toBe("new.jpg");
+    for (const storedPath of oldPaths) {
+      await expect(
+        stat(path.join(store.rootDirectory, "review-1", storedPath)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
   });
 
   it("有效 HEIC 在当前 Sharp 缺少解码器时返回 UNSUPPORTED_HEIC", async () => {
@@ -278,5 +369,29 @@ describe("ImageService", () => {
       { originalName: "second.jpg", rotation: 0, crop: null },
       { originalName: "first.jpg", rotation: 0, crop: null },
     ]);
+  });
+
+  it("update 使用新版本路径，DB 失败时不覆盖旧批注和 AI 文件", async () => {
+    await service.upload("review-1", [
+      { originalName: "page.jpg", mimeType: "image/jpeg", data: await jpeg() },
+    ]);
+    const old = repository.images[0];
+    const oldAnnotation = await store.readFile(
+      "review-1",
+      "images",
+      path.basename(old.annotationPath),
+    );
+    repository.replaceError = new Error("database failed");
+
+    await expect(
+      service.update("review-1", {
+        images: [{ id: old.id, rotation: 90 }],
+      }),
+    ).rejects.toThrow("database failed");
+
+    await expect(
+      store.readFile("review-1", "images", path.basename(old.annotationPath)),
+    ).resolves.toEqual(oldAnnotation);
+    expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
   });
 });

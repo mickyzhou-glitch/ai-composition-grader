@@ -11,6 +11,9 @@ import type { ImageService } from "../images/image-service";
 import { normalizeBaseUrl, type SaveSettingsInput, type SettingsView } from "../settings/settings-service";
 import type { ReviewService } from "../services/review-service";
 
+const MAX_MULTIPART_BYTES = 64 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
 type RouteContext = { params: Promise<{ id: string }> };
 
 interface ErrorBody {
@@ -21,6 +24,10 @@ interface ErrorBody {
 
 function ok(data: unknown, status = 200): Response {
   return Response.json({ ok: true, data }, { status });
+}
+
+function routeError(code: string, message: string, status: number): Error {
+  return Object.assign(new Error(message), { code, status });
 }
 
 function failure(error: unknown): Response {
@@ -240,19 +247,46 @@ export function createReviewImagesRouteHandlers(dependencies: {
   return {
     async POST(request: Request, context: RouteContext) {
       try {
+        const contentLength = request.headers.get("content-length");
+        if (
+          contentLength !== null &&
+          /^\d+$/.test(contentLength) &&
+          Number(contentLength) > MAX_MULTIPART_BYTES
+        ) {
+          throw routeError(
+            "PAYLOAD_TOO_LARGE",
+            "上传请求不能超过 64MB",
+            413,
+          );
+        }
         const form = await request.formData();
         const entries = form.getAll("images").length > 0
           ? form.getAll("images")
           : form.getAll("files");
+        if (entries.length < 1 || entries.length > 3) {
+          throw routeError(
+            "IMAGE_COUNT_INVALID",
+            "一次必须上传 1 至 3 张图片",
+            400,
+          );
+        }
+        if (entries.some((entry) => !(entry instanceof File))) {
+          throw new TypeError("multipart images entries must be files");
+        }
+        if (entries.some((entry) => (entry as File).size > MAX_IMAGE_BYTES)) {
+          throw routeError(
+            "IMAGE_TOO_LARGE",
+            "单张图片不能超过 20MB",
+            413,
+          );
+        }
         const files = await Promise.all(
           entries.map(async (entry) => {
-            if (!(entry instanceof File)) {
-              throw new TypeError("multipart images entries must be files");
-            }
+            const file = entry as File;
             return {
-              originalName: entry.name,
-              mimeType: entry.type,
-              data: new Uint8Array(await entry.arrayBuffer()),
+              originalName: file.name,
+              mimeType: file.type,
+              data: new Uint8Array(await file.arrayBuffer()),
             };
           }),
         );

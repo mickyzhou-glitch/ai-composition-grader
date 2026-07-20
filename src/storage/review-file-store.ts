@@ -16,6 +16,11 @@ export interface ReviewStoragePaths {
   pdfDirectory: string;
 }
 
+export interface StagedReviewDelete {
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+}
+
 export class UnsafeStoragePathError extends Error {
   constructor(segment: string) {
     super(`Unsafe storage path segment: ${JSON.stringify(segment)}`);
@@ -241,10 +246,61 @@ export class ReviewFileStore {
     }
   }
 
+  async deleteFile(
+    reviewId: string,
+    kind: ReviewStorageKind,
+    filename: string,
+  ): Promise<void> {
+    assertSafeSegment(filename);
+    const paths = this.getReviewPaths(reviewId);
+    const directory =
+      kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
+    if (!(await this.assertSafeReviewPaths(paths, kind))) return;
+    const target = resolveInside(directory, filename);
+    await assertSafeFile(directory, target);
+    await rm(target, { force: true });
+  }
+
   async deleteReview(reviewId: string): Promise<void> {
     const paths = this.getReviewPaths(reviewId);
     if (!(await this.assertSafeReviewPaths(paths))) return;
     await rm(paths.reviewDirectory, { recursive: true, force: true });
+  }
+
+  async stageDelete(reviewId: string): Promise<StagedReviewDelete> {
+    const paths = this.getReviewPaths(reviewId);
+    if (!(await this.assertSafeReviewPaths(paths))) {
+      return { commit: async () => {}, rollback: async () => {} };
+    }
+    const trashDirectory = path.join(this.rootDirectory, ".trash");
+    await ensureRealDirectory(this.rootDirectory, trashDirectory);
+    const stagedDirectory = resolveInside(
+      trashDirectory,
+      `${reviewId}-${randomUUID()}`,
+    );
+    await rename(paths.reviewDirectory, stagedDirectory);
+    let state: "staged" | "committed" | "rolled_back" = "staged";
+    return {
+      commit: async () => {
+        if (state !== "staged") return;
+        await rm(stagedDirectory, { recursive: true, force: true });
+        state = "committed";
+      },
+      rollback: async () => {
+        if (state !== "staged") return;
+        await this.assertSafeRoot(false);
+        await assertRealDirectory(this.rootDirectory, trashDirectory);
+        await assertRealDirectory(trashDirectory, stagedDirectory);
+        try {
+          await lstat(paths.reviewDirectory);
+          throw new UnsafeStoragePathError(paths.reviewDirectory);
+        } catch (error) {
+          if (!isMissing(error)) throw error;
+        }
+        await rename(stagedDirectory, paths.reviewDirectory);
+        state = "rolled_back";
+      },
+    };
   }
 
   private async assertSafeRoot(create: boolean): Promise<boolean> {

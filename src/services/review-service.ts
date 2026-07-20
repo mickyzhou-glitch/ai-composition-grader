@@ -7,6 +7,7 @@ import type {
   TeacherReviewEdits,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
+import { InMemoryReviewLock, type ReviewLock } from "./review-lock";
 
 export interface AiReviewer {
   analyze(input: {
@@ -18,6 +19,7 @@ export interface AiReviewer {
 interface ReviewServiceOptions {
   createId?: () => string;
   createRunId?: () => string;
+  lock?: ReviewLock;
 }
 
 export class ReviewServiceError extends Error {
@@ -34,6 +36,7 @@ export class ReviewServiceError extends Error {
 export class ReviewService {
   private readonly createId: () => string;
   private readonly createRunId: () => string;
+  private readonly lock: ReviewLock;
 
   constructor(
     private readonly repository: ReviewRepository,
@@ -43,6 +46,7 @@ export class ReviewService {
   ) {
     this.createId = options.createId ?? randomUUID;
     this.createRunId = options.createRunId ?? randomUUID;
+    this.lock = options.lock ?? new InMemoryReviewLock();
   }
 
   list(): ReviewRecord[] {
@@ -72,9 +76,23 @@ export class ReviewService {
   }
 
   async delete(id: string): Promise<void> {
-    this.get(id);
-    await this.fileStore.deleteReview(id);
-    this.repository.delete(id);
+    await this.lock.runExclusive(id, async () => {
+      this.get(id);
+      const staged = await this.fileStore.stageDelete(id);
+      try {
+        if (!this.repository.delete(id)) {
+          throw new ReviewServiceError(
+            "REVIEW_NOT_FOUND",
+            "批改记录不存在",
+            404,
+          );
+        }
+      } catch (error) {
+        await staged.rollback();
+        throw error;
+      }
+      await staged.commit();
+    });
   }
 
   async analyze(id: string): Promise<{

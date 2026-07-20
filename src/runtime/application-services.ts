@@ -6,6 +6,7 @@ import { MacOSKeychain } from "../settings/keychain";
 import { SettingsRepository } from "../settings/settings-repository";
 import { SettingsService } from "../settings/settings-service";
 import { ReviewService } from "../services/review-service";
+import { InMemoryReviewLock } from "../services/review-lock";
 import { ReviewFileStore } from "../storage/review-file-store";
 
 export interface ApplicationServices {
@@ -22,11 +23,16 @@ function createApplicationServices(): ApplicationServices {
   );
   const reviewRepository = new ReviewRepository(database.db);
   const fileStore = new ReviewFileStore();
+  const reviewLock = new InMemoryReviewLock();
   const aiReviewer = new OpenAIReviewAdapter(settingsService);
   return {
     settingsService,
-    imageService: new ImageService(fileStore, reviewRepository),
-    reviewService: new ReviewService(reviewRepository, fileStore, aiReviewer),
+    imageService: new ImageService(fileStore, reviewRepository, {
+      lock: reviewLock,
+    }),
+    reviewService: new ReviewService(reviewRepository, fileStore, aiReviewer, {
+      lock: reviewLock,
+    }),
   };
 }
 

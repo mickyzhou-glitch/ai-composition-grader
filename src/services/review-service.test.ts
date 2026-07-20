@@ -167,4 +167,20 @@ describe("ReviewService analysis CAS", () => {
       review: { status: "ready_for_review", analysisRunId: null },
     });
   });
+
+  it("DELETE 的数据库步骤失败时恢复已暂存的 review 目录", async () => {
+    const service = serviceFor(async () => readyEnvelope);
+    vi.spyOn(repository, "delete").mockImplementation(() => {
+      throw new Error("database delete failed");
+    });
+
+    await expect(service.delete("review-1")).rejects.toThrow(
+      "database delete failed",
+    );
+
+    expect(repository.getById("review-1")).not.toBeNull();
+    await expect(
+      fileStore.readFile("review-1", "images", "page-ai.jpg"),
+    ).resolves.toEqual(Buffer.from("ai"));
+  });
 });

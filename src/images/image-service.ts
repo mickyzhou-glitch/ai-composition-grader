@@ -10,8 +10,10 @@ import type {
   ReviewImageInput,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
+import { InMemoryReviewLock, type ReviewLock } from "../services/review-lock";
 
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_INPUT_PIXELS = 60_000_000;
 export const ALLOWED_IMAGE_MIME_TYPES = [
   "image/jpeg",
   "image/jpg",
@@ -40,6 +42,7 @@ export interface ImageRepository {
 export type ImageServiceErrorCode =
   | "IMAGE_COUNT_INVALID"
   | "IMAGE_TOO_LARGE"
+  | "IMAGE_PIXEL_LIMIT_EXCEEDED"
   | "UNSUPPORTED_IMAGE_TYPE"
   | "INVALID_IMAGE"
   | "UNSUPPORTED_HEIC"
@@ -83,6 +86,7 @@ export type UpdateImagesInput = z.infer<typeof updateSchema>;
 
 interface ImageServiceOptions {
   createId?: () => string;
+  lock?: ReviewLock;
 }
 
 interface DecodedImage {
@@ -90,6 +94,11 @@ interface DecodedImage {
   width: number;
   height: number;
   orientation?: number;
+}
+
+interface PreparedImageVersion {
+  record: ReviewImageInput;
+  files: Array<{ filename: string; data: Uint8Array }>;
 }
 
 function isHeicMime(mimeType: string): boolean {
@@ -140,6 +149,13 @@ function assertActualHeicOrHeif(data: Uint8Array): void {
       422,
     );
   }
+}
+
+function isPixelLimitError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /pixel limit|exceeds.*pixels|input image exceeds/i.test(error.message)
+  );
 }
 
 function canonicalExtension(format: DecodedImage["format"]): string {
@@ -216,6 +232,7 @@ function gridSvg(width: number, height: number): Buffer {
 
 export class ImageService {
   private readonly createId: () => string;
+  private readonly lock: ReviewLock;
 
   constructor(
     private readonly fileStore: ReviewFileStore,
@@ -223,10 +240,18 @@ export class ImageService {
     options: ImageServiceOptions = {},
   ) {
     this.createId = options.createId ?? randomUUID;
+    this.lock = options.lock ?? new InMemoryReviewLock();
   }
 
   async upload(reviewId: string, files: UploadedImage[]) {
-    if (!this.repository.getById(reviewId)) {
+    return this.lock.runExclusive(reviewId, () =>
+      this.uploadExclusive(reviewId, files),
+    );
+  }
+
+  private async uploadExclusive(reviewId: string, files: UploadedImage[]) {
+    const review = this.repository.getById(reviewId);
+    if (!review) {
       throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     }
     if (files.length < 1 || files.length > 3) {
@@ -237,7 +262,7 @@ export class ImageService {
       );
     }
 
-    const processed: ReviewImageInput[] = [];
+    const prepared: PreparedImageVersion[] = [];
     for (const [position, file] of files.entries()) {
       this.validateUpload(file);
       const decoded = await this.decode(file);
@@ -247,31 +272,36 @@ export class ImageService {
       const aiFilename = `${token}-ai.jpg`;
       const outputs = await this.transform(file.data, decoded, 0, null);
 
-      await this.fileStore.writeFile(reviewId, "images", originalFilename, file.data);
-      await this.fileStore.writeFile(
-        reviewId,
-        "images",
-        annotationFilename,
-        outputs.annotation,
-      );
-      await this.fileStore.writeFile(reviewId, "images", aiFilename, outputs.ai);
-      processed.push({
-        position,
-        originalName: file.originalName,
-        mimeType: file.mimeType,
-        originalPath: relativeImagePath(originalFilename),
-        annotationPath: relativeImagePath(annotationFilename),
-        aiPath: relativeImagePath(aiFilename),
-        width: outputs.width,
-        height: outputs.height,
-        rotation: 0,
-        crop: null,
+      prepared.push({
+        record: {
+          position,
+          originalName: file.originalName,
+          mimeType: file.mimeType,
+          originalPath: relativeImagePath(originalFilename),
+          annotationPath: relativeImagePath(annotationFilename),
+          aiPath: relativeImagePath(aiFilename),
+          width: outputs.width,
+          height: outputs.height,
+          rotation: 0,
+          crop: null,
+        },
+        files: [
+          { filename: originalFilename, data: file.data },
+          { filename: annotationFilename, data: outputs.annotation },
+          { filename: aiFilename, data: outputs.ai },
+        ],
       });
     }
-    return this.repository.replaceImages(reviewId, processed);
+    return this.commitVersions(reviewId, prepared, review.images);
   }
 
   async update(reviewId: string, input: UpdateImagesInput) {
+    return this.lock.runExclusive(reviewId, () =>
+      this.updateExclusive(reviewId, input),
+    );
+  }
+
+  private async updateExclusive(reviewId: string, input: UpdateImagesInput) {
     const review = this.repository.getById(reviewId);
     if (!review) throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     const parsed = this.parseUpdate(input);
@@ -307,7 +337,7 @@ export class ImageService {
       );
     }
 
-    const updated: ReviewImageInput[] = [];
+    const prepared: PreparedImageVersion[] = [];
     for (const change of [...changes].sort((a, b) => a.position - b.position)) {
       const current = currentById.get(change.id) as ReviewImage;
       const original = await this.fileStore.readFile(
@@ -326,32 +356,84 @@ export class ImageService {
         change.rotation,
         change.crop,
       );
-      await this.fileStore.writeFile(
-        reviewId,
-        "images",
-        storedFilename(current.annotationPath),
-        outputs.annotation,
-      );
-      await this.fileStore.writeFile(
-        reviewId,
-        "images",
-        storedFilename(current.aiPath),
-        outputs.ai,
-      );
-      updated.push({
-        position: change.position,
-        originalName: current.originalName,
-        mimeType: current.mimeType,
-        originalPath: current.originalPath,
-        annotationPath: current.annotationPath,
-        aiPath: current.aiPath,
-        width: outputs.width,
-        height: outputs.height,
-        rotation: change.rotation,
-        crop: change.crop,
+      const token = this.createId();
+      const originalFilename = `${token}-original.${canonicalExtension(decoded.format)}`;
+      const annotationFilename = `${token}-annotation.jpg`;
+      const aiFilename = `${token}-ai.jpg`;
+      prepared.push({
+        record: {
+          position: change.position,
+          originalName: current.originalName,
+          mimeType: current.mimeType,
+          originalPath: relativeImagePath(originalFilename),
+          annotationPath: relativeImagePath(annotationFilename),
+          aiPath: relativeImagePath(aiFilename),
+          width: outputs.width,
+          height: outputs.height,
+          rotation: change.rotation,
+          crop: change.crop,
+        },
+        files: [
+          { filename: originalFilename, data: original },
+          { filename: annotationFilename, data: outputs.annotation },
+          { filename: aiFilename, data: outputs.ai },
+        ],
       });
     }
-    return this.repository.replaceImages(reviewId, updated);
+    return this.commitVersions(reviewId, prepared, review.images);
+  }
+
+  private async commitVersions(
+    reviewId: string,
+    prepared: PreparedImageVersion[],
+    previous: ReviewImage[],
+  ) {
+    const written: string[] = [];
+    let saved: { images: ReviewImage[] };
+    try {
+      for (const image of prepared) {
+        for (const file of image.files) {
+          await this.fileStore.writeFile(
+            reviewId,
+            "images",
+            file.filename,
+            file.data,
+          );
+          written.push(file.filename);
+        }
+      }
+      saved = this.repository.replaceImages(
+        reviewId,
+        prepared.map(({ record }) => record),
+      );
+    } catch (error) {
+      await Promise.allSettled(
+        written.map((filename) =>
+          this.fileStore.deleteFile(reviewId, "images", filename),
+        ),
+      );
+      throw error;
+    }
+    await this.deleteStoredImages(reviewId, previous);
+    return saved;
+  }
+
+  private async deleteStoredImages(
+    reviewId: string,
+    images: ReviewImage[],
+  ): Promise<void> {
+    const filenames = new Set(
+      images.flatMap((image) => [
+        storedFilename(image.originalPath),
+        storedFilename(image.annotationPath),
+        storedFilename(image.aiPath),
+      ]),
+    );
+    await Promise.all(
+      [...filenames].map((filename) =>
+        this.fileStore.deleteFile(reviewId, "images", filename),
+      ),
+    );
   }
 
   private parseUpdate(input: UpdateImagesInput): UpdateImagesInput {
@@ -382,8 +464,18 @@ export class ImageService {
 
   private async decode(file: UploadedImage): Promise<DecodedImage> {
     try {
-      const metadata = await sharp(file.data, { failOn: "error" }).metadata();
+      const metadata = await sharp(file.data, {
+        failOn: "error",
+        limitInputPixels: MAX_INPUT_PIXELS,
+      }).metadata();
       if (!metadata.format || !metadata.width || !metadata.height) throw new Error("missing metadata");
+      if (metadata.width * metadata.height > MAX_INPUT_PIXELS) {
+        throw new ImageServiceError(
+          "IMAGE_PIXEL_LIMIT_EXCEEDED",
+          "图片像素不能超过 6000 万",
+          422,
+        );
+      }
       assertMimeMatchesFormat(file.mimeType as AllowedMimeType, metadata.format);
       if (isHeicMime(file.mimeType)) assertActualHeicOrHeif(file.data);
       if (!["jpeg", "png", "webp", "heif"].includes(metadata.format)) {
@@ -397,6 +489,13 @@ export class ImageService {
       };
     } catch (error) {
       if (error instanceof ImageServiceError) throw error;
+      if (isPixelLimitError(error)) {
+        throw new ImageServiceError(
+          "IMAGE_PIXEL_LIMIT_EXCEEDED",
+          "图片像素不能超过 6000 万",
+          422,
+        );
+      }
       if (isHeicMime(file.mimeType) && hasHeicSignature(file.data)) {
         throw new ImageServiceError(
           "UNSUPPORTED_HEIC",
@@ -417,7 +516,10 @@ export class ImageService {
     try {
       const dimensions = orientedDimensions(decoded, rotation);
       const extract = cropPixels(dimensions, crop);
-      const pipeline = sharp(data, { failOn: "error" })
+      const pipeline = sharp(data, {
+        failOn: "error",
+        limitInputPixels: MAX_INPUT_PIXELS,
+      })
         .autoOrient()
         .rotate(rotation)
         .extract(extract);
@@ -431,7 +533,9 @@ export class ImageService {
         .resize({ width: 2000, height: 2000, fit: "inside", withoutEnlargement: true })
         .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
         .toBuffer({ resolveWithObject: true });
-      const ai = await sharp(aiBase.data)
+      const ai = await sharp(aiBase.data, {
+        limitInputPixels: MAX_INPUT_PIXELS,
+      })
         .composite([{ input: gridSvg(aiBase.info.width, aiBase.info.height) }])
         .jpeg({ quality: 90, chromaSubsampling: "4:4:4" })
         .toBuffer();
@@ -441,7 +545,14 @@ export class ImageService {
         width: annotationResult.info.width,
         height: annotationResult.info.height,
       };
-    } catch {
+    } catch (error) {
+      if (isPixelLimitError(error)) {
+        throw new ImageServiceError(
+          "IMAGE_PIXEL_LIMIT_EXCEEDED",
+          "图片像素不能超过 6000 万",
+          422,
+        );
+      }
       throw new ImageServiceError("INVALID_IMAGE", "图片处理失败", 422);
     }
   }

@@ -93,6 +93,39 @@ describe("ReviewFileStore", () => {
     expect((await stat(store.rootDirectory)).isDirectory()).toBe(true);
   });
 
+  it("只删除 images 内指定的普通文件", async () => {
+    await store.writeFile("review-1", "images", "old.jpg", "old");
+    await store.writeFile("review-1", "images", "keep.jpg", "keep");
+
+    await store.deleteFile("review-1", "images", "old.jpg");
+
+    await expect(store.readFile("review-1", "images", "old.jpg")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(store.readFile("review-1", "images", "keep.jpg")).resolves.toEqual(
+      Buffer.from("keep"),
+    );
+  });
+
+  it("stageDelete 可回滚或提交同根目录的暂存删除", async () => {
+    await store.writeFile("review-1", "images", "page.jpg", "page");
+    const staged = await store.stageDelete("review-1");
+
+    await expect(
+      stat(store.getReviewPaths("review-1").reviewDirectory),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await staged.rollback();
+    await expect(store.readFile("review-1", "images", "page.jpg")).resolves.toEqual(
+      Buffer.from("page"),
+    );
+
+    const stagedAgain = await store.stageDelete("review-1");
+    await stagedAgain.commit();
+    await expect(
+      stat(store.getReviewPaths("review-1").reviewDirectory),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("拒绝通过中间目录符号链接写入根目录外", async () => {
     const outside = path.join(temporaryDirectory, "outside");
     await store.createReview("review-1");

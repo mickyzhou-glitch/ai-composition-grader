@@ -13,7 +13,7 @@ import type { AiReviewEnvelope } from "../domain/contracts";
 import { initializeSchema } from "../db/init";
 import { ReviewRepository } from "../db/review-repository";
 import * as schema from "../db/schema";
-import { ImageService } from "../images/image-service";
+import { ImageService, MAX_IMAGE_BYTES } from "../images/image-service";
 import { ReviewService, type AiReviewer } from "../services/review-service";
 import { ReviewFileStore } from "../storage/review-file-store";
 import {
@@ -373,6 +373,43 @@ describe("review route handlers", () => {
         height: 60,
       },
     ]);
+  });
+
+  it("在解析 multipart 前按 Content-Length 拒绝超过 64MB 的请求", async () => {
+    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const request = new Request("http://localhost/api/reviews/review-1/images", {
+      method: "POST",
+      headers: { "content-length": String(64 * 1024 * 1024 + 1) },
+    });
+    const formData = vi.spyOn(request, "formData");
+
+    const response = await handlers.POST(request, {
+      params: Promise.resolve({ id: "review-1" }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(formData).not.toHaveBeenCalled();
+  });
+
+  it("在读取 File 内容前检查单张 20MB 上限", async () => {
+    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const file = new File(
+      [new Uint8Array(MAX_IMAGE_BYTES + 1)],
+      "too-large.jpg",
+      { type: "image/jpeg" },
+    );
+    const arrayBuffer = vi.spyOn(file, "arrayBuffer");
+    const request = {
+      headers: new Headers(),
+      formData: vi.fn(async () => ({ getAll: () => [file] })),
+    } as never;
+
+    const response = await handlers.POST(request, {
+      params: Promise.resolve({ id: "review-1" }),
+    });
+
+    expect(response.status).toBe(413);
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
   it("analyze 保存 report/annotations 并管理成功和不可辨认状态", async () => {
