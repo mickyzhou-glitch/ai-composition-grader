@@ -95,9 +95,10 @@ describe("ReviewFileStore", () => {
     await store.createReview(OWNER, REVIEW);
     const locksDirectory = path.join(store.rootDirectory, ".review-locks");
     await mkdir(locksDirectory);
-    const lockName = `${createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex")}.lock`;
+    const lockName = createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex");
     const staleLock = path.join(locksDirectory, lockName);
-    await writeFile(staleLock, JSON.stringify({ pid: 19701, nonce: "crashed-owner-nonce" }));
+    await mkdir(staleLock);
+    await writeFile(path.join(staleLock, "owner.json"), JSON.stringify({ pid: 19701, nonce: "crashed-owner-nonce" }));
     const staleAt = new Date(Date.now() - 6 * 60 * 1000);
     await utimes(staleLock, staleAt, staleAt);
 
@@ -120,10 +121,11 @@ describe("ReviewFileStore", () => {
       { lockWaitMs: 50, lockRetryMs: 5 },
     );
     const locksDirectory = path.join(store.rootDirectory, ".review-locks");
-    const lockName = `${createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex")}.lock`;
+    const lockName = createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex");
     const lockPath = path.join(locksDirectory, lockName);
     await mkdir(locksDirectory);
-    await writeFile(lockPath, JSON.stringify({ pid: 19702, nonce: "live-owner-nonce---" }));
+    await mkdir(lockPath);
+    await writeFile(path.join(lockPath, "owner.json"), JSON.stringify({ pid: 19702, nonce: "live-owner-nonce---" }));
     const staleAt = new Date(Date.now() - 6 * 60 * 1000);
     await utimes(lockPath, staleAt, staleAt);
     const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
@@ -133,7 +135,45 @@ describe("ReviewFileStore", () => {
     await expect(anotherProcessStore.withReviewLock(OWNER, REVIEW, async () => undefined))
       .rejects.toMatchObject({ code: "REVIEW_LOCK_BUSY" });
     kill.mockRestore();
-    expect((await stat(lockPath)).isFile()).toBe(true);
+    expect((await stat(lockPath)).isDirectory()).toBe(true);
+  });
+
+  it("两个 reclaimer 同时处理死锁时，只有一个能原子接管固定租约目录", async () => {
+    await store.createReview(OWNER, REVIEW);
+    const locksDirectory = path.join(store.rootDirectory, ".review-locks");
+    await mkdir(locksDirectory);
+    const lockName = createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex");
+    const staleLock = path.join(locksDirectory, lockName);
+    await mkdir(staleLock);
+    await writeFile(path.join(staleLock, "owner.json"), JSON.stringify({ pid: 19703, nonce: "dead-owner-nonce----" }));
+    const staleAt = new Date(Date.now() - 6 * 60 * 1000);
+    await utimes(staleLock, staleAt, staleAt);
+    const firstStore = new ReviewFileStore(store.rootDirectory, undefined, { lockWaitMs: 250, lockRetryMs: 5 });
+    const secondStore = new ReviewFileStore(store.rootDirectory, undefined, { lockWaitMs: 250, lockRetryMs: 5 });
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const acquisitions: string[] = [];
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 19703) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      return true;
+    });
+    const first = firstStore.withReviewLock(OWNER, REVIEW, async () => {
+      acquisitions.push("first");
+      entered.resolve();
+      await release.promise;
+    });
+    const second = secondStore.withReviewLock(OWNER, REVIEW, async () => {
+      acquisitions.push("second");
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    expect(acquisitions).toHaveLength(1);
+    release.resolve();
+    await Promise.all([first, second]);
+    kill.mockRestore();
+    expect(acquisitions).toEqual(expect.arrayContaining(["first", "second"]));
   });
 
   it("清理队列带 owner 且不触及其他文件", async () => {

@@ -9,6 +9,7 @@ import {
   readdir,
   realpath,
   rename,
+  rmdir,
   rm,
   utimes,
 } from "node:fs/promises";
@@ -188,28 +189,43 @@ async function assertSafeFile(parent: string, filename: string): Promise<void> {
 
 async function reclaimStaleReviewLock(
   parent: string,
-  lockPath: string,
+  lockDirectory: string,
 ): Promise<boolean> {
   let info;
   try {
-    info = await lstat(lockPath);
+    info = await lstat(lockDirectory);
   } catch (error) {
     if (isMissing(error)) return true;
     throw error;
   }
-  if (info.isSymbolicLink() || !info.isFile()) {
-    throw new UnsafeStoragePathError(lockPath);
+  if (info.isSymbolicLink() || !info.isDirectory()) {
+    throw new UnsafeStoragePathError(lockDirectory);
   }
   if (Date.now() - info.mtimeMs <= REVIEW_LOCK_STALE_MS) return false;
 
   // A stale timestamp alone is not authority to steal a lock: a suspended or
   // busy process could still own it. Only an explicitly dead owner PID may be
   // reclaimed; live, protected, or malformed owners remain safely busy.
-  await assertSafeFile(parent, lockPath);
-  const owner = parseReviewLockOwner(await readFile(lockPath, "utf8"));
-  if (!owner || !isDefinitelyDeadProcess(owner.pid)) return false;
+  let owner: ReviewLockOwner | null;
   try {
-    await rm(lockPath, { force: false });
+    if (!(await assertRealDirectory(parent, lockDirectory))) return true;
+    const ownerFile = resolveInside(lockDirectory, "owner.json");
+    await assertSafeFile(lockDirectory, ownerFile);
+    owner = parseReviewLockOwner(await readFile(ownerFile, "utf8"));
+  } catch (error) {
+    if (isMissing(error)) return true;
+    throw error;
+  }
+  if (!owner || !isDefinitelyDeadProcess(owner.pid)) return false;
+  const tombstone = resolveInside(
+    parent,
+    `${path.basename(lockDirectory)}.tombstone-${randomUUID()}`,
+  );
+  try {
+    // Atomic rename is the recovery claim. At most one reclaimer can move the
+    // fixed directory; contenders see ENOENT and retry acquisition normally.
+    await rename(lockDirectory, tombstone);
+    await rm(tombstone, { recursive: true, force: true }).catch(() => undefined);
     return true;
   } catch (error) {
     if (isMissing(error)) return true;
@@ -329,26 +345,19 @@ export class ReviewFileStore {
     await this.assertSafeRoot(true);
     const locksDirectory = path.join(this.rootDirectory, REVIEW_LOCKS_DIRECTORY);
     await ensureRealDirectory(this.rootDirectory, locksDirectory);
-    const filename = `${createHash("sha256").update(`${ownerId}\0${reviewId}`).digest("hex")}.lock`;
-    const lockPath = resolveInside(locksDirectory, filename);
+    const lockName = createHash("sha256").update(`${ownerId}\0${reviewId}`).digest("hex");
+    const lockDirectory = resolveInside(locksDirectory, lockName);
     const deadline = Date.now() + this.lockWaitMs;
-    let lockFile: Awaited<ReturnType<typeof open>> | null = null;
 
-    while (lockFile === null) {
+    while (true) {
       try {
-        lockFile = await open(
-          lockPath,
-          constants.O_WRONLY |
-            constants.O_CREAT |
-            constants.O_EXCL |
-            constants.O_NOFOLLOW,
-          0o600,
-        );
+        await mkdir(lockDirectory, { mode: 0o700 });
+        break;
       } catch (error) {
-        if (isSymlinkError(error)) throw new UnsafeStoragePathError(lockPath);
+        if (isSymlinkError(error)) throw new UnsafeStoragePathError(lockDirectory);
         if (!isAlreadyExists(error)) throw error;
-        await assertSafeFile(locksDirectory, lockPath);
-        if (await reclaimStaleReviewLock(locksDirectory, lockPath)) continue;
+        await assertRealDirectory(locksDirectory, lockDirectory);
+        if (await reclaimStaleReviewLock(locksDirectory, lockDirectory)) continue;
         if (Date.now() >= deadline) throw new ReviewFileLockBusyError();
         await new Promise<void>((resolve) => setTimeout(resolve, this.lockRetryMs));
       }
@@ -356,21 +365,37 @@ export class ReviewFileStore {
 
     const ownerNonce = randomUUID();
     const ownerMarker = JSON.stringify({ pid: process.pid, nonce: ownerNonce });
-    await lockFile.writeFile(ownerMarker, { encoding: "utf8" });
-    await lockFile.sync();
-    const lockIdentity = await lockFile.stat();
+    const ownerFile = resolveInside(lockDirectory, "owner.json");
+    let ownerHandle: Awaited<ReturnType<typeof open>> | null = null;
+    try {
+      ownerHandle = await open(
+        ownerFile,
+        constants.O_WRONLY |
+          constants.O_CREAT |
+          constants.O_EXCL |
+          constants.O_NOFOLLOW,
+        0o600,
+      );
+      await ownerHandle.writeFile(ownerMarker, { encoding: "utf8" });
+      await ownerHandle.sync();
+    } catch (error) {
+      await rm(lockDirectory, { recursive: true, force: true });
+      throw error;
+    } finally {
+      await ownerHandle?.close();
+    }
+    const lockIdentity = await lstat(lockDirectory);
     const heartbeat = setInterval(() => {
-      void this.refreshReviewLockHeartbeat(lockPath, lockIdentity);
+      void this.refreshReviewLockHeartbeat(lockDirectory, lockIdentity);
     }, REVIEW_LOCK_HEARTBEAT_MS);
 
     try {
       return await operation();
     } finally {
       clearInterval(heartbeat);
-      await lockFile.close();
       await this.releaseOwnedReviewLock(
         locksDirectory,
-        lockPath,
+        lockDirectory,
         lockIdentity,
         ownerMarker,
       );
@@ -378,16 +403,16 @@ export class ReviewFileStore {
   }
 
   private async refreshReviewLockHeartbeat(
-    lockPath: string,
+    lockDirectory: string,
     identity: { dev: number; ino: number },
   ): Promise<void> {
     try {
-      const current = await lstat(lockPath);
-      if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) {
+      const current = await lstat(lockDirectory);
+      if (!current.isDirectory() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) {
         return;
       }
       const now = new Date();
-      await utimes(lockPath, now, now);
+      await utimes(lockDirectory, now, now);
     } catch {
       // The operation will still safely re-check the database before writing;
       // a lost heartbeat only makes a later stale recovery possible.
@@ -396,19 +421,22 @@ export class ReviewFileStore {
 
   private async releaseOwnedReviewLock(
     parent: string,
-    lockPath: string,
+    lockDirectory: string,
     identity: { dev: number; ino: number },
     ownerMarker: string,
   ): Promise<void> {
     try {
-      const current = await lstat(lockPath);
-      if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) {
+      const current = await lstat(lockDirectory);
+      if (!current.isDirectory() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) {
         return;
       }
-      await assertSafeFile(parent, lockPath);
-      const contents = await readFile(lockPath, "utf8");
+      await assertRealDirectory(parent, lockDirectory);
+      const ownerFile = resolveInside(lockDirectory, "owner.json");
+      await assertSafeFile(lockDirectory, ownerFile);
+      const contents = await readFile(ownerFile, "utf8");
       if (contents !== ownerMarker) return;
-      await rm(lockPath, { force: false });
+      await rm(ownerFile, { force: false });
+      await rmdir(lockDirectory);
     } catch (error) {
       if (!isMissing(error)) throw error;
     }
