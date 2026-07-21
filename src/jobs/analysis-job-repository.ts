@@ -294,6 +294,19 @@ export class AnalysisJobRepository {
         ))
         .run();
 
+      // The worker is intentionally global-singleton: a live lease on any
+      // composition prevents another process from claiming a different one.
+      // This is inside the transaction after recovery, so an expired lease is
+      // never allowed to block the queue forever.
+      const activeClaim = transaction.select({ id: analysisJobs.id })
+        .from(analysisJobs)
+        .where(and(
+          eq(analysisJobs.status, "running"),
+          gt(analysisJobs.leaseExpiresAt, now),
+        ))
+        .get();
+      if (activeClaim) return null;
+
       const candidate = transaction.select({ id: analysisJobs.id })
         .from(analysisJobs)
         .where(and(

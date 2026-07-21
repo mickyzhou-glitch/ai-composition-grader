@@ -6,6 +6,7 @@ import type {
   ReviewRepository,
   TeacherReviewEdits,
   AnalysisToken,
+  AnalysisJobCompletionClaim,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
@@ -267,6 +268,18 @@ export class ReviewService {
     envelope: AiReviewEnvelope,
   ): Promise<ReviewRecord> {
     return this.lock.runExclusive(id, async () => this.repository.saveAnalysis(ownerId, id, token, envelope));
+  }
+
+  async savePreparedAnalysisAndCompleteJob(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    envelope: AiReviewEnvelope,
+    claim: AnalysisJobCompletionClaim,
+  ): Promise<ReviewRecord> {
+    return this.lock.runExclusive(id, async () =>
+      this.repository.saveAnalysisAndCompleteJob(ownerId, id, token, envelope, claim),
+    );
   }
 
   async failPreparedAnalysis(ownerId: string, id: string, token: AnalysisToken): Promise<boolean> {

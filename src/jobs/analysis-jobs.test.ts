@@ -5,7 +5,10 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { initializeSchema } from "../db/init";
-import { ReviewRepository } from "../db/review-repository";
+import {
+  AnalysisJobCompletionClaimLostError,
+  ReviewRepository,
+} from "../db/review-repository";
 import * as schema from "../db/schema";
 import {
   AnalysisJobLostClaimError,
@@ -118,18 +121,19 @@ describe("AnalysisJobService", () => {
     expect(sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 1 });
   });
 
-  it("不同教师可以排队，而同一时刻只有一个领取者取得每个任务", () => {
+  it("不同教师可以排队，但全局一次只领取一篇作文", () => {
     service.enqueue(ownerA, "review-a");
     service.enqueue(ownerB, "review-b");
 
     const first = repository.claimNext();
     const second = repository.claimNext();
-    const third = repository.claimNext();
 
     expect(first).toMatchObject({ status: "running", attempt: 1, progressStage: "reading_images" });
-    expect(second).toMatchObject({ status: "running", attempt: 1, progressStage: "reading_images" });
-    expect(first?.id).not.toBe(second?.id);
-    expect(third).toBeNull();
+    expect(second).toBeNull();
+    repository.transition(first!, "succeeded");
+    const next = repository.claimNext();
+    expect(next).toMatchObject({ status: "running", attempt: 1, progressStage: "reading_images" });
+    expect(next?.id).not.toBe(first?.id);
   });
 
   it("领取原子写入运行状态、租约、尝试次数和读取阶段", () => {
@@ -348,7 +352,6 @@ describe("AnalysisJobService", () => {
       "validating_result",
       "saving_result",
       "save",
-      "succeeded",
     ]);
   });
 
@@ -376,7 +379,7 @@ describe("AnalysisJobService", () => {
 
     await worker.runOnce();
 
-    expect(transitions).toEqual(["succeeded"]);
+    expect(transitions).toEqual([]);
   });
 
   it("模型错误只按尝试上限重试，并使用安全错误码", async () => {
@@ -403,5 +406,107 @@ describe("AnalysisJobService", () => {
 
     expect(result).toMatchObject({ outcome: "retrying", errorCode: "AI_REQUEST_FAILED" });
     expect(retries).toEqual(["AI_REQUEST_FAILED"]);
+  });
+
+  it("retry 到达上限而变为 failed 时，Worker 只清理作文状态而不重复转换任务", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const transitions: string[] = [];
+    let failCalls = 0;
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (_job, stage) => ({ ...claimed, progressStage: stage } as never),
+      transition: (_job, status) => {
+        transitions.push(status);
+        return {} as never;
+      },
+      renewLease: () => null,
+      retry: () => "failed",
+    }, {
+      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
+      analyze: async () => { throw Object.assign(new Error("request"), { code: "AI_REQUEST_FAILED" }); },
+      save: async () => { throw new Error("unreachable"); },
+      fail: async () => { failCalls += 1; },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "failed", errorCode: "AI_REQUEST_FAILED" });
+    expect(failCalls).toBe(1);
+    expect(transitions).toEqual([]);
+  });
+
+  it("保存批改结果和任务成功在同一事务中落库，恢复轮询不会重复调用模型", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const token = reviewRepository.beginAnalysis(ownerA, "review-a", "run-saved", 0);
+    reviewRepository.saveAnalysisAndCompleteJob(ownerA, "review-a", token, readyEnvelope, claimed);
+    expect(repository.getById(ownerA, claimed.id)).toMatchObject({ status: "succeeded" });
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      status: "ready_for_review",
+      analysisRunId: null,
+    });
+    let analyzed = 0;
+    const worker = new AnalysisWorker(repository, {
+      prepare: async () => { throw new Error("不应再次读取图片"); },
+      analyze: async () => { analyzed += 1; return readyEnvelope; },
+      save: async () => { throw new Error("不应再次保存"); },
+      fail: async () => { throw new Error("不应失败"); },
+    });
+
+    now = new Date(now.valueOf() + 60_001);
+    await expect(worker.runOnce()).resolves.toBeNull();
+    expect(analyzed).toBe(0);
+  });
+
+  it("任务 claim CAS 失败时回滚已准备写入的报告", () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const token = reviewRepository.beginAnalysis(ownerA, "review-a", "run-rollback", 0);
+
+    expect(() => reviewRepository.saveAnalysisAndCompleteJob(ownerA, "review-a", token, readyEnvelope, {
+      ...claimed,
+      leaseExpiresAt: new Date(claimed.leaseExpiresAt.valueOf() - 1),
+    })).toThrow(AnalysisJobCompletionClaimLostError);
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "run-rollback",
+      report: null,
+    });
+    expect(repository.getById(ownerA, claimed.id)).toMatchObject({ status: "running" });
+  });
+
+  it("耗时模型调用期间 Worker 定期续租并使用最新租约完成任务", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const release = deferred<void>();
+    let renewals = 0;
+    const savedLeases: Date[] = [];
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (job, stage) => ({ ...claimed, ...job, progressStage: stage } as never),
+      transition: () => ({} as never),
+      renewLease: (id, priorLease) => {
+        renewals += 1;
+        return { ...claimed, id, leaseExpiresAt: new Date(priorLease.valueOf() + 60_000) };
+      },
+      retry: () => "failed",
+    }, {
+      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
+      analyze: async () => {
+        await release.promise;
+        return readyEnvelope;
+      },
+      save: async (_ownerId, _reviewId, _token, _envelope, claim) => {
+        savedLeases.push(claim.leaseExpiresAt);
+      },
+      fail: async () => undefined,
+    }, { renewEveryMs: 5 });
+
+    const pending = worker.runOnce();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    release.resolve();
+    await pending;
+
+    expect(renewals).toBeGreaterThan(0);
+    expect(savedLeases.at(-1)?.valueOf()).toBeGreaterThan(claimed.leaseExpiresAt.valueOf());
   });
 });

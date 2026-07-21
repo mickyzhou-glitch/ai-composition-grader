@@ -29,7 +29,13 @@ export interface AnalysisExecutionService {
     imageDataUrls: string[];
   }>;
   analyze(input: { config: AssignmentConfig; imageDataUrls: string[] }): Promise<AiReviewEnvelope>;
-  save(ownerId: string, reviewId: string, token: AnalysisToken, envelope: AiReviewEnvelope): Promise<unknown>;
+  save(
+    ownerId: string,
+    reviewId: string,
+    token: AnalysisToken,
+    envelope: AiReviewEnvelope,
+    claim: AnalysisJobClaim,
+  ): Promise<unknown>;
   fail(ownerId: string, reviewId: string, token: AnalysisToken): Promise<unknown>;
 }
 
@@ -53,6 +59,7 @@ function safeErrorCode(error: unknown): string {
       if (code === "AI_INVALID_RESPONSE") return code;
       if (code === "AI_REQUEST_FAILED") return code;
       if (code === "IMAGES_REQUIRED") return code;
+      if (code === "JOB_CLAIM_LOST") return code;
       if (code === "REVIEW_NOT_FOUND" || code === "NOT_FOUND") return "REVIEW_UNAVAILABLE";
     }
   }
@@ -136,19 +143,31 @@ export class AnalysisWorker {
       // The adapter performs schema repair and validation before returning, so
       // this stage records that the validated envelope is ready to persist.
       claim = this.jobs.updateProgress(claim, "saving_result");
-      await this.execution.save(claim.ownerId, claim.reviewId, prepared.token, envelope);
+      await this.execution.save(claim.ownerId, claim.reviewId, prepared.token, envelope, claim);
       this.assertClaimCurrent(claimLost, claim.id);
-      this.jobs.transition(claim, "succeeded");
       return { jobId: claim.id, outcome: "succeeded" };
     } catch (error) {
       if (claimLost || error instanceof AnalysisJobLostClaimError) {
         return { jobId: claim.id, outcome: "claim_lost" };
       }
       const errorCode = safeErrorCode(error);
+      if (errorCode === "JOB_CLAIM_LOST") {
+        return { jobId: claim.id, outcome: "claim_lost" };
+      }
       if (isRetryable(errorCode)) {
         try {
           const state = this.jobs.retry(claim, errorCode);
           if (state === "queued") return { jobId: claim.id, outcome: "retrying", errorCode };
+          // retry() already made the job terminal. Do not transition it a
+          // second time; only release the review's transient analyzing state.
+          if (prepared) {
+            try {
+              await this.execution.fail(claim.ownerId, claim.reviewId, prepared.token);
+            } catch {
+              // The queue's durable terminal state remains authoritative.
+            }
+          }
+          return { jobId: claim.id, outcome: "failed", errorCode };
         } catch (retryError) {
           if (retryError instanceof AnalysisJobLostClaimError) {
             return { jobId: claim.id, outcome: "claim_lost" };

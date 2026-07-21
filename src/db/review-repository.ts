@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
 import { ZodError } from "zod";
 
 import {
@@ -85,6 +85,12 @@ export interface AnalysisToken {
   runId: string;
 }
 
+export interface AnalysisJobCompletionClaim {
+  id: string;
+  attempt: number;
+  leaseExpiresAt: Date;
+}
+
 export interface ExportedPdfInput {
   pdfFilename: string;
   pdfPath: string;
@@ -119,6 +125,15 @@ export class AnalysisConflictError extends Error {
   constructor(id: string) {
     super(`Analysis result is stale for review: ${id}`);
     this.name = "AnalysisConflictError";
+  }
+}
+
+export class AnalysisJobCompletionClaimLostError extends Error {
+  readonly code = "JOB_CLAIM_LOST";
+
+  constructor(id: string) {
+    super(`Analysis job claim was lost: ${id}`);
+    this.name = "AnalysisJobCompletionClaimLostError";
   }
 }
 
@@ -653,6 +668,82 @@ export class ReviewRepository {
           })),
         ).run();
       }
+    });
+    return this.requireById(ownerId, id);
+  }
+
+  /**
+   * Atomically persists an AI result and finishes the exact Worker claim. If
+   * the lease was lost, the review update is rolled back with the job update.
+   */
+  saveAnalysisAndCompleteJob(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    input: AiReviewEnvelope,
+    claim: AnalysisJobCompletionClaim,
+  ): ReviewRecord {
+    const review = this.requireById(ownerId, id);
+    const parsedAnnotations = input.annotations.map((annotation) =>
+      annotationSchema.parse(annotation),
+    );
+    const report = input.readable
+      ? validateReport(input.report, { templateType: review.config.templateType })
+      : null;
+    const status = input.readable ? "ready_for_review" : "needs_better_images";
+    const savedAnnotations = input.readable ? parsedAnnotations : [];
+    const now = this.now();
+    if (!Number.isSafeInteger(claim.attempt) || claim.attempt <= 0 || Number.isNaN(claim.leaseExpiresAt.valueOf())) {
+      throw new TypeError("invalid analysis job completion claim");
+    }
+
+    this.database.transaction((transaction) => {
+      const reviewUpdate = transaction
+        .update(reviews)
+        .set({
+          report,
+          status,
+          updatedAt: now,
+          analysisRunId: null,
+          revision: sql`${reviews.revision} + 1`,
+          pdfFilename: null,
+          pdfPath: null,
+          pdfRevision: null,
+          exportedAt: null,
+        })
+        .where(
+          and(
+            eq(reviews.id, id),
+            eq(reviews.ownerId, ownerId),
+            isNull(reviews.deletingAt),
+            eq(reviews.revision, token.revision),
+            eq(reviews.analysisRunId, token.runId),
+          ),
+        )
+        .run();
+      if (reviewUpdate.changes === 0) throw new AnalysisConflictError(id);
+      transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
+      if (savedAnnotations.length > 0) {
+        transaction.insert(annotations).values(
+          savedAnnotations.map((annotation, position) => ({ reviewId: id, position, ...annotation })),
+        ).run();
+      }
+      const jobUpdate = transaction.update(analysisJobs).set({
+        status: "succeeded",
+        errorCode: null,
+        message: null,
+        leaseExpiresAt: null,
+        finishedAt: now,
+      }).where(and(
+        eq(analysisJobs.id, claim.id),
+        eq(analysisJobs.ownerId, ownerId),
+        eq(analysisJobs.reviewId, id),
+        eq(analysisJobs.status, "running"),
+        eq(analysisJobs.attempt, claim.attempt),
+        eq(analysisJobs.leaseExpiresAt, claim.leaseExpiresAt),
+        gt(analysisJobs.leaseExpiresAt, now),
+      )).run();
+      if (jobUpdate.changes !== 1) throw new AnalysisJobCompletionClaimLostError(claim.id);
     });
     return this.requireById(ownerId, id);
   }

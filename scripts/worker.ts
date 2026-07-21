@@ -33,8 +33,8 @@ export async function runWorker(): Promise<void> {
   const worker = new AnalysisWorker(jobs, {
     prepare: (ownerId, reviewId) => reviews.prepareAnalysis(ownerId, reviewId),
     analyze: (input) => reviews.analyzePrepared(input),
-    save: (ownerId, reviewId, token, envelope) =>
-      reviews.savePreparedAnalysis(ownerId, reviewId, token, envelope),
+    save: (ownerId, reviewId, token, envelope, claim) =>
+      reviews.savePreparedAnalysisAndCompleteJob(ownerId, reviewId, token, envelope, claim),
     fail: (ownerId, reviewId, token) => reviews.failPreparedAnalysis(ownerId, reviewId, token),
   });
   const stop = () => worker.stop();
