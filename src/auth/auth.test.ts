@@ -155,6 +155,31 @@ describe("AuthRepository", () => {
     expect(JSON.stringify(stored)).not.toContain("test-only-plaintext-password");
   });
 
+  it("rejects accessor-backed user input before validated values can be replaced", async () => {
+    const validHash = await hashPassword("valid password");
+    let usernameReads = 0;
+    let passwordHashReads = 0;
+    const input = {} as Parameters<AuthRepository["createUser"]>[0];
+    Object.defineProperties(input, {
+      username: {
+        get: () => (++usernameReads === 1 ? "valid.user" : "Kelvin"),
+      },
+      passwordHash: {
+        get: () => (++passwordHashReads === 1 ? validHash : "plaintext-password"),
+      },
+      role: { value: "teacher" },
+      mustChangePassword: { value: false },
+    });
+
+    expect(() => repository.createUser(input)).toThrow(TypeError);
+    expect(repository.findUserByUsername("valid.user")).toBeNull();
+    expect(
+      opened.sqlite.prepare("SELECT count(*) AS count FROM users WHERE id != ?").get(
+        "local-admin",
+      ),
+    ).toEqual({ count: 0 });
+  });
+
   it("rejects normalized duplicate usernames with a stable sanitized error", async () => {
     await createUser(" Teacher.One ");
 
@@ -236,6 +261,53 @@ describe("AuthRepository", () => {
     expect(repository.findValidSessionByTokenHash(tokenHash)?.user).not.toHaveProperty(
       "passwordHash",
     );
+  });
+
+  it("rejects accessor-backed session input before validation and persistence diverge", async () => {
+    const activeUser = await createUser("active.user");
+    const disabledUser = await createUser("disabled.user");
+    repository.disableUser(disabledUser.id);
+    const validHash = hashSessionToken("valid-session-secret");
+    let userIdReads = 0;
+    let tokenHashReads = 0;
+    const input = {} as Parameters<AuthRepository["createSession"]>[0];
+    Object.defineProperties(input, {
+      userId: {
+        get: () => (++userIdReads === 1 ? activeUser.id : disabledUser.id),
+      },
+      tokenHash: {
+        get: () => (++tokenHashReads === 1 ? validHash : "raw-session-secret"),
+      },
+      expiresAt: { value: new Date(now.valueOf() + 60 * 60 * 1000) },
+    });
+
+    expect(() => repository.createSession(input)).toThrow(TypeError);
+    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM sessions").get()).toEqual({
+      count: 0,
+    });
+  });
+
+  it("snapshots session expiration without invoking an overridden valueOf", async () => {
+    const user = await createUser();
+    const expectedExpiration = new Date(now.valueOf() + 60 * 60 * 1000);
+    class SwitchingDate extends Date {
+      private reads = 0;
+
+      override valueOf(): number {
+        this.reads += 1;
+        return this.reads === 1
+          ? expectedExpiration.valueOf()
+          : now.valueOf() - 1000;
+      }
+    }
+
+    const session = repository.createSession({
+      userId: user.id,
+      tokenHash: hashSessionToken("expiration-session-secret"),
+      expiresAt: new SwitchingDate(expectedExpiration),
+    });
+
+    expect(session.expiresAt).toEqual(expectedExpiration);
   });
 
   it("treats expiresAt equal to now as invalid", async () => {
@@ -470,6 +542,27 @@ describe("AuthRepository", () => {
     );
   });
 
+  it.each(["recordLoginAttempt", "recordLoginAttemptAndGetStatus"] as const)(
+    "rejects accessor-backed input in %s before raw IP data can be stored",
+    (method) => {
+      const validHash = hashSourceIp("198.51.100.22", "audit-secret");
+      let ipHashReads = 0;
+      const input = {} as Parameters<AuthRepository[typeof method]>[0];
+      Object.defineProperties(input, {
+        username: { value: "unknown.user" },
+        ipHash: {
+          get: () => (++ipHashReads === 1 ? validHash : "198.51.100.22"),
+        },
+        succeeded: { value: false },
+      });
+
+      expect(() => repository[method](input)).toThrow(TypeError);
+      expect(
+        opened.sqlite.prepare("SELECT count(*) AS count FROM login_attempts").get(),
+      ).toEqual({ count: 0 });
+    },
+  );
+
   it.each([
     { password: "secret" },
     { nested: { PaSsWoRdHaSh: "hash" } },
@@ -601,6 +694,34 @@ describe("AuthRepository", () => {
       { count: 0 },
     );
   });
+
+  it.each(["userId", "eventType", "metadata"] as const)(
+    "rejects accessor-backed security event %s input",
+    (accessorField) => {
+      let eventTypeReads = 0;
+      const input = {} as Parameters<AuthRepository["recordSecurityEvent"]>[0];
+      Object.defineProperties(input, {
+        userId:
+          accessorField === "userId" ? { get: () => null } : { value: null },
+        eventType:
+          accessorField === "eventType"
+            ? {
+                get: () =>
+                  ++eventTypeReads <= 2 ? "login_failed" : "password=secret",
+              }
+            : { value: "login_failed" },
+        metadata:
+          accessorField === "metadata"
+            ? { get: () => ({ reason: "safe" }) }
+            : { value: { reason: "safe" } },
+      });
+
+      expect(() => repository.recordSecurityEvent(input)).toThrow(TypeError);
+      expect(
+        opened.sqlite.prepare("SELECT count(*) AS count FROM security_events").get(),
+      ).toEqual({ count: 0 });
+    },
+  );
 
   it("maps database failures to stable errors without SQL or credential material", async () => {
     const user = await createUser();

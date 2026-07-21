@@ -149,20 +149,65 @@ function assertPasswordHash(passwordHash: string): void {
   }
 }
 
-function assertSha256Hash(value: string, label: string): void {
+function assertSha256Hash(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string" || !SHA_256_HEX_PATTERN.test(value)) {
     throw new TypeError(`${label} must be a SHA-256 hex hash`);
   }
 }
 
-function assertValidDate(value: Date, label: string): void {
-  if (!(value instanceof Date) || Number.isNaN(value.valueOf())) {
+function snapshotDate(value: unknown, label: string): Date {
+  if (!(value instanceof Date)) {
     throw new TypeError(`${label} must be a valid date`);
   }
+  let timestamp: number;
+  try {
+    timestamp = Date.prototype.getTime.call(value);
+  } catch {
+    throw new TypeError(`${label} must be a valid date`);
+  }
+  if (Number.isNaN(timestamp)) throw new TypeError(`${label} must be a valid date`);
+  return new Date(timestamp);
 }
 
 function assertBoolean(value: unknown, label: string): asserts value is boolean {
   if (typeof value !== "boolean") throw new TypeError(`${label} must be a boolean`);
+}
+
+function snapshotOwnDataProperty(
+  input: unknown,
+  key: string,
+  optional = false,
+): unknown {
+  try {
+    if (typeof input !== "object" || input === null) throw new TypeError();
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (!descriptor) {
+      if (optional) return undefined;
+      throw new TypeError();
+    }
+    if (!("value" in descriptor)) throw new TypeError();
+    return descriptor.value;
+  } catch {
+    throw new TypeError("Authentication input must use own data properties");
+  }
+}
+
+function snapshotLoginAttemptInput(input: LoginAttemptInput): {
+  normalizedUsername: string;
+  ipHash: string;
+  succeeded: boolean;
+} {
+  const username = snapshotOwnDataProperty(input, "username");
+  const ipHash = snapshotOwnDataProperty(input, "ipHash");
+  const succeeded = snapshotOwnDataProperty(input, "succeeded");
+  if (typeof username !== "string") throw new TypeError("Username must be a string");
+  assertSha256Hash(ipHash, "IP hash");
+  assertBoolean(succeeded, "succeeded");
+  return {
+    normalizedUsername: normalizeUsername(username),
+    ipHash,
+    succeeded,
+  };
 }
 
 function snapshotSafeMetadata(
@@ -308,14 +353,28 @@ export class AuthRepository {
   }
 
   createUser(input: CreateUserInput): UserRecord {
-    const username = normalizeUsername(input.username);
-    assertRole(input.role);
-    assertPasswordHash(input.passwordHash);
-    if (input.mustChangePassword !== undefined) {
-      assertBoolean(input.mustChangePassword, "mustChangePassword");
+    const inputUsername = snapshotOwnDataProperty(input, "username");
+    const passwordHash = snapshotOwnDataProperty(input, "passwordHash");
+    const role = snapshotOwnDataProperty(input, "role");
+    const mustChangePassword = snapshotOwnDataProperty(
+      input,
+      "mustChangePassword",
+      true,
+    );
+    if (typeof inputUsername !== "string") {
+      throw new TypeError("Username must be a string");
     }
-    const timestamp = this.now();
-    assertValidDate(timestamp, "Current time");
+    if (typeof passwordHash !== "string") {
+      throw new TypeError("Password hash must be a string");
+    }
+    if (typeof role !== "string") throw new TypeError("Role must be a string");
+    const username = normalizeUsername(inputUsername);
+    assertRole(role);
+    assertPasswordHash(passwordHash);
+    if (mustChangePassword !== undefined) {
+      assertBoolean(mustChangePassword, "mustChangePassword");
+    }
+    const timestamp = snapshotDate(this.now(), "Current time");
     const id = this.createId();
 
     try {
@@ -324,9 +383,9 @@ export class AuthRepository {
         .values({
           id,
           username,
-          passwordHash: input.passwordHash,
-          role: input.role,
-          mustChangePassword: input.mustChangePassword ?? false,
+          passwordHash,
+          role,
+          mustChangePassword: mustChangePassword ?? false,
           disabledAt: null,
           createdAt: timestamp,
           updatedAt: timestamp,
@@ -421,8 +480,14 @@ export class AuthRepository {
   }
 
   createSession(input: CreateSessionInput): SessionRecord {
-    assertSha256Hash(input.tokenHash, "Session token hash");
-    assertValidDate(input.expiresAt, "Session expiration");
+    const userId = snapshotOwnDataProperty(input, "userId");
+    const tokenHash = snapshotOwnDataProperty(input, "tokenHash");
+    const inputExpiresAt = snapshotOwnDataProperty(input, "expiresAt");
+    if (typeof userId !== "string" || userId.length === 0) {
+      throw new TypeError("Session user ID must not be empty");
+    }
+    assertSha256Hash(tokenHash, "Session token hash");
+    const expiresAt = snapshotDate(inputExpiresAt, "Session expiration");
     const timestamp = this.now();
     const id = this.createId();
     try {
@@ -430,17 +495,17 @@ export class AuthRepository {
         const activeUser = transaction
           .select({ id: users.id })
           .from(users)
-          .where(and(eq(users.id, input.userId), isNull(users.disabledAt)))
+          .where(and(eq(users.id, userId), isNull(users.disabledAt)))
           .get();
         if (!activeUser) throw new AuthStorageError();
         transaction
           .insert(sessions)
           .values({
             id,
-            userId: input.userId,
-            tokenHash: input.tokenHash,
+            userId,
+            tokenHash,
             lastSeenAt: timestamp,
-            expiresAt: input.expiresAt,
+            expiresAt,
             createdAt: timestamp,
             revokedAt: null,
           })
@@ -585,25 +650,24 @@ export class AuthRepository {
   }
 
   recordLoginAttempt(input: LoginAttemptInput): LoginAttemptRecord {
-    const normalizedUsername = normalizeUsername(input.username);
-    assertSha256Hash(input.ipHash, "IP hash");
-    assertBoolean(input.succeeded, "succeeded");
+    const { normalizedUsername, ipHash, succeeded } =
+      snapshotLoginAttemptInput(input);
     const attemptedAt = this.now();
     return this.safely(() => {
       const result = this.database
         .insert(loginAttempts)
         .values({
           normalizedUsername,
-          ipHash: input.ipHash,
-          succeeded: input.succeeded,
+          ipHash,
+          succeeded,
           attemptedAt,
         })
         .run();
       return {
         id: Number(result.lastInsertRowid),
         normalizedUsername,
-        ipHash: input.ipHash,
-        succeeded: input.succeeded,
+        ipHash,
+        succeeded,
         attemptedAt,
       };
     });
@@ -652,9 +716,8 @@ export class AuthRepository {
   recordLoginAttemptAndGetStatus(
     input: LoginAttemptInput,
   ): RecordedLoginAttemptStatus {
-    const normalizedUsername = normalizeUsername(input.username);
-    assertSha256Hash(input.ipHash, "IP hash");
-    assertBoolean(input.succeeded, "succeeded");
+    const { normalizedUsername, ipHash, succeeded } =
+      snapshotLoginAttemptInput(input);
     const attemptedAt = this.now();
     const cutoff = new Date(attemptedAt.valueOf() - LOGIN_FAILURE_WINDOW_MS);
 
@@ -664,8 +727,8 @@ export class AuthRepository {
           .insert(loginAttempts)
           .values({
             normalizedUsername,
-            ipHash: input.ipHash,
-            succeeded: input.succeeded,
+            ipHash,
+            succeeded,
             attemptedAt,
           })
           .run();
@@ -686,14 +749,14 @@ export class AuthRepository {
         const usernameFailures = countFailures(
           eq(loginAttempts.normalizedUsername, normalizedUsername),
         );
-        const ipFailures = countFailures(eq(loginAttempts.ipHash, input.ipHash));
+        const ipFailures = countFailures(eq(loginAttempts.ipHash, ipHash));
 
         return {
           attempt: {
             id: Number(inserted.lastInsertRowid),
             normalizedUsername,
-            ipHash: input.ipHash,
-            succeeded: input.succeeded,
+            ipHash,
+            succeeded,
             attemptedAt,
           },
           status: {
@@ -708,28 +771,36 @@ export class AuthRepository {
   }
 
   recordSecurityEvent(input: SecurityEventInput): SecurityEventRecord {
+    const userId = snapshotOwnDataProperty(input, "userId");
+    const eventType = snapshotOwnDataProperty(input, "eventType");
+    const inputMetadata = snapshotOwnDataProperty(input, "metadata");
+    if (userId !== null && typeof userId !== "string") {
+      throw new TypeError("Security event user ID must be a string or null");
+    }
     if (
-      typeof input.eventType !== "string" ||
-      !SECURITY_EVENT_TYPE_PATTERN.test(input.eventType)
+      typeof eventType !== "string" ||
+      !SECURITY_EVENT_TYPE_PATTERN.test(eventType)
     ) {
       throw new TypeError("Security event type must use the safe ASCII format");
     }
-    const metadata = snapshotSafeMetadata(input.metadata);
+    const metadata = snapshotSafeMetadata(
+      inputMetadata as Record<string, unknown>,
+    );
     const createdAt = this.now();
     return this.safely(() => {
       const result = this.database
         .insert(securityEvents)
         .values({
-          userId: input.userId,
-          eventType: input.eventType,
+          userId,
+          eventType,
           metadata,
           createdAt,
         })
         .run();
       return {
         id: Number(result.lastInsertRowid),
-        userId: input.userId,
-        eventType: input.eventType,
+        userId,
+        eventType,
         metadata,
         createdAt,
       };
