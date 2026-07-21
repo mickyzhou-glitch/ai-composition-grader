@@ -90,7 +90,7 @@ describe("ReviewService analysis CAS", () => {
       rotation: 0,
       crop: null,
     };
-    repository.replaceImages("review-1", [image]);
+    repository.replaceImages("review-1", 0, [image]);
   });
 
   afterEach(async () => {
@@ -173,7 +173,7 @@ describe("ReviewService analysis CAS", () => {
 
     const pending = service.analyze("review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    repository.replaceImages("review-1", [{ ...image, originalName: "new.jpg" }]);
+    repository.replaceImages("review-1", 1, [{ ...image, originalName: "new.jpg" }]);
     ai.resolve(readyEnvelope);
 
     await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });

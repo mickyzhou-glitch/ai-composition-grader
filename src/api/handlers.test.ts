@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -452,6 +452,7 @@ describe("review route handlers", () => {
       create: { width: 60, height: 80, channels: 3, background: "white" },
     }).jpeg().toBuffer();
     const form = new FormData();
+    form.append("expectedRevision", "0");
     for (let index = 0; index < 3; index += 1) {
       form.append("images", new File([pixels], `page-${index + 1}.jpg`, { type: "image/jpeg" }));
     }
@@ -479,6 +480,7 @@ describe("review route handlers", () => {
     const current = repository.getById("review-1")?.images ?? [];
     const patched = await handlers.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1/images", "PATCH", {
+        expectedRevision: 1,
         images: current.map((image, index) => ({
           id: image.id,
           position: current.length - index - 1,
@@ -506,6 +508,53 @@ describe("review route handlers", () => {
         height: 60,
       },
     ]);
+  });
+
+  it("旧 revision 重拍或变换都返回 409，并保留 SQLite 图片和已存文件", async () => {
+    repository.create({ id: "review-1", config });
+    const pixels = await sharp({
+      create: { width: 60, height: 80, channels: 3, background: "white" },
+    }).jpeg().toBuffer();
+    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const initial = new FormData();
+    initial.append("expectedRevision", "0");
+    initial.append("images", new File([pixels], "current.jpg", { type: "image/jpeg" }));
+    expect((await handlers.POST(
+      new Request("http://localhost/api/reviews/review-1/images", { method: "POST", body: initial }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    )).status).toBe(200);
+    const before = repository.getById("review-1");
+    const imageDirectory = fileStore.getReviewPaths("review-1").imagesDirectory;
+    const filesBefore = (await readdir(imageDirectory)).sort();
+
+    repository.updateTeacherEdits("review-1", {
+      expectedRevision: 1,
+      config: { ...config, title: "另一标签页已保存" },
+    });
+    const stale = new FormData();
+    stale.append("expectedRevision", "1");
+    stale.append("images", new File([pixels], "stale.jpg", { type: "image/jpeg" }));
+    const response = await handlers.POST(
+      new Request("http://localhost/api/reviews/review-1/images", { method: "POST", body: stale }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+
+    expect(response.status).toBe(409);
+    expect(await json(response)).toMatchObject({ error: { code: "REVISION_CONFLICT" } });
+    expect(repository.getById("review-1")?.images).toEqual(before?.images);
+    expect((await readdir(imageDirectory)).sort()).toEqual(filesBefore);
+
+    const staleTransform = await handlers.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1/images", "PATCH", {
+        expectedRevision: 1,
+        images: before?.images.map((image) => ({ id: image.id, rotation: 90 })),
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(staleTransform.status).toBe(409);
+    expect(await json(staleTransform)).toMatchObject({ error: { code: "REVISION_CONFLICT" } });
+    expect(repository.getById("review-1")?.images).toEqual(before?.images);
+    expect((await readdir(imageDirectory)).sort()).toEqual(filesBefore);
   });
 
   it("在解析 multipart 前按 Content-Length 拒绝超过 64MB 的请求", async () => {
@@ -572,7 +621,10 @@ describe("review route handlers", () => {
     const arrayBuffer = vi.spyOn(file, "arrayBuffer");
     const request = {
       headers: new Headers(),
-      formData: vi.fn(async () => ({ getAll: () => [file] })),
+      formData: vi.fn(async () => ({
+        get: (key: string) => key === "expectedRevision" ? "0" : null,
+        getAll: () => [file],
+      })),
     } as never;
 
     const response = await handlers.POST(request, {
@@ -585,7 +637,7 @@ describe("review route handlers", () => {
 
   it("analyze 保存 report/annotations 并管理成功和不可辨认状态", async () => {
     repository.create({ id: "review-1", config });
-    await imageService.upload("review-1", [
+    await imageService.upload("review-1", repository.getById("review-1")?.revision ?? 0, [
       {
         originalName: "page.jpg",
         mimeType: "image/jpeg",
@@ -623,7 +675,7 @@ describe("review route handlers", () => {
 
   it("AI 失败后将状态落为 failed 并返回 502", async () => {
     repository.create({ id: "review-1", config });
-    await imageService.upload("review-1", [
+    await imageService.upload("review-1", repository.getById("review-1")?.revision ?? 0, [
       {
         originalName: "page.jpg",
         mimeType: "image/jpeg",

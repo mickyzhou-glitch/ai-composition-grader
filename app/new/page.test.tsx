@@ -82,12 +82,14 @@ describe("新建作文批改", () => {
     expect(reviewRequest[0]).toBe("/api/reviews");
     expect(JSON.parse((reviewRequest[1] as RequestInit).body as string).config.title).toBe("为自己鼓掌");
     const uploaded = (fetchMock.mock.calls[1][1] as RequestInit).body as FormData;
+    expect(uploaded.get("expectedRevision")).toBe("0");
     expect(uploaded.getAll("images").map((file) => (file as File).name)).toEqual([
       "一.jpg",
       "三.jpg",
       "二.jpg",
     ]);
     const transforms = JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string);
+    expect(transforms.expectedRevision).toBe(1);
     expect(transforms.images[2]).toMatchObject({ id: 13, position: 2, rotation: 90 });
     expect(transforms.images[2].crop.x).toBe(0.1);
   });

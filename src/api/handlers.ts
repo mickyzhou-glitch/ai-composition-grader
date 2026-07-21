@@ -284,6 +284,11 @@ const updateReviewSchema = z
     message: "at least one review field is required",
     },
   );
+const multipartRevisionSchema = z
+  .string()
+  .regex(/^\d+$/)
+  .transform(Number)
+  .pipe(z.number().int().nonnegative());
 
 export function createReviewsRouteHandlers(dependencies: {
   reviewService: ReviewService;
@@ -351,6 +356,9 @@ export function createReviewImagesRouteHandlers(
         const entries = form.getAll("images").length > 0
           ? form.getAll("images")
           : form.getAll("files");
+        const expectedRevision = multipartRevisionSchema.parse(
+          form.get("expectedRevision"),
+        );
         if (entries.length < 1 || entries.length > 3) {
           throw routeError(
             "IMAGE_COUNT_INVALID",
@@ -379,7 +387,11 @@ export function createReviewImagesRouteHandlers(
           }),
         );
         return ok(imageCollectionDto(
-          await dependencies.imageService.upload((await context.params).id, files),
+          await dependencies.imageService.upload(
+            (await context.params).id,
+            expectedRevision,
+            files,
+          ),
         ));
       } catch (error) {
         return failure(error);

@@ -5,9 +5,10 @@ import sharp from "sharp";
 import { z } from "zod";
 
 import { normalizedCropSchema, type NormalizedCrop } from "../domain/contracts";
-import type {
-  ReviewImage,
-  ReviewImageInput,
+import {
+  RevisionConflictError,
+  type ReviewImage,
+  type ReviewImageInput,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import { InMemoryReviewLock, type ReviewLock } from "../services/review-lock";
@@ -32,11 +33,12 @@ export interface UploadedImage {
 }
 
 export interface ImageRepository {
-  getById(id: string): { images: ReviewImage[] } | null;
+  getById(id: string): { images: ReviewImage[]; revision: number } | null;
   replaceImages(
     reviewId: string,
+    expectedRevision: number,
     images: ReviewImageInput[],
-  ): { images: ReviewImage[] };
+  ): { images: ReviewImage[]; revision: number };
 }
 
 export type ImageServiceErrorCode =
@@ -69,6 +71,7 @@ const rotationSchema = z.union([
 ]);
 
 const updateSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
   images: z
     .array(
       z.object({
@@ -243,17 +246,24 @@ export class ImageService {
     this.lock = options.lock ?? new InMemoryReviewLock();
   }
 
-  async upload(reviewId: string, files: UploadedImage[]) {
+  async upload(reviewId: string, expectedRevision: number, files: UploadedImage[]) {
     return this.lock.runExclusive(reviewId, () =>
-      this.uploadExclusive(reviewId, files),
+      this.uploadExclusive(reviewId, expectedRevision, files),
     );
   }
 
-  private async uploadExclusive(reviewId: string, files: UploadedImage[]) {
+  private async uploadExclusive(
+    reviewId: string,
+    expectedRevision: number,
+    files: UploadedImage[],
+  ) {
     await this.fileStore.retryImageCleanup(reviewId);
     const review = this.repository.getById(reviewId);
     if (!review) {
       throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+    }
+    if (review.revision !== expectedRevision) {
+      throw new RevisionConflictError(reviewId);
     }
     if (files.length < 1 || files.length > 3) {
       throw new ImageServiceError(
@@ -293,7 +303,7 @@ export class ImageService {
         ],
       });
     }
-    return this.commitVersions(reviewId, prepared, review.images);
+    return this.commitVersions(reviewId, expectedRevision, prepared, review.images);
   }
 
   async update(reviewId: string, input: UpdateImagesInput) {
@@ -307,6 +317,9 @@ export class ImageService {
     const review = this.repository.getById(reviewId);
     if (!review) throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     const parsed = this.parseUpdate(input);
+    if (review.revision !== parsed.expectedRevision) {
+      throw new RevisionConflictError(reviewId);
+    }
     const currentById = new Map(review.images.map((image) => [image.id, image]));
     if (
       parsed.images.length !== review.images.length ||
@@ -382,16 +395,22 @@ export class ImageService {
         ],
       });
     }
-    return this.commitVersions(reviewId, prepared, review.images);
+    return this.commitVersions(
+      reviewId,
+      parsed.expectedRevision,
+      prepared,
+      review.images,
+    );
   }
 
   private async commitVersions(
     reviewId: string,
+    expectedRevision: number,
     prepared: PreparedImageVersion[],
     previous: ReviewImage[],
   ) {
     const written: string[] = [];
-    let saved: { images: ReviewImage[] };
+    let saved: { images: ReviewImage[]; revision: number };
     try {
       for (const image of prepared) {
         for (const file of image.files) {
@@ -406,6 +425,7 @@ export class ImageService {
       }
       saved = this.repository.replaceImages(
         reviewId,
+        expectedRevision,
         prepared.map(({ record }) => record),
       );
     } catch (error) {

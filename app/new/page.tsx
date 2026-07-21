@@ -139,6 +139,7 @@ export default function NewReviewPage() {
       let serverImages = uploaded;
       if (!serverImages) {
         const form = new FormData();
+        form.append("expectedRevision", String(currentReview.revision));
         images.forEach(({ file }) => form.append("images", file));
         const uploadResult = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
           method: "POST",
@@ -153,6 +154,7 @@ export default function NewReviewPage() {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          expectedRevision: currentReview.revision,
           images: images.map((image, position) => ({
             id: serverImages[position].id,
             position,

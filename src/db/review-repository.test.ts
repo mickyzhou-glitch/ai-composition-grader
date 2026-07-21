@@ -296,7 +296,7 @@ describe("ReviewRepository", () => {
     repository.replaceAnnotations("review-1", [annotation]);
     repository.updateStatus("review-1", "ready_for_review");
 
-    const updated = repository.replaceImages("review-1", []);
+    const updated = repository.replaceImages("review-1", 0, []);
 
     expect(updated).toMatchObject({ status: "draft", report: null, annotations: [] });
   });
@@ -386,12 +386,43 @@ describe("ReviewRepository", () => {
     repository.create({ id: "review-1", config });
     repository.beginAnalysis("review-1", "run-old", 0);
 
-    const changed = repository.replaceImages("review-1", []);
+    const changed = repository.replaceImages("review-1", 0, []);
 
     expect(changed).toMatchObject({
       revision: 1,
       analysisRunId: null,
       status: "draft",
+    });
+  });
+
+  it("旧 revision 替换图片返回 409 且保留当前图片", () => {
+    repository.create({
+      id: "review-1",
+      config,
+      images: [{
+        position: 0,
+        originalName: "current.jpg",
+        mimeType: "image/jpeg",
+        originalPath: "images/current-original.jpg",
+        annotationPath: "images/current-annotation.jpg",
+        aiPath: "images/current-ai.jpg",
+        width: 100,
+        height: 100,
+        rotation: 0,
+        crop: null,
+      }],
+    });
+    repository.updateTeacherEdits("review-1", {
+      expectedRevision: 0,
+      config: { ...config, title: "另一标签页已更新" },
+    });
+
+    expect(() => repository.replaceImages("review-1", 0, [])).toThrow(
+      expect.objectContaining({ code: "REVISION_CONFLICT", status: 409 }),
+    );
+    expect(repository.getById("review-1")).toMatchObject({
+      revision: 1,
+      images: [{ originalName: "current.jpg" }],
     });
   });
 

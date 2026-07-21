@@ -439,11 +439,34 @@ export class ReviewRepository {
     return this.requireById(id);
   }
 
-  replaceImages(id: string, input: ReviewImageInput[]): ReviewRecord {
-    this.requireById(id);
+  replaceImages(
+    id: string,
+    expectedRevision: number,
+    input: ReviewImageInput[],
+  ): ReviewRecord {
     const images = input.map(validateImage);
     const now = this.now();
     this.database.transaction((transaction) => {
+      const update = transaction
+        .update(reviews)
+        .set({
+          updatedAt: now,
+          status: "draft",
+          report: null,
+          revision: sql`${reviews.revision} + 1`,
+          analysisRunId: null,
+        })
+        .where(and(eq(reviews.id, id), eq(reviews.revision, expectedRevision)))
+        .run();
+      if (update.changes === 0) {
+        const exists = transaction
+          .select({ id: reviews.id })
+          .from(reviews)
+          .where(eq(reviews.id, id))
+          .get();
+        if (!exists) throw new ReviewNotFoundError(id);
+        throw new RevisionConflictError(id);
+      }
       transaction.delete(reviewImages).where(eq(reviewImages.reviewId, id)).run();
       transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
       if (images.length > 0) {
@@ -457,17 +480,6 @@ export class ReviewRepository {
           })),
         ).run();
       }
-      transaction
-        .update(reviews)
-        .set({
-          updatedAt: now,
-          status: "draft",
-          report: null,
-          revision: sql`${reviews.revision} + 1`,
-          analysisRunId: null,
-        })
-        .where(eq(reviews.id, id))
-        .run();
     });
     return this.requireById(id);
   }

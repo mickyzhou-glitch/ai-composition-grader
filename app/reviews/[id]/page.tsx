@@ -209,7 +209,7 @@ export default function ReviewPage() {
   }
 
   async function replaceImages(files: File[]) {
-    if (busy) return;
+    if (!review || busy) return;
     if (files.length < 1 || files.length > 3) {
       setError("请选择 1 至 3 张作文图片");
       return;
@@ -223,6 +223,7 @@ export default function ReviewPage() {
     setNotice("");
     try {
       const form = new FormData();
+      form.append("expectedRevision", String(review.revision));
       files.forEach((file) => form.append("images", file));
       const uploaded = await apiFetch<{ images: ReviewView["images"]; revision: number }>(
         `/api/reviews/${encodeURIComponent(reviewId)}/images`,

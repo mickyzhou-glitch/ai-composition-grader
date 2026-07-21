@@ -314,6 +314,8 @@ describe("复核页", () => {
       "src",
       "/api/reviews/review-1/files?imageId=8&variant=annotation",
     ));
+    const uploadBody = (fetchMock.mock.calls[2][1] as RequestInit).body as FormData;
+    expect(uploadBody.get("expectedRevision")).toBe("1");
 
     await act(async () => {
       pendingPoll.resolve(await json(review));
@@ -362,7 +364,7 @@ describe("复核页", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(unreadable))
-      .mockImplementationOnce(() => json({ images: [{ id: 8, position: 0, originalName: "重拍.jpg", mimeType: "image/jpeg", width: 100, height: 120, rotation: 0, crop: null }] }));
+      .mockImplementationOnce(() => json({ images: [{ id: 8, position: 0, originalName: "重拍.jpg", mimeType: "image/jpeg", width: 100, height: 120, rotation: 0, crop: null }], revision: 2 }));
     const user = userEvent.setup();
     render(<ReviewPage />);
 
@@ -375,6 +377,7 @@ describe("复核页", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/images");
     expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: "POST" });
+    expect(((fetchMock.mock.calls[1][1] as RequestInit).body as FormData).get("expectedRevision")).toBe("1");
     expect(await screen.findByRole("status")).toHaveTextContent("作文图片已替换");
   });
 });
