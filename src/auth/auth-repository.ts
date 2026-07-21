@@ -424,6 +424,25 @@ export class AuthRepository {
     });
   }
 
+  findUserById(userId: string): UserRecord | null {
+    if (typeof userId !== "string" || userId.length === 0) return null;
+    return this.safely(() => {
+      const row = this.database.select().from(users).where(eq(users.id, userId)).get();
+      return row ? asUserRecord(row) : null;
+    });
+  }
+
+  listUsers(): UserRecord[] {
+    return this.safely(() =>
+      this.database
+        .select()
+        .from(users)
+        .orderBy(users.username)
+        .all()
+        .map((row) => asUserRecord(row)),
+    );
+  }
+
   private requireUserById(userId: string): UserRecord {
     return this.safely(() => {
       const row = this.database.select().from(users).where(eq(users.id, userId)).get();

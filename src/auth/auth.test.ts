@@ -22,6 +22,8 @@ import {
   normalizeUsername,
   verifyPassword,
 } from "./password";
+import { AuthService } from "./auth-service";
+import { parseArgs } from "../../scripts/accounts";
 
 describe("password security primitives", () => {
   it("normalizes usernames to one trim-and-lowercase storage form", () => {
@@ -935,5 +937,90 @@ describe("AuthRepository", () => {
     expect(refreshed.expiresAt).toEqual(
       new Date(now.valueOf() + 12 * 60 * 60 * 1000),
     );
+  });
+});
+
+describe("AuthService", () => {
+  it("returns a raw session token while persisting only its hash", async () => {
+    const opened = openAppDatabase(":memory:");
+    const repository = new AuthRepository(opened.db, {
+      now: () => new Date("2026-07-21T02:00:00.000Z"),
+      randomUUID: (() => {
+        let n = 1;
+        return () => `service-${n++}`;
+      })(),
+    });
+    const service = new AuthService(repository, {
+      now: () => new Date("2026-07-21T02:00:00.000Z"),
+      randomSessionToken: () => "raw-session-token",
+    });
+    await service.createInvitedUser({
+      username: "teacher.service",
+      password: "correct horse",
+      role: "teacher",
+    });
+    const result = await service.login({
+      username: "teacher.service",
+      password: "correct horse",
+      ipHash: hashSourceIp("127.0.0.1", "test-secret"),
+    });
+    expect(result.rawToken).toBe("raw-session-token");
+    expect(result.user).not.toHaveProperty("passwordHash");
+    expect(
+      opened.sqlite.prepare("SELECT token_hash FROM sessions").get(),
+    ).toEqual({ token_hash: hashSessionToken("raw-session-token") });
+    opened.close();
+  });
+
+  it("uses a uniform error for unknown, disabled, and sentinel users", async () => {
+    const opened = openAppDatabase(":memory:");
+    const repository = new AuthRepository(opened.db);
+    const service = new AuthService(repository);
+    const ipHash = hashSourceIp("127.0.0.1", "test-secret");
+    await expect(
+      service.login({ username: "missing.user", password: "wrong", ipHash }),
+    ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    await expect(
+      service.login({ username: "local-admin", password: "wrong", ipHash }),
+    ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    opened.close();
+  });
+
+  it("rejects a third teacher but permits another administrator", async () => {
+    const opened = openAppDatabase(":memory:");
+    const repository = new AuthRepository(opened.db);
+    const service = new AuthService(repository);
+    await service.createInvitedUser({ username: "teacher.one", password: "one", role: "teacher" });
+    await service.createInvitedUser({ username: "teacher.two", password: "two", role: "teacher" });
+    await expect(
+      service.createInvitedUser({ username: "teacher.three", password: "three", role: "teacher" }),
+    ).rejects.toMatchObject({ code: "USER_LIMIT_REACHED" });
+    await expect(
+      service.createInvitedUser({ username: "admin.two", password: "admin password", role: "admin" }),
+    ).resolves.toMatchObject({ role: "admin" });
+    opened.close();
+  });
+});
+
+describe("local accounts CLI", () => {
+  it("rejects password flags without echoing their value", () => {
+    expect(() => parseArgs(["create", "--username", "teacher.cli", "--password=secret"]))
+      .toThrow("--password is not accepted");
+  });
+});
+
+describe("AuthRepository user accessors", () => {
+  it("finds users by stable id and lists safe records", async () => {
+    const opened = openAppDatabase(":memory:");
+    const repository = new AuthRepository(opened.db, { randomUUID: () => "accessor-user" });
+    const created = repository.createUser({
+      username: "accessor.user",
+      passwordHash: await hashPassword("password"),
+      role: "teacher",
+    });
+    expect(repository.findUserById(created.id)).toMatchObject({ id: created.id, username: created.username });
+    expect(repository.findUserById("missing-user")).toBeNull();
+    expect(repository.listUsers().map((user) => user.id)).toContain(created.id);
+    opened.close();
   });
 });
