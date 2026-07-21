@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, desc, eq, gt, gte, isNull } from "drizzle-orm";
+import { and, desc, eq, gt, gte, isNull, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
 import { loginAttempts, securityEvents, sessions, users } from "../db/schema";
@@ -255,6 +255,12 @@ function snapshotSafeMetadata(
       }
       const descriptors = Object.getOwnPropertyDescriptors(value);
       const snapshot: unknown[] = [];
+      Object.defineProperty(snapshot, "toJSON", {
+        configurable: false,
+        enumerable: false,
+        value: null,
+        writable: false,
+      });
       for (let index = 0; index < length; index += 1) {
         const descriptor = descriptors[String(index)];
         if (!descriptor) {
@@ -286,7 +292,7 @@ function snapshotSafeMetadata(
       throw new InvalidSecurityMetadataError();
     }
     const descriptors = Object.getOwnPropertyDescriptors(value);
-    const snapshot: Record<string, unknown> = {};
+    const snapshot = Object.create(null) as Record<string, unknown>;
     for (const key of Reflect.ownKeys(descriptors)) {
       if (typeof key !== "string") throw new InvalidSecurityMetadataError();
       const descriptor = descriptors[key];
@@ -796,6 +802,7 @@ export class AuthRepository {
     const metadata = snapshotSafeMetadata(
       inputMetadata as Record<string, unknown>,
     );
+    const metadataJson = JSON.stringify(metadata);
     const createdAt = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       const result = this.database
@@ -803,7 +810,7 @@ export class AuthRepository {
         .values({
           userId,
           eventType,
-          metadata,
+          metadata: sql`${metadataJson}`,
           createdAt,
         })
         .run();

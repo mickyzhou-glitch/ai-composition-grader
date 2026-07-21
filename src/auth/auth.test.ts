@@ -739,6 +739,56 @@ describe("AuthRepository", () => {
     );
   });
 
+  it.each([
+    ["root object", { reason: "safe" }, { reason: "safe" }],
+    [
+      "nested object",
+      { context: { reason: "safe" } },
+      { context: { reason: "safe" } },
+    ],
+    ["nested array", { items: [] }, { items: [] }],
+  ] as const)(
+    "isolates %s metadata snapshots from prototype toJSON pollution",
+    (_name, target, expected) => {
+      const originalToJson = Object.getOwnPropertyDescriptor(
+        Object.prototype,
+        "toJSON",
+      );
+      const metadata = new Proxy(target, {
+        ownKeys: (proxyTarget) => {
+          Object.defineProperty(Object.prototype, "toJSON", {
+            configurable: true,
+            value: () => ({ password: "prototype-injected" }),
+          });
+          return Reflect.ownKeys(proxyTarget);
+        },
+      });
+      let rawMetadata = "";
+
+      try {
+        repository.recordSecurityEvent({
+          userId: null,
+          eventType: "prototype_pollution_blocked",
+          metadata: metadata as Record<string, unknown>,
+        });
+        rawMetadata = (
+          opened.sqlite.prepare("SELECT metadata FROM security_events").get() as {
+            metadata: string;
+          }
+        ).metadata;
+      } finally {
+        if (originalToJson) {
+          Object.defineProperty(Object.prototype, "toJSON", originalToJson);
+        } else {
+          delete (Object.prototype as { toJSON?: unknown }).toJSON;
+        }
+      }
+
+      expect(rawMetadata).not.toMatch(/password|prototype-injected/i);
+      expect(JSON.parse(rawMetadata)).toEqual(expected);
+    },
+  );
+
   it.each(["userId", "eventType", "metadata"] as const)(
     "rejects accessor-backed security event %s input",
     (accessorField) => {
