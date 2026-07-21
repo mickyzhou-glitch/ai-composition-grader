@@ -25,6 +25,10 @@ export const reviews = sqliteTable("reviews", {
   report: text("report", { mode: "json" }).$type<EvaluationReport>(),
   revision: integer("revision").notNull().default(0),
   analysisRunId: text("analysis_run_id"),
+  pdfFilename: text("pdf_filename"),
+  pdfPath: text("pdf_path"),
+  pdfRevision: integer("pdf_revision"),
+  exportedAt: integer("exported_at", { mode: "timestamp_ms" }),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
 });

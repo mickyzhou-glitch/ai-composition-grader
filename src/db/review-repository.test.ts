@@ -176,7 +176,7 @@ describe("ReviewRepository", () => {
     expect(updated?.report).toBeNull();
     expect(updated?.annotations).toEqual([]);
     expect(updated?.status).toBe("draft");
-    expect(updated?.revision).toBe(1);
+    expect(updated?.revision).toBe(3);
     expect(updated?.config.title).toBe("我为自己喝彩");
     expect(updated?.updatedAt.getTime()).toBeGreaterThan(
       updated?.createdAt.getTime() ?? Number.POSITIVE_INFINITY,
@@ -296,7 +296,11 @@ describe("ReviewRepository", () => {
     repository.replaceAnnotations("review-1", [annotation]);
     repository.updateStatus("review-1", "ready_for_review");
 
-    const updated = repository.replaceImages("review-1", 0, []);
+    const updated = repository.replaceImages(
+      "review-1",
+      repository.getById("review-1")!.revision,
+      [],
+    );
 
     expect(updated).toMatchObject({ status: "draft", report: null, annotations: [] });
   });
@@ -316,7 +320,11 @@ describe("ReviewRepository", () => {
       annotations: [annotation],
     });
 
-    const secondRun = repository.beginAnalysis("review-1", "run-2", 0);
+    const secondRun = repository.beginAnalysis(
+      "review-1",
+      "run-2",
+      ready.revision,
+    );
     const unreadable = repository.saveAnalysis("review-1", secondRun, {
       readable: false,
       pageWarnings: ["图片模糊"],
@@ -326,6 +334,113 @@ describe("ReviewRepository", () => {
       status: "needs_better_images",
       report: null,
       annotations: [],
+    });
+  });
+
+  it("导出 PDF 原子绑定内容 revision 并将状态置为 exported", () => {
+    repository.create({ id: "review-1", config });
+    const ready = repository.updateReport("review-1", report);
+
+    const exported = repository.markExported("review-1", ready.revision, {
+      pdfFilename: "作文批改-为自己喝彩-20260721-1405.pdf",
+      pdfPath: "pdf/作文批改-为自己喝彩-20260721-1405.pdf",
+      exportedAt: new Date("2026-07-21T06:05:00.000Z"),
+    });
+
+    expect(exported).toMatchObject({
+      status: "exported",
+      revision: ready.revision + 1,
+      pdfRevision: ready.revision + 1,
+      pdfFilename: "作文批改-为自己喝彩-20260721-1405.pdf",
+      pdfPath: "pdf/作文批改-为自己喝彩-20260721-1405.pdf",
+      exportedAt: new Date("2026-07-21T06:05:00.000Z"),
+    });
+  });
+
+  it("报告或批注改动会递增 revision、清理 PDF 元数据并回到待复核", () => {
+    repository.create({ id: "review-1", config });
+    const ready = repository.updateReport("review-1", report);
+    const exported = repository.markExported("review-1", ready.revision, {
+      pdfFilename: "old.pdf",
+      pdfPath: "pdf/old.pdf",
+      exportedAt: new Date("2026-07-21T06:05:00.000Z"),
+    });
+
+    const annotationChanged = repository.replaceAnnotations("review-1", [annotation]);
+    expect(annotationChanged).toEqual([annotation]);
+    const afterAnnotations = repository.getById("review-1");
+    expect(afterAnnotations).toMatchObject({
+      status: "ready_for_review",
+      revision: exported.revision + 1,
+      pdfFilename: null,
+      pdfPath: null,
+      pdfRevision: null,
+      exportedAt: null,
+    });
+
+    const reExported = repository.markExported("review-1", afterAnnotations!.revision, {
+      pdfFilename: "second.pdf",
+      pdfPath: "pdf/second.pdf",
+      exportedAt: new Date("2026-07-21T06:06:00.000Z"),
+    });
+    const reportChanged = repository.updateReport("review-1", {
+      ...report,
+      personalizedComment: "新总评",
+    });
+    expect(reportChanged).toMatchObject({
+      status: "ready_for_review",
+      revision: reExported.revision + 1,
+      pdfFilename: null,
+      pdfPath: null,
+      pdfRevision: null,
+      exportedAt: null,
+    });
+  });
+
+  it("配置或图片改动清理 PDF 元数据并回到 draft", () => {
+    repository.create({ id: "review-1", config });
+    const ready = repository.updateReport("review-1", report);
+    const exported = repository.markExported("review-1", ready.revision, {
+      pdfFilename: "old.pdf",
+      pdfPath: "pdf/old.pdf",
+      exportedAt: new Date("2026-07-21T06:05:00.000Z"),
+    });
+
+    const configChanged = repository.updateConfig("review-1", {
+      ...config,
+      title: "新题目",
+    });
+    expect(configChanged).toMatchObject({
+      status: "draft",
+      revision: exported.revision + 1,
+      pdfFilename: null,
+      pdfPath: null,
+      pdfRevision: null,
+      exportedAt: null,
+    });
+
+    repository.updateReport("review-1", report);
+    const secondExport = repository.markExported(
+      "review-1",
+      repository.getById("review-1")!.revision,
+      {
+        pdfFilename: "second.pdf",
+        pdfPath: "pdf/second.pdf",
+        exportedAt: new Date("2026-07-21T06:06:00.000Z"),
+      },
+    );
+    const imagesChanged = repository.replaceImages(
+      "review-1",
+      secondExport.revision,
+      [],
+    );
+    expect(imagesChanged).toMatchObject({
+      status: "draft",
+      revision: secondExport.revision + 1,
+      pdfFilename: null,
+      pdfPath: null,
+      pdfRevision: null,
+      exportedAt: null,
     });
   });
 

@@ -42,6 +42,10 @@ export interface ReviewRecord {
   report: EvaluationReport | null;
   revision: number;
   analysisRunId: string | null;
+  pdfFilename: string | null;
+  pdfPath: string | null;
+  pdfRevision: number | null;
+  exportedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   images: ReviewImage[];
@@ -65,6 +69,12 @@ export interface TeacherReviewEdits {
 export interface AnalysisToken {
   revision: number;
   runId: string;
+}
+
+export interface ExportedPdfInput {
+  pdfFilename: string;
+  pdfPath: string;
+  exportedAt: Date;
 }
 
 interface ReviewRepositoryOptions {
@@ -130,6 +140,19 @@ function validateImage(image: ReviewImageInput): ReviewImageInput {
   return { ...image };
 }
 
+function validatePdfMetadata(input: ExportedPdfInput): ExportedPdfInput {
+  if (!/^[^/\\\0]+\.pdf$/i.test(input.pdfFilename)) {
+    throw new TypeError("pdfFilename must be a safe PDF filename");
+  }
+  if (input.pdfPath !== `pdf/${input.pdfFilename}`) {
+    throw new TypeError("pdfPath must reference pdfFilename in the PDF directory");
+  }
+  if (Number.isNaN(input.exportedAt.valueOf())) {
+    throw new TypeError("exportedAt must be a valid date");
+  }
+  return { ...input };
+}
+
 export class ReviewRepository {
   private readonly now: () => Date;
 
@@ -154,6 +177,10 @@ export class ReviewRepository {
         report: null,
         revision: 0,
         analysisRunId: null,
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
         createdAt: now,
         updatedAt: now,
       }).run();
@@ -186,6 +213,10 @@ export class ReviewRepository {
         status: reviews.status,
         revision: reviews.revision,
         analysisRunId: reviews.analysisRunId,
+        pdfFilename: reviews.pdfFilename,
+        pdfPath: reviews.pdfPath,
+        pdfRevision: reviews.pdfRevision,
+        exportedAt: reviews.exportedAt,
         createdAt: reviews.createdAt,
         updatedAt: reviews.updatedAt,
       })
@@ -329,7 +360,16 @@ export class ReviewRepository {
     });
     this.database
       .update(reviews)
-      .set({ report, updatedAt: this.now() })
+      .set({
+        report,
+        status: "ready_for_review",
+        updatedAt: this.now(),
+        revision: sql`${reviews.revision} + 1`,
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
+      })
       .where(eq(reviews.id, id))
       .run();
     return this.requireById(id);
@@ -366,6 +406,10 @@ export class ReviewRepository {
           updatedAt,
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
+          pdfFilename: null,
+          pdfPath: null,
+          pdfRevision: null,
+          exportedAt: null,
         })
         .where(eq(reviews.id, id))
         .run();
@@ -392,10 +436,12 @@ export class ReviewRepository {
           ? []
           : current.annotations;
     const status =
-      input.report !== undefined
-        ? "ready_for_review"
-        : input.config !== undefined
+      input.config !== undefined
           ? "draft"
+        : input.report !== undefined || input.annotations !== undefined
+          ? report === null
+            ? "draft"
+            : "ready_for_review"
           : current.status === "analyzing"
             ? report === null
               ? "draft"
@@ -413,6 +459,10 @@ export class ReviewRepository {
           updatedAt: now,
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
+          pdfFilename: null,
+          pdfPath: null,
+          pdfRevision: null,
+          exportedAt: null,
         })
         .where(and(eq(reviews.id, id), eq(reviews.revision, input.expectedRevision)))
         .run();
@@ -455,6 +505,10 @@ export class ReviewRepository {
           report: null,
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
+          pdfFilename: null,
+          pdfPath: null,
+          pdfRevision: null,
+          exportedAt: null,
         })
         .where(and(eq(reviews.id, id), eq(reviews.revision, expectedRevision)))
         .run();
@@ -495,6 +549,10 @@ export class ReviewRepository {
         status: "analyzing",
         analysisRunId: runId,
         updatedAt: this.now(),
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
       })
       .where(
         and(
@@ -529,7 +587,17 @@ export class ReviewRepository {
     this.database.transaction((transaction) => {
       const update = transaction
         .update(reviews)
-        .set({ report, status, updatedAt: now, analysisRunId: null })
+        .set({
+          report,
+          status,
+          updatedAt: now,
+          analysisRunId: null,
+          revision: sql`${reviews.revision} + 1`,
+          pdfFilename: null,
+          pdfPath: null,
+          pdfRevision: null,
+          exportedAt: null,
+        })
         .where(
           and(
             eq(reviews.id, id),
@@ -570,7 +638,7 @@ export class ReviewRepository {
   }
 
   replaceAnnotations(id: string, input: Annotation[]): Annotation[] {
-    this.requireById(id);
+    const current = this.requireById(id);
     const parsed = input.map((annotation) => annotationSchema.parse(annotation));
     const now = this.now();
     this.database.transaction((transaction) => {
@@ -586,11 +654,46 @@ export class ReviewRepository {
       }
       transaction
         .update(reviews)
-        .set({ updatedAt: now })
+        .set({
+          status: current.report === null ? "draft" : "ready_for_review",
+          updatedAt: now,
+          revision: sql`${reviews.revision} + 1`,
+          pdfFilename: null,
+          pdfPath: null,
+          pdfRevision: null,
+          exportedAt: null,
+        })
         .where(eq(reviews.id, id))
         .run();
     });
     return this.requireById(id).annotations;
+  }
+
+  markExported(
+    id: string,
+    expectedRevision: number,
+    input: ExportedPdfInput,
+  ): ReviewRecord {
+    const pdf = validatePdfMetadata(input);
+    const nextRevision = expectedRevision + 1;
+    const result = this.database
+      .update(reviews)
+      .set({
+        status: "exported",
+        revision: nextRevision,
+        pdfFilename: pdf.pdfFilename,
+        pdfPath: pdf.pdfPath,
+        pdfRevision: nextRevision,
+        exportedAt: pdf.exportedAt,
+        updatedAt: pdf.exportedAt,
+      })
+      .where(and(eq(reviews.id, id), eq(reviews.revision, expectedRevision)))
+      .run();
+    if (result.changes === 0) {
+      if (!this.getById(id)) throw new ReviewNotFoundError(id);
+      throw new RevisionConflictError(id);
+    }
+    return this.requireById(id);
   }
 
   delete(id: string): boolean {

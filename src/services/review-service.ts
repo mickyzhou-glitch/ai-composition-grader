@@ -135,8 +135,12 @@ export class ReviewService {
   }
 
   update(id: string, input: TeacherReviewEdits): ReviewRecord {
-    this.get(id);
-    return this.repository.updateTeacherEdits(id, input);
+    const current = this.get(id);
+    const updated = this.repository.updateTeacherEdits(id, input);
+    if (current.pdfFilename) {
+      void this.fileStore.queuePdfCleanup(id, [current.pdfFilename]);
+    }
+    return updated;
   }
 
   async delete(id: string): Promise<void> {
@@ -182,6 +186,9 @@ export class ReviewService {
       this.createRunId(),
       review.revision,
     );
+    if (review.pdfFilename) {
+      void this.fileStore.queuePdfCleanup(id, [review.pdfFilename]);
+    }
     try {
       const imageDataUrls = await Promise.all(
         review.images.map(async (image) => {

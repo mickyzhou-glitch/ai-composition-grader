@@ -8,6 +8,7 @@ import {
   evaluationReportSchema,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
+import type { PdfService } from "../pdf/pdf-service";
 import {
   normalizeBaseUrl,
   type SaveSettingsInput,
@@ -68,7 +69,13 @@ function reviewDto(review: {
   updatedAt: unknown;
   annotations: unknown;
   images: Array<Parameters<typeof reviewImageDto>[0]>;
+  pdfFilename?: string | null;
+  pdfRevision?: number | null;
 }) {
+  const hasPdf =
+    typeof review.pdfFilename === "string" &&
+    review.pdfFilename.length > 0 &&
+    review.pdfRevision === review.revision;
   return {
     id: review.id,
     status: review.status,
@@ -79,6 +86,8 @@ function reviewDto(review: {
     updatedAt: review.updatedAt,
     annotations: review.annotations,
     images: review.images.map(reviewImageDto),
+    hasPdf,
+    pdfFilename: hasPdf ? review.pdfFilename : null,
   };
 }
 
@@ -453,6 +462,40 @@ export function createReviewFilesRouteHandlers(dependencies: {
           headers: {
             "content-type": file.contentType,
             "cache-control": "private, max-age=3600",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+function rfc5987Filename(filename: string): string {
+  return encodeURIComponent(filename).replace(/[!'()*]/g, (character) =>
+    `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+}
+
+export function createReviewPdfRouteHandlers(dependencies: {
+  pdfService: Pick<PdfService, "getOrCreate">;
+}) {
+  return {
+    async GET(request: Request, context: RouteContext) {
+      try {
+        const result = await dependencies.pdfService.getOrCreate(
+          (await context.params).id,
+          new URL(request.url).origin,
+        );
+        return new Response(Uint8Array.from(result.data).buffer, {
+          status: 200,
+          headers: {
+            "content-type": "application/pdf",
+            "content-disposition":
+              `attachment; filename="composition-review.pdf"; ` +
+              `filename*=UTF-8''${rfc5987Filename(result.filename)}`,
+            "cache-control": "private, no-store",
             "x-content-type-options": "nosniff",
           },
         });

@@ -33,6 +33,7 @@ export interface StagedReviewDelete {
 
 interface CleanupQueueEntry {
   reviewId: string;
+  kind: ReviewStorageKind;
   filename: string;
 }
 
@@ -285,18 +286,38 @@ export class ReviewFileStore {
     reviewId: string,
     filenames: string[],
   ): Promise<void> {
+    await this.queueFileCleanup(reviewId, "images", filenames);
+  }
+
+  async queuePdfCleanup(
+    reviewId: string,
+    filenames: string[],
+  ): Promise<void> {
+    await this.queueFileCleanup(reviewId, "pdf", filenames);
+  }
+
+  private async queueFileCleanup(
+    reviewId: string,
+    kind: ReviewStorageKind,
+    filenames: string[],
+  ): Promise<void> {
     assertSafeSegment(reviewId);
     filenames.forEach(assertSafeSegment);
     try {
       await this.enqueueCleanup(async () => {
         const existing = await this.readCleanupQueue();
         const unique = new Map(
-          [...existing, ...filenames.map((filename) => ({ reviewId, filename }))]
-            .map((entry) => [`${entry.reviewId}\0${entry.filename}`, entry]),
+          [
+            ...existing,
+            ...filenames.map((filename) => ({ reviewId, kind, filename })),
+          ].map((entry) => [
+            `${entry.reviewId}\0${entry.kind}\0${entry.filename}`,
+            entry,
+          ]),
         );
         const queued = [...unique.values()];
         await this.writeCleanupQueue(queued);
-        await this.retryImageCleanupExclusive(reviewId, queued);
+        await this.retryFileCleanupExclusive(reviewId, queued);
       });
     } catch {
       // Old versions are unreferenced after the DB switch; cleanup is best-effort.
@@ -307,7 +328,7 @@ export class ReviewFileStore {
     assertSafeSegment(reviewId);
     try {
       await this.enqueueCleanup(async () => {
-        await this.retryImageCleanupExclusive(
+        await this.retryFileCleanupExclusive(
           reviewId,
           await this.readCleanupQueue(),
         );
@@ -396,7 +417,7 @@ export class ReviewFileStore {
     return result;
   }
 
-  private async retryImageCleanupExclusive(
+  private async retryFileCleanupExclusive(
     reviewId: string,
     queued: CleanupQueueEntry[],
   ): Promise<void> {
@@ -407,7 +428,7 @@ export class ReviewFileStore {
         continue;
       }
       try {
-        await this.deleteFile(entry.reviewId, "images", entry.filename);
+        await this.deleteFile(entry.reviewId, entry.kind, entry.filename);
       } catch {
         remaining.push(entry);
       }
@@ -444,7 +465,11 @@ export class ReviewFileStore {
       }
       assertSafeSegment(entry.reviewId);
       assertSafeSegment(entry.filename);
-      return { reviewId: entry.reviewId, filename: entry.filename };
+      const kind =
+        "kind" in entry && (entry.kind === "images" || entry.kind === "pdf")
+          ? entry.kind
+          : "images";
+      return { reviewId: entry.reviewId, kind, filename: entry.filename };
     });
   }
 

@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS reviews (
   report TEXT,
   revision INTEGER NOT NULL DEFAULT 0,
   analysis_run_id TEXT,
+  pdf_filename TEXT,
+  pdf_path TEXT,
+  pdf_revision INTEGER,
+  exported_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -88,6 +92,17 @@ function migrateReviewAnalysisState(database: Database.Database): void {
   }
   if (!columns.has("analysis_run_id")) {
     database.exec("ALTER TABLE reviews ADD COLUMN analysis_run_id TEXT");
+  }
+  const pdfColumns: Array<[string, string]> = [
+    ["pdf_filename", "TEXT"],
+    ["pdf_path", "TEXT"],
+    ["pdf_revision", "INTEGER"],
+    ["exported_at", "INTEGER"],
+  ];
+  for (const [name, definition] of pdfColumns) {
+    if (!columns.has(name)) {
+      database.exec(`ALTER TABLE reviews ADD COLUMN ${name} ${definition}`);
+    }
   }
 }
 

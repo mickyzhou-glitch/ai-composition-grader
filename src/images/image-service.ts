@@ -33,7 +33,11 @@ export interface UploadedImage {
 }
 
 export interface ImageRepository {
-  getById(id: string): { images: ReviewImage[]; revision: number } | null;
+  getById(id: string): {
+    images: ReviewImage[];
+    revision: number;
+    pdfFilename?: string | null;
+  } | null;
   replaceImages(
     reviewId: string,
     expectedRevision: number,
@@ -303,7 +307,13 @@ export class ImageService {
         ],
       });
     }
-    return this.commitVersions(reviewId, expectedRevision, prepared, review.images);
+    return this.commitVersions(
+      reviewId,
+      expectedRevision,
+      prepared,
+      review.images,
+      review.pdfFilename,
+    );
   }
 
   async update(reviewId: string, input: UpdateImagesInput) {
@@ -400,6 +410,7 @@ export class ImageService {
       parsed.expectedRevision,
       prepared,
       review.images,
+      review.pdfFilename,
     );
   }
 
@@ -408,6 +419,7 @@ export class ImageService {
     expectedRevision: number,
     prepared: PreparedImageVersion[],
     previous: ReviewImage[],
+    previousPdfFilename?: string | null,
   ) {
     const written: string[] = [];
     let saved: { images: ReviewImage[]; revision: number };
@@ -437,6 +449,9 @@ export class ImageService {
       throw error;
     }
     await this.queueStoredImageCleanup(reviewId, previous);
+    if (previousPdfFilename) {
+      await this.fileStore.queuePdfCleanup(reviewId, [previousPdfFilename]);
+    }
     return saved;
   }
 

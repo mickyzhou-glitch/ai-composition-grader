@@ -17,10 +17,17 @@ import {
 class MemoryImageRepository implements ImageRepository {
   images: ReviewImage[] = [];
   revision = 0;
+  pdfFilename: string | null = null;
   replaceError: Error | null = null;
 
   getById(id: string) {
-    return id === "review-1" ? { images: this.images, revision: this.revision } : null;
+    return id === "review-1"
+      ? {
+          images: this.images,
+          revision: this.revision,
+          pdfFilename: this.pdfFilename,
+        }
+      : null;
   }
 
   replaceImages(reviewId: string, expectedRevision: number, images: ReviewImageInput[]) {
@@ -263,7 +270,11 @@ describe("ImageService", () => {
     ) as Array<{ reviewId: string; filename: string }>;
     expect(queued).toEqual(
       expect.arrayContaining(
-        oldFilenames.map((filename) => ({ reviewId: "review-1", filename })),
+        oldFilenames.map((filename) => ({
+          reviewId: "review-1",
+          kind: "images",
+          filename,
+        })),
       ),
     );
 
@@ -415,6 +426,17 @@ describe("ImageService", () => {
         images: [{ id: 999, rotation: 90 }],
       }),
     ).rejects.toMatchObject({ code: "REVISION_CONFLICT", status: 409 });
+  });
+
+  it("更换图片成功后将旧 PDF 加入清理队列", async () => {
+    repository.pdfFilename = "old.pdf";
+    const cleanup = vi.spyOn(store, "queuePdfCleanup");
+
+    await service.upload("review-1", repository.revision, [
+      { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
+    ]);
+
+    expect(cleanup).toHaveBeenCalledWith("review-1", ["old.pdf"]);
   });
 
   it("PATCH 仅调整顺序时保留已有旋转和裁剪", async () => {

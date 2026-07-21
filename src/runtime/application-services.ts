@@ -1,4 +1,5 @@
 import { OpenAIReviewAdapter } from "../ai/openai-review-adapter";
+import { PdfService } from "../pdf/pdf-service";
 import { openAppDatabase } from "../db/client";
 import { ReviewRepository } from "../db/review-repository";
 import { ImageService } from "../images/image-service";
@@ -13,6 +14,7 @@ export interface ApplicationServices {
   settingsService: SettingsService;
   reviewService: ReviewService;
   imageService: ImageService;
+  pdfService: PdfService;
 }
 
 function createApplicationServices(): ApplicationServices {
@@ -28,6 +30,9 @@ function createApplicationServices(): ApplicationServices {
   return {
     settingsService,
     imageService: new ImageService(fileStore, reviewRepository, {
+      lock: reviewLock,
+    }),
+    pdfService: new PdfService(reviewRepository, fileStore, undefined, {
       lock: reviewLock,
     }),
     reviewService: new ReviewService(reviewRepository, fileStore, aiReviewer, {

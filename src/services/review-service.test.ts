@@ -212,6 +212,29 @@ describe("ReviewService analysis CAS", () => {
     });
   });
 
+  it("教师修改内容时将旧 PDF 加入 best-effort 清理队列", async () => {
+    const service = serviceFor(async () => readyEnvelope);
+    const ready = repository.updateReport("review-1", readyEnvelope.report);
+    const exported = repository.markExported("review-1", ready.revision, {
+      pdfFilename: "old.pdf",
+      pdfPath: "pdf/old.pdf",
+      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+    });
+    const cleanup = vi.spyOn(fileStore, "queuePdfCleanup");
+
+    const saved = service.update("review-1", {
+      expectedRevision: exported.revision,
+      report: { ...readyEnvelope.report, personalizedComment: "教师新总评" },
+    });
+
+    expect(saved).toMatchObject({
+      status: "ready_for_review",
+      pdfFilename: null,
+    });
+    expect(cleanup).toHaveBeenCalledWith("review-1", ["old.pdf"]);
+    await cleanup.mock.results[0]?.value;
+  });
+
   it("DELETE 的数据库步骤失败时恢复已暂存的 review 目录", async () => {
     const service = serviceFor(async () => readyEnvelope);
     vi.spyOn(repository, "delete").mockImplementation(() => {

@@ -108,6 +108,24 @@ describe("ReviewFileStore", () => {
     );
   });
 
+  it("将过期 PDF 加入 best-effort 清理队列且不触及图片", async () => {
+    await store.writeFile("review-1", "pdf", "old.pdf", "old-pdf");
+    await store.writeFile("review-1", "pdf", "keep.pdf", "keep-pdf");
+    await store.writeFile("review-1", "images", "old.pdf", "image");
+
+    await store.queuePdfCleanup("review-1", ["old.pdf"]);
+
+    await expect(store.readFile("review-1", "pdf", "old.pdf")).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(store.readFile("review-1", "pdf", "keep.pdf")).resolves.toEqual(
+      Buffer.from("keep-pdf"),
+    );
+    await expect(store.readFile("review-1", "images", "old.pdf")).resolves.toEqual(
+      Buffer.from("image"),
+    );
+  });
+
   it("stageDelete 可回滚或提交同根目录的暂存删除", async () => {
     await store.writeFile("review-1", "images", "page.jpg", "page");
     const staged = await store.stageDelete("review-1");
