@@ -2,7 +2,7 @@ import { z, ZodError } from "zod";
 import { NextResponse } from "next/server";
 
 import { AuthServiceError } from "../../../../src/auth/auth-service";
-import { assertTrustedWriteOrigin, sessionCookieOptions, requireApiUser } from "../../../../src/auth/request-auth";
+import { assertTrustedWriteOrigin, sessionCookieOptions, requireApiUser, AuthRequestError } from "../../../../src/auth/request-auth";
 import { getApplicationServices } from "../../../../src/runtime/application-services";
 
 export const runtime = "nodejs";
@@ -25,6 +25,9 @@ export async function POST(request: Request) {
     response.cookies.set(options.name, result.rawToken, options);
     return response;
   } catch (error) {
+    if (error instanceof AuthRequestError) {
+      return Response.json({ ok: false, error: { code: error.code, message: error.code === "UNAUTHENTICATED" ? "需要登录" : error.code === "UNTRUSTED_ORIGIN" ? "请求来源不受信任" : "无权执行此操作" } }, { status: error.status });
+    }
     if (error instanceof ZodError) return Response.json({ ok: false, error: { code: "VALIDATION_ERROR", message: "请求参数无效", details: error.flatten() } }, { status: 400 });
     if (error instanceof AuthServiceError) {
       const status = error.code === "INVALID_CREDENTIALS" ? 401 : 400;

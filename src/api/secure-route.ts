@@ -11,6 +11,8 @@ const SAFE_MESSAGES: Record<string, string> = {
   INVALID_FILE_PATH: "请求参数无效",
   REVISION_CONFLICT: "数据已被更新，请刷新后重试",
   ANALYSIS_CONFLICT: "分析任务正在进行，请稍后重试",
+  CONFLICT: "数据已被更新，请刷新后重试",
+  PAYLOAD_TOO_LARGE: "请求内容过大",
   IMAGES_REQUIRED: "请先上传作文图片",
   IMAGE_COUNT_INVALID: "图片数量无效",
   IMAGE_TOO_LARGE: "图片文件过大",

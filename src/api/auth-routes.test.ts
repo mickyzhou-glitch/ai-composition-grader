@@ -16,6 +16,7 @@ vi.mock("../runtime/application-services", () => ({
 import { POST as login } from "../../app/api/auth/login/route";
 import { POST as logout } from "../../app/api/auth/logout/route";
 import { GET as me } from "../../app/api/auth/me/route";
+import { POST as changePassword } from "../../app/api/auth/change-password/route";
 import { requireApiUser } from "../auth/request-auth";
 
 function jsonRequest(url: string, method: string, body?: unknown, headers: Record<string, string> = {}) {
@@ -84,6 +85,16 @@ describe("authentication route handlers", () => {
   it("returns 401 for me without a trusted session cookie", async () => {
     const response = await me(new Request("http://127.0.0.1:3001/api/auth/me"));
     expect(response.status).toBe(401);
+  });
+
+  it("returns 401 rather than 503 for password change without a session", async () => {
+    const response = await changePassword(jsonRequest("http://127.0.0.1:3001/api/auth/change-password", "POST", {
+      currentPassword: "old-password",
+      newPassword: "new-password",
+    }, { origin: "http://127.0.0.1:3001" }));
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "UNAUTHENTICATED" } });
+    expect(authService.changePassword).not.toHaveBeenCalled();
   });
 
   it("rejects malformed cookie encoding without authenticating it", async () => {
