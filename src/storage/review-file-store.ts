@@ -31,6 +31,11 @@ export interface ReviewStoragePaths {
   pdfDirectory: string;
 }
 
+export interface ReviewFileStoreOptions {
+  lockWaitMs?: number;
+  lockRetryMs?: number;
+}
+
 export interface StagedReviewDelete {
   commit(): Promise<void>;
   rollback(): Promise<void>;
@@ -197,16 +202,64 @@ async function reclaimStaleReviewLock(
   }
   if (Date.now() - info.mtimeMs <= REVIEW_LOCK_STALE_MS) return false;
 
-  // Revalidate the real path immediately before unlinking. The lock file has
-  // no user-controlled content and only stale regular files inside our locked
-  // directory are eligible for recovery.
+  // A stale timestamp alone is not authority to steal a lock: a suspended or
+  // busy process could still own it. Only an explicitly dead owner PID may be
+  // reclaimed; live, protected, or malformed owners remain safely busy.
   await assertSafeFile(parent, lockPath);
+  const owner = parseReviewLockOwner(await readFile(lockPath, "utf8"));
+  if (!owner || !isDefinitelyDeadProcess(owner.pid)) return false;
   try {
     await rm(lockPath, { force: false });
     return true;
   } catch (error) {
     if (isMissing(error)) return true;
     throw error;
+  }
+}
+
+interface ReviewLockOwner {
+  pid: number;
+  nonce: string;
+}
+
+function parseReviewLockOwner(value: string): ReviewLockOwner | null {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !Object.hasOwn(parsed, "pid") ||
+      !Object.hasOwn(parsed, "nonce")
+    ) {
+      return null;
+    }
+    const { pid, nonce } = parsed as { pid: unknown; nonce: unknown };
+    if (
+      typeof pid !== "number" ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0 ||
+      typeof nonce !== "string" ||
+      nonce.length < 16
+    ) {
+      return null;
+    }
+    return { pid, nonce };
+  } catch {
+    return null;
+  }
+}
+
+function isDefinitelyDeadProcess(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "ESRCH"
+    );
   }
 }
 
@@ -230,13 +283,24 @@ export class ReviewFileStore {
   readonly rootDirectory: string;
   readonly legacyRootDirectory: string;
   private cleanupOperationQueue: Promise<void> = Promise.resolve();
+  private readonly lockWaitMs: number;
+  private readonly lockRetryMs: number;
 
   constructor(
     rootDirectory = DEFAULT_USERS_DIRECTORY,
     legacyRootDirectory = DEFAULT_LEGACY_REVIEWS_DIRECTORY,
+    options: ReviewFileStoreOptions = {},
   ) {
     this.rootDirectory = path.resolve(rootDirectory);
     this.legacyRootDirectory = path.resolve(legacyRootDirectory);
+    this.lockWaitMs = options.lockWaitMs ?? REVIEW_LOCK_WAIT_MS;
+    this.lockRetryMs = options.lockRetryMs ?? REVIEW_LOCK_RETRY_MS;
+    if (!Number.isInteger(this.lockWaitMs) || this.lockWaitMs < 1) {
+      throw new TypeError("lockWaitMs must be a positive integer");
+    }
+    if (!Number.isInteger(this.lockRetryMs) || this.lockRetryMs < 1) {
+      throw new TypeError("lockRetryMs must be a positive integer");
+    }
   }
 
   getReviewPaths(ownerId: string, reviewId: string): ReviewStoragePaths {
@@ -267,7 +331,7 @@ export class ReviewFileStore {
     await ensureRealDirectory(this.rootDirectory, locksDirectory);
     const filename = `${createHash("sha256").update(`${ownerId}\0${reviewId}`).digest("hex")}.lock`;
     const lockPath = resolveInside(locksDirectory, filename);
-    const deadline = Date.now() + REVIEW_LOCK_WAIT_MS;
+    const deadline = Date.now() + this.lockWaitMs;
     let lockFile: Awaited<ReturnType<typeof open>> | null = null;
 
     while (lockFile === null) {
@@ -286,12 +350,13 @@ export class ReviewFileStore {
         await assertSafeFile(locksDirectory, lockPath);
         if (await reclaimStaleReviewLock(locksDirectory, lockPath)) continue;
         if (Date.now() >= deadline) throw new ReviewFileLockBusyError();
-        await new Promise<void>((resolve) => setTimeout(resolve, REVIEW_LOCK_RETRY_MS));
+        await new Promise<void>((resolve) => setTimeout(resolve, this.lockRetryMs));
       }
     }
 
     const ownerNonce = randomUUID();
-    await lockFile.writeFile(ownerNonce, { encoding: "utf8" });
+    const ownerMarker = JSON.stringify({ pid: process.pid, nonce: ownerNonce });
+    await lockFile.writeFile(ownerMarker, { encoding: "utf8" });
     await lockFile.sync();
     const lockIdentity = await lockFile.stat();
     const heartbeat = setInterval(() => {
@@ -307,7 +372,7 @@ export class ReviewFileStore {
         locksDirectory,
         lockPath,
         lockIdentity,
-        ownerNonce,
+        ownerMarker,
       );
     }
   }
@@ -333,7 +398,7 @@ export class ReviewFileStore {
     parent: string,
     lockPath: string,
     identity: { dev: number; ino: number },
-    ownerNonce: string,
+    ownerMarker: string,
   ): Promise<void> {
     try {
       const current = await lstat(lockPath);
@@ -342,7 +407,7 @@ export class ReviewFileStore {
       }
       await assertSafeFile(parent, lockPath);
       const contents = await readFile(lockPath, "utf8");
-      if (contents !== ownerNonce) return;
+      if (contents !== ownerMarker) return;
       await rm(lockPath, { force: false });
     } catch (error) {
       if (!isMissing(error)) throw error;

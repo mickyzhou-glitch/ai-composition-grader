@@ -91,52 +91,49 @@ describe("ReviewFileStore", () => {
     expect(secondEntered).toBe(true);
   });
 
-  it("回收超过五分钟的崩溃残留锁，不会阻塞后续文件操作", async () => {
+  it("仅在锁持有进程已死亡时回收超过五分钟的崩溃残留锁", async () => {
     await store.createReview(OWNER, REVIEW);
     const locksDirectory = path.join(store.rootDirectory, ".review-locks");
     await mkdir(locksDirectory);
     const lockName = `${createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex")}.lock`;
     const staleLock = path.join(locksDirectory, lockName);
-    await writeFile(staleLock, "");
+    await writeFile(staleLock, JSON.stringify({ pid: 19701, nonce: "crashed-owner-nonce" }));
     const staleAt = new Date(Date.now() - 6 * 60 * 1000);
     await utimes(staleLock, staleAt, staleAt);
 
     let called = false;
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 19701) throw Object.assign(new Error("gone"), { code: "ESRCH" });
+      return true;
+    });
     await store.withReviewLock(OWNER, REVIEW, async () => { called = true; });
+    kill.mockRestore();
     expect(called).toBe(true);
     await expect(stat(staleLock)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("旧持有者在 stale 回收后结束时不会删除新持有者的锁", async () => {
+  it("存活进程留下的 stale 锁不会被回收，而是安全返回忙碌", async () => {
     await store.createReview(OWNER, REVIEW);
-    const anotherProcessStore = new ReviewFileStore(store.rootDirectory);
+    const anotherProcessStore = new ReviewFileStore(
+      store.rootDirectory,
+      undefined,
+      { lockWaitMs: 50, lockRetryMs: 5 },
+    );
     const locksDirectory = path.join(store.rootDirectory, ".review-locks");
     const lockName = `${createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex")}.lock`;
     const lockPath = path.join(locksDirectory, lockName);
-    const firstEntered = deferred<void>();
-    const firstRelease = deferred<void>();
-    const secondEntered = deferred<void>();
-    const secondRelease = deferred<void>();
-    const first = store.withReviewLock(OWNER, REVIEW, async () => {
-      firstEntered.resolve();
-      await firstRelease.promise;
-    });
-    await firstEntered.promise;
+    await mkdir(locksDirectory);
+    await writeFile(lockPath, JSON.stringify({ pid: 19702, nonce: "live-owner-nonce---" }));
     const staleAt = new Date(Date.now() - 6 * 60 * 1000);
     await utimes(lockPath, staleAt, staleAt);
-    const second = anotherProcessStore.withReviewLock(OWNER, REVIEW, async () => {
-      secondEntered.resolve();
-      await secondRelease.promise;
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 19702) return true;
+      return true;
     });
-    await secondEntered.promise;
-
-    firstRelease.resolve();
-    await first;
+    await expect(anotherProcessStore.withReviewLock(OWNER, REVIEW, async () => undefined))
+      .rejects.toMatchObject({ code: "REVIEW_LOCK_BUSY" });
+    kill.mockRestore();
     expect((await stat(lockPath)).isFile()).toBe(true);
-
-    secondRelease.resolve();
-    await second;
-    await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("清理队列带 owner 且不触及其他文件", async () => {
