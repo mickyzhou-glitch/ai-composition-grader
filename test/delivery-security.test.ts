@@ -19,8 +19,8 @@ describe("最终交付的本机安全默认值", () => {
     const packageJson = JSON.parse(readWorkspaceFile("package.json")) as { scripts: Record<string, string> };
     const playwrightConfig = readWorkspaceFile("playwright.config.ts");
 
-    expect(packageJson.scripts.dev).toBe("next dev --hostname 127.0.0.1");
-    expect(packageJson.scripts.start).toBe("next start --hostname 127.0.0.1");
+    expect(packageJson.scripts.dev).toBe("next dev --hostname 127.0.0.1 --port 3001");
+    expect(packageJson.scripts.start).toBe("next start --hostname 127.0.0.1 --port 3001");
     expect(playwrightConfig).toContain('command: "npm run dev"');
     expect(`${packageJson.scripts.dev}\n${packageJson.scripts.start}\n${playwrightConfig}`).not.toContain("0.0.0.0");
   });
