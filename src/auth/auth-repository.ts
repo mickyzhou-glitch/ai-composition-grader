@@ -439,6 +439,12 @@ export class AuthRepository {
     const id = this.createId();
     try {
       this.database.transaction((transaction) => {
+        const existing = transaction
+          .select({ id: users.id })
+          .from(users)
+          .where(eq(users.username, username))
+          .get();
+        if (existing) throw new DuplicateUsernameError();
         if (role === "teacher") {
           const teacherCount = transaction
             .select({ id: users.id })
@@ -460,6 +466,7 @@ export class AuthRepository {
       });
     } catch (error) {
       if (error instanceof TeacherLimitReachedError) throw error;
+      if (error instanceof DuplicateUsernameError) throw error;
       if (isSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE")) throw new DuplicateUsernameError();
       throw new AuthStorageError();
     }

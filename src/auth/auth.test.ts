@@ -995,6 +995,9 @@ describe("AuthService", () => {
     await expect(
       service.createInvitedUser({ username: "admin.two", password: "admin password", role: "admin" }),
     ).resolves.toMatchObject({ role: "admin" });
+    await expect(
+      service.createInvitedUser({ username: "teacher.one", password: "new password", role: "teacher" }),
+    ).rejects.toMatchObject({ code: "USER_ALREADY_EXISTS" });
     opened.close();
   });
 
