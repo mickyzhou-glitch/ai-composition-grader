@@ -1,17 +1,25 @@
 import type Database from "better-sqlite3";
 
-export const INITIALIZE_SCHEMA_SQL = `
-PRAGMA foreign_keys = ON;
-
-CREATE TABLE IF NOT EXISTS settings (
-  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
-  base_url TEXT NOT NULL,
-  model TEXT NOT NULL,
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+const CREATE_USERS_SQL = `
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY NOT NULL,
+  username TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'teacher')),
+  must_change_password INTEGER NOT NULL CHECK (must_change_password IN (0, 1)),
+  disabled_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique_idx
+  ON users(username);
+`;
+
+const CREATE_REVIEWS_SQL = `
 CREATE TABLE IF NOT EXISTS reviews (
   id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL DEFAULT 'local-admin' REFERENCES users(id),
   status TEXT NOT NULL CHECK (
     status IN (
       'draft',
@@ -30,9 +38,64 @@ CREATE TABLE IF NOT EXISTS reviews (
   pdf_path TEXT,
   pdf_revision INTEGER,
   exported_at INTEGER,
+  expires_at INTEGER,
+  deleting_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+`;
+
+const CREATE_REMAINING_SCHEMA_SQL = `
+CREATE TABLE IF NOT EXISTS settings (
+  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  base_url TEXT NOT NULL,
+  model TEXT NOT NULL,
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  token_hash TEXT NOT NULL UNIQUE,
+  last_seen_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS sessions_user_id_idx
+  ON sessions(user_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_token_hash_unique_idx
+  ON sessions(token_hash);
+
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  normalized_username TEXT NOT NULL,
+  ip_hash TEXT NOT NULL,
+  succeeded INTEGER NOT NULL CHECK (succeeded IN (0, 1)),
+  attempted_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS login_attempts_username_attempted_at_idx
+  ON login_attempts(normalized_username, attempted_at);
+
+CREATE INDEX IF NOT EXISTS login_attempts_ip_attempted_at_idx
+  ON login_attempts(ip_hash, attempted_at);
+
+CREATE TABLE IF NOT EXISTS security_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  event_type TEXT NOT NULL,
+  metadata TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata)),
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS security_events_user_id_idx
+  ON security_events(user_id);
+
+CREATE INDEX IF NOT EXISTS security_events_created_at_idx
+  ON security_events(created_at);
 
 CREATE TABLE IF NOT EXISTS review_images (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,45 +136,98 @@ CREATE TABLE IF NOT EXISTS annotations (
 
 CREATE INDEX IF NOT EXISTS annotations_review_id_idx
   ON annotations(review_id);
+
+CREATE TABLE IF NOT EXISTS analysis_jobs (
+  id TEXT PRIMARY KEY NOT NULL,
+  review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  status TEXT NOT NULL CHECK (
+    status IN ('queued', 'running', 'succeeded', 'failed', 'canceled')
+  ),
+  attempt INTEGER NOT NULL DEFAULT 0 CHECK (attempt >= 0),
+  available_at INTEGER NOT NULL,
+  lease_expires_at INTEGER,
+  progress_stage TEXT NOT NULL CHECK (
+    progress_stage IN (
+      'queued',
+      'reading_images',
+      'generating_review',
+      'validating_result',
+      'saving_result'
+    )
+  ),
+  error_code TEXT,
+  message TEXT,
+  created_at INTEGER NOT NULL,
+  started_at INTEGER,
+  finished_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS analysis_jobs_claim_idx
+  ON analysis_jobs(status, available_at, created_at);
+
+CREATE INDEX IF NOT EXISTS analysis_jobs_owner_review_idx
+  ON analysis_jobs(owner_id, review_id);
+
+CREATE INDEX IF NOT EXISTS analysis_jobs_review_id_idx
+  ON analysis_jobs(review_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS analysis_jobs_one_active_per_review_idx
+  ON analysis_jobs(review_id)
+  WHERE status IN ('queued', 'running');
 `;
 
-export function initializeSchema(database: Database.Database): void {
-  database.exec(INITIALIZE_SCHEMA_SQL);
-  migrateReviewAnalysisState(database);
-  migrateLegacyReviewImages(database);
-}
+export const INITIALIZE_SCHEMA_SQL = [
+  CREATE_USERS_SQL,
+  CREATE_REVIEWS_SQL,
+  CREATE_REMAINING_SCHEMA_SQL,
+].join("\n");
 
-function migrateReviewAnalysisState(database: Database.Database): void {
-  const columns = new Set(
-    (database.prepare("PRAGMA table_info(reviews)").all() as Array<{ name: string }>).map(
+function tableColumns(database: Database.Database, table: string): Set<string> {
+  return new Set(
+    (database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map(
       ({ name }) => name,
     ),
   );
-  if (!columns.has("revision")) {
-    database.exec("ALTER TABLE reviews ADD COLUMN revision INTEGER NOT NULL DEFAULT 0");
-  }
-  if (!columns.has("analysis_run_id")) {
-    database.exec("ALTER TABLE reviews ADD COLUMN analysis_run_id TEXT");
-  }
-  const pdfColumns: Array<[string, string]> = [
+}
+
+function migrateReviews(database: Database.Database): void {
+  const columns = tableColumns(database, "reviews");
+  const additions: Array<[string, string]> = [
+    [
+      "owner_id",
+      "TEXT NOT NULL DEFAULT 'local-admin' REFERENCES users(id)",
+    ],
+    ["revision", "INTEGER NOT NULL DEFAULT 0"],
+    ["analysis_run_id", "TEXT"],
     ["pdf_filename", "TEXT"],
     ["pdf_path", "TEXT"],
     ["pdf_revision", "INTEGER"],
     ["exported_at", "INTEGER"],
+    ["expires_at", "INTEGER"],
+    ["deleting_at", "INTEGER"],
   ];
-  for (const [name, definition] of pdfColumns) {
+
+  for (const [name, definition] of additions) {
     if (!columns.has(name)) {
       database.exec(`ALTER TABLE reviews ADD COLUMN ${name} ${definition}`);
     }
   }
+
+  database.exec(`
+    UPDATE reviews SET owner_id = 'local-admin' WHERE owner_id IS NULL;
+
+    CREATE INDEX IF NOT EXISTS reviews_owner_created_at_idx
+      ON reviews(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS reviews_owner_deleting_at_idx
+      ON reviews(owner_id, deleting_at);
+    CREATE INDEX IF NOT EXISTS reviews_expires_deleting_at_idx
+      ON reviews(expires_at, deleting_at);
+  `);
 }
 
 function migrateLegacyReviewImages(database: Database.Database): void {
-  const columns = new Set(
-    (database.prepare("PRAGMA table_info(review_images)").all() as Array<{ name: string }>).map(
-      ({ name }) => name,
-    ),
-  );
+  const columns = tableColumns(database, "review_images");
   const additions: Array<[string, string]> = [
     ["position", "INTEGER NOT NULL DEFAULT 0"],
     ["original_name", "TEXT NOT NULL DEFAULT 'legacy-image.jpg'"],
@@ -125,19 +241,64 @@ function migrateLegacyReviewImages(database: Database.Database): void {
     ["crop", "TEXT"],
   ];
 
-  database.transaction(() => {
-    for (const [name, definition] of additions) {
-      if (!columns.has(name)) {
-        database.exec(`ALTER TABLE review_images ADD COLUMN ${name} ${definition}`);
-      }
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) {
+      database.exec(`ALTER TABLE review_images ADD COLUMN ${name} ${definition}`);
     }
-    database.exec(`
-      UPDATE review_images SET
-        position = page_index,
-        original_path = CASE WHEN original_path = '' THEN path ELSE original_path END,
-        annotation_path = CASE WHEN annotation_path = '' THEN path ELSE annotation_path END,
-        ai_path = CASE WHEN ai_path = '' THEN path ELSE ai_path END
-      WHERE original_path = '' OR annotation_path = '' OR ai_path = '';
-    `);
-  })();
+  }
+  database.exec(`
+    UPDATE review_images SET
+      position = page_index,
+      original_path = CASE WHEN original_path = '' THEN path ELSE original_path END,
+      annotation_path = CASE WHEN annotation_path = '' THEN path ELSE annotation_path END,
+      ai_path = CASE WHEN ai_path = '' THEN path ELSE ai_path END
+    WHERE original_path = '' OR annotation_path = '' OR ai_path = '';
+  `);
+}
+
+function assertForeignKeys(database: Database.Database): void {
+  const violations = database.prepare("PRAGMA foreign_key_check").all();
+  if (violations.length > 0) {
+    throw new Error(`Schema migration left ${violations.length} foreign key violation(s)`);
+  }
+}
+
+export function initializeSchema(database: Database.Database): void {
+  if (database.inTransaction) {
+    throw new Error("initializeSchema cannot run inside an existing transaction");
+  }
+
+  database.pragma("foreign_keys = OFF");
+  try {
+    database.transaction(() => {
+      database.exec(CREATE_USERS_SQL);
+      database.exec(`
+        INSERT OR IGNORE INTO users (
+          id,
+          username,
+          password_hash,
+          role,
+          must_change_password,
+          created_at,
+          updated_at
+        ) VALUES (
+          'local-admin',
+          'local-admin',
+          '!bootstrap-required',
+          'admin',
+          1,
+          unixepoch() * 1000,
+          unixepoch() * 1000
+        );
+      `);
+
+      database.exec(CREATE_REVIEWS_SQL);
+      migrateReviews(database);
+      database.exec(CREATE_REMAINING_SCHEMA_SQL);
+      migrateLegacyReviewImages(database);
+      assertForeignKeys(database);
+    })();
+  } finally {
+    database.pragma("foreign_keys = ON");
+  }
 }

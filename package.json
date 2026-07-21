@@ -16,6 +16,7 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "argon2": "^0.45.0",
     "better-sqlite3": "^12.11.1",
     "drizzle-orm": "^0.45.2",
     "next": "16.2.10",
