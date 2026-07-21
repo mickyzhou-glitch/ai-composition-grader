@@ -91,11 +91,11 @@ CREATE TABLE IF NOT EXISTS security_events (
   created_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS security_events_user_id_idx
-  ON security_events(user_id);
+DROP INDEX IF EXISTS security_events_user_id_idx;
+DROP INDEX IF EXISTS security_events_created_at_idx;
 
-CREATE INDEX IF NOT EXISTS security_events_created_at_idx
-  ON security_events(created_at);
+CREATE INDEX IF NOT EXISTS security_events_user_created_at_idx
+  ON security_events(user_id, created_at);
 
 CREATE TABLE IF NOT EXISTS review_images (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

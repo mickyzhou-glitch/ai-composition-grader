@@ -146,6 +146,38 @@ describe("openAppDatabase", () => {
     }
   });
 
+  it("安全事件迁移为用户按时间查询创建复合索引并清理旧单列索引", () => {
+    const sqlite = new Database(":memory:");
+
+    try {
+      initializeSchema(sqlite);
+      sqlite.exec(`
+        DROP INDEX IF EXISTS security_events_user_created_at_idx;
+        CREATE INDEX IF NOT EXISTS security_events_user_id_idx
+          ON security_events(user_id);
+        CREATE INDEX IF NOT EXISTS security_events_created_at_idx
+          ON security_events(created_at);
+      `);
+
+      initializeSchema(sqlite);
+
+      const indexes = sqlite
+        .prepare("PRAGMA index_list(security_events)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+      expect(indexes).not.toContain("security_events_user_id_idx");
+      expect(indexes).not.toContain("security_events_created_at_idx");
+      expect(
+        sqlite
+          .prepare("PRAGMA index_info(security_events_user_created_at_idx)")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(["user_id", "created_at"]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
   it("reviews 具有强制 owner 和过期删除字段", () => {
     const sqlite = new Database(":memory:");
 

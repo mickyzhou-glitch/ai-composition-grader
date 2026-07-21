@@ -131,8 +131,7 @@ export const securityEvents = sqliteTable(
   },
   (table) => [
     check("security_events_metadata_json_check", sql`json_valid(${table.metadata})`),
-    index("security_events_user_id_idx").on(table.userId),
-    index("security_events_created_at_idx").on(table.createdAt),
+    index("security_events_user_created_at_idx").on(table.userId, table.createdAt),
   ],
 );
 
