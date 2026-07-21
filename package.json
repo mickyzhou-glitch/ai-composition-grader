@@ -7,11 +7,11 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1",
+    "dev": "next dev --hostname 127.0.0.1 --port 3001",
     "build": "next build",
     "db:init": "node scripts/init-db.mts",
     "accounts": "tsx scripts/accounts.ts",
-    "start": "next start --hostname 127.0.0.1",
+    "start": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test"
