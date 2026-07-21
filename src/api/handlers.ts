@@ -305,11 +305,12 @@ const multipartRevisionSchema = z
 
 export function createReviewsRouteHandlers(dependencies: {
   reviewService: ReviewService;
+  ownerId: string;
 }) {
   return {
     async GET() {
       try {
-        return ok(dependencies.reviewService.list().map(reviewDto));
+        return ok(dependencies.reviewService.list(dependencies.ownerId).map(reviewDto));
       } catch (error) {
         return failure(error);
       }
@@ -317,7 +318,7 @@ export function createReviewsRouteHandlers(dependencies: {
     async POST(request: Request) {
       try {
         const input = createReviewSchema.parse(await readJson(request));
-        return ok(reviewDto(await dependencies.reviewService.create(input.config)), 201);
+        return ok(reviewDto(await dependencies.reviewService.create(dependencies.ownerId, input.config)), 201);
       } catch (error) {
         return failure(error);
       }
@@ -327,11 +328,12 @@ export function createReviewsRouteHandlers(dependencies: {
 
 export function createReviewRouteHandlers(dependencies: {
   reviewService: ReviewService;
+  ownerId: string;
 }) {
   return {
     async GET(_request: Request, context: RouteContext) {
       try {
-        return ok(reviewDto(dependencies.reviewService.get((await context.params).id)));
+        return ok(reviewDto(dependencies.reviewService.get(dependencies.ownerId, (await context.params).id)));
       } catch (error) {
         return failure(error);
       }
@@ -339,14 +341,14 @@ export function createReviewRouteHandlers(dependencies: {
     async PATCH(request: Request, context: RouteContext) {
       try {
         const input = updateReviewSchema.parse(await readJson(request));
-        return ok(reviewDto(await dependencies.reviewService.update((await context.params).id, input)));
+        return ok(reviewDto(await dependencies.reviewService.update(dependencies.ownerId, (await context.params).id, input)));
       } catch (error) {
         return failure(error);
       }
     },
     async DELETE(_request: Request, context: RouteContext) {
       try {
-        await dependencies.reviewService.delete((await context.params).id);
+        await dependencies.reviewService.delete(dependencies.ownerId, (await context.params).id);
         return ok({ deleted: true });
       } catch (error) {
         return failure(error);
@@ -356,7 +358,7 @@ export function createReviewRouteHandlers(dependencies: {
 }
 
 export function createReviewImagesRouteHandlers(
-  dependencies: { imageService: ImageService },
+  dependencies: { imageService: ImageService; ownerId: string },
   options: { maxMultipartBytes?: number } = {},
 ) {
   return {
@@ -401,6 +403,7 @@ export function createReviewImagesRouteHandlers(
         );
         return ok(imageCollectionDto(
           await dependencies.imageService.upload(
+            dependencies.ownerId,
             (await context.params).id,
             expectedRevision,
             files,
@@ -414,6 +417,7 @@ export function createReviewImagesRouteHandlers(
       try {
         return ok(imageCollectionDto(
           await dependencies.imageService.update(
+            dependencies.ownerId,
             (await context.params).id,
             (await readJson(request)) as never,
           ),
@@ -427,11 +431,12 @@ export function createReviewImagesRouteHandlers(
 
 export function createAnalyzeRouteHandlers(dependencies: {
   reviewService: ReviewService;
+  ownerId: string;
 }) {
   return {
     async POST(_request: Request, context: RouteContext) {
       try {
-        const result = await dependencies.reviewService.analyze((await context.params).id);
+        const result = await dependencies.reviewService.analyze(dependencies.ownerId, (await context.params).id);
         return ok({ ...result, review: reviewDto(result.review) });
       } catch (error) {
         return failure(error);
@@ -442,6 +447,7 @@ export function createAnalyzeRouteHandlers(dependencies: {
 
 export function createReviewFilesRouteHandlers(dependencies: {
   reviewService: Pick<ReviewService, "readImageFile">;
+  ownerId: string;
 }) {
   return {
     async GET(request: Request, context: RouteContext) {
@@ -456,6 +462,7 @@ export function createReviewFilesRouteHandlers(dependencies: {
           throw routeError("INVALID_FILE_PATH", "图片版本无效", 400);
         }
         const file = await dependencies.reviewService.readImageFile(
+          dependencies.ownerId,
           (await context.params).id,
           Number(rawImageId),
           variant as ReviewImageVariant,
@@ -484,11 +491,13 @@ function rfc5987Filename(filename: string): string {
 
 export function createReviewPdfRouteHandlers(dependencies: {
   pdfService: Pick<PdfService, "getOrCreate">;
+  ownerId: string;
 }) {
   return {
     async GET(_request: Request, context: RouteContext) {
       try {
         const result = await dependencies.pdfService.getOrCreate(
+          dependencies.ownerId,
           (await context.params).id,
         );
         return new Response(Uint8Array.from(result.data).buffer, {

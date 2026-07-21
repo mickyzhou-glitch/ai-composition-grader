@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { ZodError } from "zod";
 
 import {
@@ -37,6 +37,7 @@ export interface ReviewImage extends ReviewImageInput {
 
 export interface ReviewRecord {
   id: string;
+  ownerId: string;
   status: ReviewStatus;
   config: AssignmentConfig;
   report: EvaluationReport | null;
@@ -82,6 +83,9 @@ interface ReviewRepositoryOptions {
 }
 
 export class ReviewNotFoundError extends Error {
+  readonly code = "NOT_FOUND";
+  readonly status = 404;
+
   constructor(id: string) {
     super(`Review not found: ${id}`);
     this.name = "ReviewNotFoundError";
@@ -163,7 +167,7 @@ export class ReviewRepository {
     this.now = options.now ?? (() => new Date());
   }
 
-  create(input: CreateReviewInput): ReviewRecord {
+  create(ownerId: string, input: CreateReviewInput): ReviewRecord {
     const config = assignmentConfigSchema.parse(input.config);
     const status = reviewStatusSchema.parse(input.status ?? "draft");
     const images = (input.images ?? []).map(validateImage);
@@ -172,6 +176,7 @@ export class ReviewRepository {
     this.database.transaction((transaction) => {
       transaction.insert(reviews).values({
         id: input.id,
+        ownerId,
         config,
         status,
         report: null,
@@ -198,18 +203,19 @@ export class ReviewRepository {
       }
     });
 
-    return this.requireById(input.id);
+    return this.requireById(ownerId, input.id);
   }
 
-  createReview(input: CreateReviewInput): ReviewRecord {
-    return this.create(input);
+  createReview(ownerId: string, input: CreateReviewInput): ReviewRecord {
+    return this.create(ownerId, input);
   }
 
-  getById(id: string): ReviewRecord | null {
+  getById(ownerId: string, id: string): ReviewRecord | null {
     return this.database.transaction((database) => {
     const review = database
       .select({
         id: reviews.id,
+        ownerId: reviews.ownerId,
         status: reviews.status,
         revision: reviews.revision,
         analysisRunId: reviews.analysisRunId,
@@ -221,7 +227,7 @@ export class ReviewRepository {
         updatedAt: reviews.updatedAt,
       })
       .from(reviews)
-      .where(eq(reviews.id, id))
+      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
       .get();
 
     if (!review) return null;
@@ -231,7 +237,7 @@ export class ReviewRepository {
       const configJson = database
         .select({ config: sql<string>`${reviews.config}` })
         .from(reviews)
-        .where(eq(reviews.id, id))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
         .get()?.config;
       storedConfig = configJson === undefined ? undefined : JSON.parse(configJson);
     } catch (error) {
@@ -259,7 +265,7 @@ export class ReviewRepository {
       const reportJson = database
         .select({ report: sql<string | null>`${reviews.report}` })
         .from(reviews)
-        .where(eq(reviews.id, id))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
         .get()?.report;
       storedReport =
         reportJson === null || reportJson === undefined
@@ -331,29 +337,31 @@ export class ReviewRepository {
     });
   }
 
-  getReview(id: string): ReviewRecord | null {
-    return this.getById(id);
+  getReview(ownerId: string, id: string): ReviewRecord | null {
+    return this.getById(ownerId, id);
   }
 
-  list(): ReviewRecord[] {
+  list(ownerId: string): ReviewRecord[] {
     return this.database
       .select({ id: reviews.id })
       .from(reviews)
+      .where(and(eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
       .orderBy(desc(reviews.updatedAt), desc(reviews.createdAt))
       .all()
-      .map(({ id }) => this.requireById(id));
+      .map(({ id }) => this.requireById(ownerId, id));
   }
 
-  listReviews(): ReviewRecord[] {
-    return this.list();
+  listReviews(ownerId: string): ReviewRecord[] {
+    return this.list(ownerId);
   }
 
   updateReport(
+    ownerId: string,
     id: string,
     input: EvaluationReport,
     options: { incompleteEvent?: boolean } = {},
   ): ReviewRecord {
-    const review = this.requireById(id);
+    const review = this.requireById(ownerId, id);
     const report = validateReport(input, {
       templateType: review.config.templateType,
       incompleteEvent: options.incompleteEvent,
@@ -370,30 +378,30 @@ export class ReviewRepository {
         pdfRevision: null,
         exportedAt: null,
       })
-      .where(eq(reviews.id, id))
+      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
       .run();
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
-  updateStatus(id: string, input: ReviewStatus): ReviewRecord {
-    this.requireById(id);
+  updateStatus(ownerId: string, id: string, input: ReviewStatus): ReviewRecord {
+    this.requireById(ownerId, id);
     const status = reviewStatusSchema.parse(input);
     this.database
       .update(reviews)
       .set({ status, updatedAt: this.now() })
-      .where(eq(reviews.id, id))
+      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
       .run();
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
-  updateConfig(id: string, input: AssignmentConfig): ReviewRecord {
+  updateConfig(ownerId: string, id: string, input: AssignmentConfig): ReviewRecord {
     const config = assignmentConfigSchema.parse(input);
     const updatedAt = this.now();
     this.database.transaction((transaction) => {
       const current = transaction
         .select({ id: reviews.id })
         .from(reviews)
-        .where(eq(reviews.id, id))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
         .get();
       if (!current) throw new ReviewNotFoundError(id);
 
@@ -411,15 +419,15 @@ export class ReviewRepository {
           pdfRevision: null,
           exportedAt: null,
         })
-        .where(eq(reviews.id, id))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
         .run();
       transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
     });
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
-  updateTeacherEdits(id: string, input: TeacherReviewEdits): ReviewRecord {
-    const current = this.requireById(id);
+  updateTeacherEdits(ownerId: string, id: string, input: TeacherReviewEdits): ReviewRecord {
+    const current = this.requireById(ownerId, id);
     const config = input.config
       ? assignmentConfigSchema.parse(input.config)
       : current.config;
@@ -464,13 +472,13 @@ export class ReviewRepository {
           pdfRevision: null,
           exportedAt: null,
         })
-        .where(and(eq(reviews.id, id), eq(reviews.revision, input.expectedRevision)))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt), eq(reviews.revision, input.expectedRevision)))
         .run();
       if (update.changes === 0) {
         const exists = transaction
           .select({ id: reviews.id })
           .from(reviews)
-          .where(eq(reviews.id, id))
+          .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
           .get();
         if (!exists) throw new ReviewNotFoundError(id);
         throw new RevisionConflictError(id);
@@ -486,10 +494,11 @@ export class ReviewRepository {
         ).run();
       }
     });
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
   replaceImages(
+    ownerId: string,
     id: string,
     expectedRevision: number,
     input: ReviewImageInput[],
@@ -510,13 +519,13 @@ export class ReviewRepository {
           pdfRevision: null,
           exportedAt: null,
         })
-        .where(and(eq(reviews.id, id), eq(reviews.revision, expectedRevision)))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt), eq(reviews.revision, expectedRevision)))
         .run();
       if (update.changes === 0) {
         const exists = transaction
           .select({ id: reviews.id })
           .from(reviews)
-          .where(eq(reviews.id, id))
+          .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
           .get();
         if (!exists) throw new ReviewNotFoundError(id);
         throw new RevisionConflictError(id);
@@ -535,10 +544,11 @@ export class ReviewRepository {
         ).run();
       }
     });
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
   beginAnalysis(
+    ownerId: string,
     id: string,
     runId: string,
     expectedRevision: number,
@@ -557,23 +567,26 @@ export class ReviewRepository {
       .where(
         and(
           eq(reviews.id, id),
+          eq(reviews.ownerId, ownerId),
+          isNull(reviews.deletingAt),
           eq(reviews.revision, expectedRevision),
         ),
       )
       .run();
     if (result.changes === 0) {
-      if (!this.getById(id)) throw new ReviewNotFoundError(id);
+      if (!this.getById(ownerId, id)) throw new ReviewNotFoundError(id);
       throw new AnalysisConflictError(id);
     }
     return { revision: expectedRevision, runId };
   }
 
   saveAnalysis(
+    ownerId: string,
     id: string,
     token: AnalysisToken,
     input: AiReviewEnvelope,
   ): ReviewRecord {
-    const review = this.requireById(id);
+    const review = this.requireById(ownerId, id);
     const parsedAnnotations = input.annotations.map((annotation) =>
       annotationSchema.parse(annotation),
     );
@@ -601,6 +614,8 @@ export class ReviewRepository {
         .where(
           and(
             eq(reviews.id, id),
+            eq(reviews.ownerId, ownerId),
+            isNull(reviews.deletingAt),
             eq(reviews.revision, token.revision),
             eq(reviews.analysisRunId, token.runId),
           ),
@@ -618,10 +633,10 @@ export class ReviewRepository {
         ).run();
       }
     });
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
-  failAnalysis(id: string, token: AnalysisToken): boolean {
+  failAnalysis(ownerId: string, id: string, token: AnalysisToken): boolean {
     return (
       this.database
         .update(reviews)
@@ -629,6 +644,8 @@ export class ReviewRepository {
         .where(
           and(
             eq(reviews.id, id),
+            eq(reviews.ownerId, ownerId),
+            isNull(reviews.deletingAt),
             eq(reviews.revision, token.revision),
             eq(reviews.analysisRunId, token.runId),
           ),
@@ -637,8 +654,8 @@ export class ReviewRepository {
     );
   }
 
-  replaceAnnotations(id: string, input: Annotation[]): Annotation[] {
-    const current = this.requireById(id);
+  replaceAnnotations(ownerId: string, id: string, input: Annotation[]): Annotation[] {
+    const current = this.requireById(ownerId, id);
     const parsed = input.map((annotation) => annotationSchema.parse(annotation));
     const now = this.now();
     this.database.transaction((transaction) => {
@@ -663,13 +680,14 @@ export class ReviewRepository {
           pdfRevision: null,
           exportedAt: null,
         })
-        .where(eq(reviews.id, id))
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
         .run();
     });
-    return this.requireById(id).annotations;
+    return this.requireById(ownerId, id).annotations;
   }
 
   markExported(
+    ownerId: string,
     id: string,
     expectedRevision: number,
     input: ExportedPdfInput,
@@ -687,27 +705,39 @@ export class ReviewRepository {
         exportedAt: pdf.exportedAt,
         updatedAt: pdf.exportedAt,
       })
-      .where(and(eq(reviews.id, id), eq(reviews.revision, expectedRevision)))
+      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt), eq(reviews.revision, expectedRevision)))
       .run();
     if (result.changes === 0) {
-      if (!this.getById(id)) throw new ReviewNotFoundError(id);
+      if (!this.getById(ownerId, id)) throw new ReviewNotFoundError(id);
       throw new RevisionConflictError(id);
     }
-    return this.requireById(id);
+    return this.requireById(ownerId, id);
   }
 
-  delete(id: string): boolean {
-    return (
-      this.database.delete(reviews).where(eq(reviews.id, id)).run().changes > 0
-    );
+  delete(ownerId: string, id: string): boolean {
+    const result = this.database
+      .delete(reviews)
+      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt)))
+      .run();
+    if (result.changes === 0) throw new ReviewNotFoundError(id);
+    return true;
   }
 
-  deleteReview(id: string): boolean {
-    return this.delete(id);
+  deleteReview(ownerId: string, id: string): boolean {
+    return this.delete(ownerId, id);
   }
 
-  private requireById(id: string): ReviewRecord {
-    const review = this.getById(id);
+  /** Internal cleanup probe; never exposed to request handlers. */
+  exists(id: string): boolean {
+    return this.database
+      .select({ id: reviews.id })
+      .from(reviews)
+      .where(and(eq(reviews.id, id), isNull(reviews.deletingAt)))
+      .get() !== undefined;
+  }
+
+  private requireById(ownerId: string, id: string): ReviewRecord {
+    const review = this.getById(ownerId, id);
     if (!review) throw new ReviewNotFoundError(id);
     return review;
   }

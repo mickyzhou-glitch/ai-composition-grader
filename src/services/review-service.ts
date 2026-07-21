@@ -56,21 +56,22 @@ export class ReviewService {
     this.createRunId = options.createRunId ?? randomUUID;
     this.lock = options.lock ?? new InMemoryReviewLock();
     this.recovery = this.fileStore.recoverStagedDeletes(
-      (id) => this.repository.getById(id) !== null,
+      (id) => this.repository.exists(id),
     );
   }
 
-  list(): ReviewRecord[] {
-    return this.repository.list();
+  list(ownerId: string): ReviewRecord[] {
+    return this.repository.list(ownerId);
   }
 
-  get(id: string): ReviewRecord {
-    const review = this.repository.getById(id);
+  get(ownerId: string, id: string): ReviewRecord {
+    const review = this.repository.getById(ownerId, id);
     if (!review) throw new ReviewServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     return review;
   }
 
   async readImageFile(
+    ownerId: string,
     id: string,
     imageId: number,
     variant: ReviewImageVariant,
@@ -78,7 +79,7 @@ export class ReviewService {
     data: Buffer;
     contentType: string;
   }> {
-    const review = this.get(id);
+    const review = this.get(ownerId, id);
     const image = review.images.find((candidate) => candidate.id === imageId);
     if (!image) {
       throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
@@ -122,22 +123,22 @@ export class ReviewService {
     }
   }
 
-  async create(config: AssignmentConfig): Promise<ReviewRecord> {
+  async create(ownerId: string, config: AssignmentConfig): Promise<ReviewRecord> {
     await this.recovery;
     const id = this.createId();
     await this.fileStore.createReview(id);
     try {
-      return this.repository.create({ id, config });
+      return this.repository.create(ownerId, { id, config });
     } catch (error) {
       await this.fileStore.deleteReview(id);
       throw error;
     }
   }
 
-  async update(id: string, input: TeacherReviewEdits): Promise<ReviewRecord> {
+  async update(ownerId: string, id: string, input: TeacherReviewEdits): Promise<ReviewRecord> {
     return this.lock.runExclusive(id, async () => {
-      const current = this.get(id);
-      const updated = this.repository.updateTeacherEdits(id, input);
+      const current = this.get(ownerId, id);
+      const updated = this.repository.updateTeacherEdits(ownerId, id, input);
       if (current.pdfFilename) {
         await this.fileStore.queuePdfCleanup(id, [current.pdfFilename]);
       }
@@ -145,19 +146,13 @@ export class ReviewService {
     });
   }
 
-  async delete(id: string): Promise<void> {
+  async delete(ownerId: string, id: string): Promise<void> {
     await this.recovery;
     await this.lock.runExclusive(id, async () => {
-      this.get(id);
+      this.get(ownerId, id);
       const staged = await this.fileStore.stageDelete(id);
       try {
-        if (!this.repository.delete(id)) {
-          throw new ReviewServiceError(
-            "REVIEW_NOT_FOUND",
-            "批改记录不存在",
-            404,
-          );
-        }
+        this.repository.delete(ownerId, id);
       } catch (error) {
         await staged.rollback();
         throw error;
@@ -170,13 +165,13 @@ export class ReviewService {
     });
   }
 
-  async analyze(id: string): Promise<{
+  async analyze(ownerId: string, id: string): Promise<{
     review: ReviewRecord;
     pageWarnings: string[];
   }> {
     await this.recovery;
     const prepared = await this.lock.runExclusive(id, async () => {
-      const review = this.get(id);
+      const review = this.get(ownerId, id);
       if (review.images.length < 1 || review.images.length > 3) {
         throw new ReviewServiceError(
           "IMAGES_REQUIRED",
@@ -185,6 +180,7 @@ export class ReviewService {
         );
       }
       const token = this.repository.beginAnalysis(
+        ownerId,
         id,
         this.createRunId(),
         review.revision,
@@ -202,7 +198,7 @@ export class ReviewService {
         );
         return { review, token, imageDataUrls };
       } catch (error) {
-        this.repository.failAnalysis(id, token);
+        this.repository.failAnalysis(ownerId, id, token);
         throw error;
       }
     });
@@ -215,19 +211,19 @@ export class ReviewService {
       });
     } catch (error) {
       await this.lock.runExclusive(id, async () => {
-        this.repository.failAnalysis(id, prepared.token);
+        this.repository.failAnalysis(ownerId, id, prepared.token);
       });
       throw error;
     }
 
     try {
       const saved = await this.lock.runExclusive(id, async () =>
-        this.repository.saveAnalysis(id, prepared.token, envelope),
+        this.repository.saveAnalysis(ownerId, id, prepared.token, envelope),
       );
       return { review: saved, pageWarnings: envelope.pageWarnings };
     } catch (error) {
       await this.lock.runExclusive(id, async () => {
-        this.repository.failAnalysis(id, prepared.token);
+        this.repository.failAnalysis(ownerId, id, prepared.token);
       });
       throw error;
     }

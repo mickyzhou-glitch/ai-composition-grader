@@ -487,8 +487,8 @@ describe("openAppDatabase", () => {
     try {
       initializeSchema(sqlite);
       sqlite.exec(`
-        INSERT INTO reviews (id, status, config, created_at, updated_at)
-        VALUES ('review-1', 'draft', '{}', 1, 1);
+        INSERT INTO reviews (id, owner_id, status, config, created_at, updated_at)
+        VALUES ('review-1', 'local-admin', 'draft', '{}', 1, 1);
         INSERT INTO analysis_jobs (
           id, review_id, owner_id, status, available_at, progress_stage, created_at
         ) VALUES (

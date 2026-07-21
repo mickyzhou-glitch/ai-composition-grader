@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+const OWNER_ID = "local-admin";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { PdfServiceError } from "../pdf/pdf-service";
@@ -15,6 +17,7 @@ describe("GET /api/reviews/[id]/pdf", () => {
       cached: false,
     });
     const handler = createReviewPdfRouteHandlers({
+      ownerId: OWNER_ID,
       pdfService: { getOrCreate } as never,
     });
 
@@ -31,11 +34,12 @@ describe("GET /api/reviews/[id]/pdf", () => {
       `attachment; filename="composition-review.pdf"; filename*=UTF-8''${encodeURIComponent("作文批改-为自己喝彩-20260721-1405.pdf")}`,
     );
     expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from("%PDF-test"));
-    expect(getOrCreate).toHaveBeenCalledWith("review-1");
+    expect(getOrCreate).toHaveBeenCalledWith(OWNER_ID, "review-1");
   });
 
   it("无报告或图片时返回 422", async () => {
     const handler = createReviewPdfRouteHandlers({
+      ownerId: OWNER_ID,
       pdfService: {
         getOrCreate: vi.fn().mockRejectedValue(
           new PdfServiceError(
@@ -64,6 +68,7 @@ describe("GET /api/reviews/[id]/pdf", () => {
 
   it("缺少 Chromium 时返回 503 和可操作提示，不泄露本机路径", async () => {
     const handler = createReviewPdfRouteHandlers({
+      ownerId: OWNER_ID,
       pdfService: {
         getOrCreate: vi.fn().mockRejectedValue(
           new PdfServiceError(

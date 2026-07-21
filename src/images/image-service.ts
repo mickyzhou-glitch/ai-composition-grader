@@ -33,12 +33,13 @@ export interface UploadedImage {
 }
 
 export interface ImageRepository {
-  getById(id: string): {
+  getById(ownerId: string, id: string): {
     images: ReviewImage[];
     revision: number;
     pdfFilename?: string | null;
   } | null;
   replaceImages(
+    ownerId: string,
     reviewId: string,
     expectedRevision: number,
     images: ReviewImageInput[],
@@ -250,19 +251,20 @@ export class ImageService {
     this.lock = options.lock ?? new InMemoryReviewLock();
   }
 
-  async upload(reviewId: string, expectedRevision: number, files: UploadedImage[]) {
+  async upload(ownerId: string, reviewId: string, expectedRevision: number, files: UploadedImage[]) {
     return this.lock.runExclusive(reviewId, () =>
-      this.uploadExclusive(reviewId, expectedRevision, files),
+      this.uploadExclusive(ownerId, reviewId, expectedRevision, files),
     );
   }
 
   private async uploadExclusive(
+    ownerId: string,
     reviewId: string,
     expectedRevision: number,
     files: UploadedImage[],
   ) {
     await this.fileStore.retryImageCleanup(reviewId);
-    const review = this.repository.getById(reviewId);
+    const review = this.repository.getById(ownerId, reviewId);
     if (!review) {
       throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     }
@@ -309,6 +311,7 @@ export class ImageService {
     }
     return this.commitVersions(
       reviewId,
+      ownerId,
       expectedRevision,
       prepared,
       review.images,
@@ -316,15 +319,15 @@ export class ImageService {
     );
   }
 
-  async update(reviewId: string, input: UpdateImagesInput) {
+  async update(ownerId: string, reviewId: string, input: UpdateImagesInput) {
     return this.lock.runExclusive(reviewId, () =>
-      this.updateExclusive(reviewId, input),
+      this.updateExclusive(ownerId, reviewId, input),
     );
   }
 
-  private async updateExclusive(reviewId: string, input: UpdateImagesInput) {
+  private async updateExclusive(ownerId: string, reviewId: string, input: UpdateImagesInput) {
     await this.fileStore.retryImageCleanup(reviewId);
-    const review = this.repository.getById(reviewId);
+    const review = this.repository.getById(ownerId, reviewId);
     if (!review) throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     const parsed = this.parseUpdate(input);
     if (review.revision !== parsed.expectedRevision) {
@@ -407,6 +410,7 @@ export class ImageService {
     }
     return this.commitVersions(
       reviewId,
+      ownerId,
       parsed.expectedRevision,
       prepared,
       review.images,
@@ -416,6 +420,7 @@ export class ImageService {
 
   private async commitVersions(
     reviewId: string,
+    ownerId: string,
     expectedRevision: number,
     prepared: PreparedImageVersion[],
     previous: ReviewImage[],
@@ -436,6 +441,7 @@ export class ImageService {
         }
       }
       saved = this.repository.replaceImages(
+        ownerId,
         reviewId,
         expectedRevision,
         prepared.map(({ record }) => record),

@@ -19,7 +19,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_username_unique_idx
 const CREATE_REVIEWS_SQL = `
 CREATE TABLE IF NOT EXISTS reviews (
   id TEXT PRIMARY KEY NOT NULL,
-  owner_id TEXT NOT NULL DEFAULT 'local-admin' REFERENCES users(id),
+  owner_id TEXT NOT NULL REFERENCES users(id),
   status TEXT NOT NULL CHECK (
     status IN (
       'draft',
@@ -196,7 +196,7 @@ function migrateReviews(database: Database.Database): void {
   const additions: Array<[string, string]> = [
     [
       "owner_id",
-      "TEXT NOT NULL DEFAULT 'local-admin' REFERENCES users(id)",
+      "TEXT REFERENCES users(id)",
     ],
     ["revision", "INTEGER NOT NULL DEFAULT 0"],
     ["analysis_run_id", "TEXT"],
@@ -217,6 +217,60 @@ function migrateReviews(database: Database.Database): void {
   database.exec(`
     UPDATE reviews SET owner_id = 'local-admin' WHERE owner_id IS NULL;
 
+    CREATE INDEX IF NOT EXISTS reviews_owner_created_at_idx
+      ON reviews(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS reviews_owner_deleting_at_idx
+      ON reviews(owner_id, deleting_at);
+    CREATE INDEX IF NOT EXISTS reviews_expires_deleting_at_idx
+      ON reviews(expires_at, deleting_at);
+  `);
+
+  const ownerColumn = database
+    .prepare("PRAGMA table_info(reviews)")
+    .all()
+    .find((column) => (column as { name: string }).name === "owner_id") as
+    | { notnull: number; dflt_value: string | null }
+    | undefined;
+  if (ownerColumn && (ownerColumn.notnull !== 1 || ownerColumn.dflt_value !== null)) {
+    // SQLite cannot change NOT NULL/default metadata in place. Rebuild the
+    // parent table after legacy rows have been assigned to local-admin.
+    database.exec(`
+      CREATE TABLE reviews_owner_migration (
+        id TEXT PRIMARY KEY NOT NULL,
+        owner_id TEXT NOT NULL REFERENCES users(id),
+        status TEXT NOT NULL CHECK (
+          status IN ('draft', 'analyzing', 'needs_better_images', 'ready_for_review', 'exported', 'failed')
+        ),
+        config TEXT NOT NULL,
+        report TEXT,
+        revision INTEGER NOT NULL DEFAULT 0,
+        analysis_run_id TEXT,
+        pdf_filename TEXT,
+        pdf_path TEXT,
+        pdf_revision INTEGER,
+        exported_at INTEGER,
+        expires_at INTEGER,
+        deleting_at INTEGER,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO reviews_owner_migration (
+        id, owner_id, status, config, report, revision, analysis_run_id,
+        pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
+        deleting_at, created_at, updated_at
+      )
+      SELECT id, owner_id, status, config, report, revision, analysis_run_id,
+        pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
+        deleting_at, created_at, updated_at
+      FROM reviews;
+      DROP TABLE reviews;
+      ALTER TABLE reviews_owner_migration RENAME TO reviews;
+    `);
+  }
+
+  // The rebuild above drops table-local indexes, so recreate them afterwards
+  // for both legacy and already-current databases.
+  database.exec(`
     CREATE INDEX IF NOT EXISTS reviews_owner_created_at_idx
       ON reviews(owner_id, created_at);
     CREATE INDEX IF NOT EXISTS reviews_owner_deleting_at_idx

@@ -9,9 +9,12 @@ import {
   type BrowserFactory,
 } from "./pdf-service";
 
+const OWNER_ID = "local-admin";
+
 function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
   return {
     id: "review-1",
+    ownerId: OWNER_ID,
     status: "ready_for_review",
     revision: 7,
     analysisRunId: null,
@@ -136,7 +139,7 @@ describe("PdfService", () => {
   it("只用内部 origin 打开打印页，等待内容和图片后按 A4 参数生成并持久化", async () => {
     const { service, repository, fileStore, browserFactory, page, browser } = harness();
 
-    const result = await service.getOrCreate("review-1");
+    const result = await service.getOrCreate(OWNER_ID, "review-1");
 
     expect(browserFactory.launch).toHaveBeenCalledWith({ headless: true });
     expect(page.route).toHaveBeenCalledWith("**/*", expect.any(Function));
@@ -175,7 +178,7 @@ describe("PdfService", () => {
       result.filename,
       Buffer.from("generated-pdf"),
     );
-    expect(repository.markExported).toHaveBeenCalledWith("review-1", 7, {
+    expect(repository.markExported).toHaveBeenCalledWith(OWNER_ID, "review-1", 7, {
       pdfFilename: result.filename,
       pdfPath: `pdf/${result.filename}`,
       exportedAt: new Date("2026-07-21T06:05:00.000Z"),
@@ -196,7 +199,7 @@ describe("PdfService", () => {
     const { service, fileStore, browserFactory, repository } = harness({ current: cached });
     fileStore.readFile.mockResolvedValue(Buffer.from("cached-pdf"));
 
-    const result = await service.getOrCreate("review-1");
+    const result = await service.getOrCreate(OWNER_ID, "review-1");
 
     expect(result).toMatchObject({ filename: "cached.pdf", cached: true });
     expect(result.data).toEqual(Buffer.from("cached-pdf"));
@@ -214,7 +217,7 @@ describe("PdfService", () => {
     });
     const { service, browserFactory, fileStore } = harness({ current: stale });
 
-    const result = await service.getOrCreate("review-1");
+    const result = await service.getOrCreate(OWNER_ID, "review-1");
 
     expect(result.cached).toBe(false);
     expect(browserFactory.launch).toHaveBeenCalledOnce();
@@ -226,7 +229,7 @@ describe("PdfService", () => {
       const { service, browserFactory } = harness({ current });
 
       await expect(
-        service.getOrCreate("review-1"),
+        service.getOrCreate(OWNER_ID, "review-1"),
       ).rejects.toMatchObject({
         code: "PDF_CONTENT_INCOMPLETE",
         status: 422,
@@ -241,7 +244,7 @@ describe("PdfService", () => {
     });
 
     await expect(
-      service.getOrCreate("review-1"),
+      service.getOrCreate(OWNER_ID, "review-1"),
     ).rejects.toThrow("render failed");
     expect(page.close).toHaveBeenCalledOnce();
     expect(browser.close).toHaveBeenCalledOnce();
@@ -257,7 +260,7 @@ describe("PdfService", () => {
     });
 
     try {
-      await service.getOrCreate("review-1");
+      await service.getOrCreate(OWNER_ID, "review-1");
       throw new Error("expected PDF engine failure");
     } catch (error) {
       expect(error).toBeInstanceOf(PdfServiceError);
@@ -272,7 +275,7 @@ describe("PdfService", () => {
     vi.stubEnv("PORT", "4321");
     const { service, page } = harness();
 
-    await service.getOrCreate("review-1");
+    await service.getOrCreate(OWNER_ID, "review-1");
 
     expect(page.goto).toHaveBeenCalledWith(
       "http://127.0.0.1:4321/print/reviews/review-1",
@@ -305,7 +308,7 @@ describe("PdfService", () => {
       return null;
     });
 
-    await expect(service.getOrCreate("review-1")).rejects.toMatchObject({
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).rejects.toMatchObject({
       code: "PDF_UNTRUSTED_NAVIGATION",
     });
     expect(fileStore.writeFile).not.toHaveBeenCalled();
@@ -319,14 +322,14 @@ describe("PdfService", () => {
     });
     const startedAt = Date.now();
 
-    await expect(service.getOrCreate("review-1")).rejects.toMatchObject({
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).rejects.toMatchObject({
       code: "PDF_TIMEOUT",
       status: 504,
     });
     expect(Date.now() - startedAt).toBeLessThan(500);
     expect(browser.close).toHaveBeenCalled();
 
-    await expect(service.getOrCreate("review-1")).resolves.toMatchObject({
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).resolves.toMatchObject({
       cached: false,
       data: Buffer.from("generated-pdf"),
     });
@@ -341,7 +344,7 @@ describe("PdfService", () => {
     );
     page.goto.mockRejectedValue(browserTimeout);
 
-    await expect(service.getOrCreate("review-1")).rejects.toMatchObject({
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).rejects.toMatchObject({
       code: "PDF_TIMEOUT",
       status: 504,
     });

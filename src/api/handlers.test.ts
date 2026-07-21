@@ -1,5 +1,7 @@
 // @vitest-environment node
 
+const OWNER_ID = "local-admin";
+
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -253,8 +255,8 @@ describe("review route handlers", () => {
   });
 
   it("完成 review CRUD 并以统一信封返回 404/400", async () => {
-    const collection = createReviewsRouteHandlers({ reviewService });
-    const item = createReviewRouteHandlers({ reviewService });
+    const collection = createReviewsRouteHandlers({ reviewService, ownerId: OWNER_ID });
+    const item = createReviewRouteHandlers({ reviewService, ownerId: OWNER_ID });
 
     const invalid = await collection.POST(
       jsonRequest("http://localhost/api/reviews", "POST", { title: "missing" }),
@@ -294,7 +296,7 @@ describe("review route handlers", () => {
       { params: Promise.resolve({ id: "review-1" }) },
     );
     expect(illegalStatus.status).toBe(400);
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "draft",
       config: { title: "我为自己喝彩" },
     });
@@ -318,7 +320,7 @@ describe("review route handlers", () => {
       { params: Promise.resolve({ id: "review-1" }) },
     );
     expect(teacherReview.status).toBe(200);
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "ready_for_review",
       report,
       annotations: [{ category: "sentence" }],
@@ -339,8 +341,8 @@ describe("review route handlers", () => {
   });
 
   it("教师 PATCH 要求版本号，并拒绝跨页提交的过期版本", async () => {
-    repository.create({ id: "review-1", config });
-    const item = createReviewRouteHandlers({ reviewService });
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const item = createReviewRouteHandlers({ reviewService, ownerId: OWNER_ID });
 
     const missingRevision = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
@@ -375,7 +377,7 @@ describe("review route handlers", () => {
       ok: false,
       error: { code: "REVISION_CONFLICT" },
     });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       revision: 1,
       config: { title: "第一页已保存" },
     });
@@ -412,9 +414,11 @@ describe("review route handlers", () => {
       annotations: [],
     };
     const collection = createReviewsRouteHandlers({
+      ownerId: OWNER_ID,
       reviewService: { list: () => [internalReview] } as never,
     });
     const detail = createReviewRouteHandlers({
+      ownerId: OWNER_ID,
       reviewService: { get: () => internalReview } as never,
     });
 
@@ -435,8 +439,8 @@ describe("review route handlers", () => {
   });
 
   it("教师提交不符合业务评分约束的报告时返回 400", async () => {
-    repository.create({ id: "review-1", config });
-    const item = createReviewRouteHandlers({ reviewService });
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const item = createReviewRouteHandlers({ reviewService, ownerId: OWNER_ID });
 
     const response = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
@@ -454,7 +458,7 @@ describe("review route handlers", () => {
   });
 
   it("multipart 一次上传三图并保存处理后的字段", async () => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     const pixels = await sharp({
       create: { width: 60, height: 80, channels: 3, background: "white" },
     }).jpeg().toBuffer();
@@ -463,7 +467,7 @@ describe("review route handlers", () => {
     for (let index = 0; index < 3; index += 1) {
       form.append("images", new File([pixels], `page-${index + 1}.jpg`, { type: "image/jpeg" }));
     }
-    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
 
     const response = await handlers.POST(
       new Request("http://localhost/api/reviews/review-1/images", {
@@ -477,14 +481,14 @@ describe("review route handlers", () => {
     const body = await json(response);
     expect(body).toMatchObject({ ok: true });
     expect((body.data as { images: unknown[] }).images).toHaveLength(3);
-    expect(repository.getById("review-1")?.images[2]).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")?.images[2]).toMatchObject({
       position: 2,
       originalName: "page-3.jpg",
       width: 60,
       height: 80,
     });
 
-    const current = repository.getById("review-1")?.images ?? [];
+    const current = repository.getById(OWNER_ID, "review-1")?.images ?? [];
     const patched = await handlers.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1/images", "PATCH", {
         expectedRevision: 1,
@@ -503,7 +507,7 @@ describe("review route handlers", () => {
     );
 
     expect(patched.status).toBe(200);
-    expect(repository.getById("review-1")?.images).toMatchObject([
+    expect(repository.getById(OWNER_ID, "review-1")?.images).toMatchObject([
       { originalName: "page-3.jpg", position: 0 },
       { originalName: "page-2.jpg", position: 1 },
       {
@@ -518,11 +522,11 @@ describe("review route handlers", () => {
   });
 
   it("旧 revision 重拍或变换都返回 409，并保留 SQLite 图片和已存文件", async () => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     const pixels = await sharp({
       create: { width: 60, height: 80, channels: 3, background: "white" },
     }).jpeg().toBuffer();
-    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
     const initial = new FormData();
     initial.append("expectedRevision", "0");
     initial.append("images", new File([pixels], "current.jpg", { type: "image/jpeg" }));
@@ -530,11 +534,11 @@ describe("review route handlers", () => {
       new Request("http://localhost/api/reviews/review-1/images", { method: "POST", body: initial }),
       { params: Promise.resolve({ id: "review-1" }) },
     )).status).toBe(200);
-    const before = repository.getById("review-1");
+    const before = repository.getById(OWNER_ID, "review-1");
     const imageDirectory = fileStore.getReviewPaths("review-1").imagesDirectory;
     const filesBefore = (await readdir(imageDirectory)).sort();
 
-    repository.updateTeacherEdits("review-1", {
+    repository.updateTeacherEdits(OWNER_ID, "review-1", {
       expectedRevision: 1,
       config: { ...config, title: "另一标签页已保存" },
     });
@@ -548,7 +552,7 @@ describe("review route handlers", () => {
 
     expect(response.status).toBe(409);
     expect(await json(response)).toMatchObject({ error: { code: "REVISION_CONFLICT" } });
-    expect(repository.getById("review-1")?.images).toEqual(before?.images);
+    expect(repository.getById(OWNER_ID, "review-1")?.images).toEqual(before?.images);
     expect((await readdir(imageDirectory)).sort()).toEqual(filesBefore);
 
     const staleTransform = await handlers.PATCH(
@@ -560,12 +564,12 @@ describe("review route handlers", () => {
     );
     expect(staleTransform.status).toBe(409);
     expect(await json(staleTransform)).toMatchObject({ error: { code: "REVISION_CONFLICT" } });
-    expect(repository.getById("review-1")?.images).toEqual(before?.images);
+    expect(repository.getById(OWNER_ID, "review-1")?.images).toEqual(before?.images);
     expect((await readdir(imageDirectory)).sort()).toEqual(filesBefore);
   });
 
   it("在解析 multipart 前按 Content-Length 拒绝超过 64MB 的请求", async () => {
-    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
     const request = new Request("http://localhost/api/reviews/review-1/images", {
       method: "POST",
       headers: { "content-length": String(64 * 1024 * 1024 + 1) },
@@ -604,7 +608,7 @@ describe("review route handlers", () => {
     } as RequestInit & { duplex: "half" });
     expect(request.headers.get("content-length")).toBeNull();
     const handlers = createReviewImagesRouteHandlers(
-      { imageService },
+      { imageService, ownerId: OWNER_ID },
       { maxMultipartBytes: 8 },
     );
 
@@ -619,7 +623,7 @@ describe("review route handlers", () => {
   });
 
   it("在读取 File 内容前检查单张 20MB 上限", async () => {
-    const handlers = createReviewImagesRouteHandlers({ imageService });
+    const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
     const file = new File(
       [new Uint8Array(MAX_IMAGE_BYTES + 1)],
       "too-large.jpg",
@@ -643,8 +647,8 @@ describe("review route handlers", () => {
   });
 
   it("analyze 保存 report/annotations 并管理成功和不可辨认状态", async () => {
-    repository.create({ id: "review-1", config });
-    await imageService.upload("review-1", repository.getById("review-1")?.revision ?? 0, [
+    repository.create(OWNER_ID, { id: "review-1", config });
+    await imageService.upload(OWNER_ID, "review-1", repository.getById(OWNER_ID, "review-1")?.revision ?? 0, [
       {
         originalName: "page.jpg",
         mimeType: "image/jpeg",
@@ -653,13 +657,13 @@ describe("review route handlers", () => {
         }).jpeg().toBuffer(),
       },
     ]);
-    const handlers = createAnalyzeRouteHandlers({ reviewService });
+    const handlers = createAnalyzeRouteHandlers({ reviewService, ownerId: OWNER_ID });
 
     const ready = await handlers.POST(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
     expect(ready.status).toBe(200);
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "ready_for_review",
       report,
     });
@@ -673,7 +677,7 @@ describe("review route handlers", () => {
     await handlers.POST(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "needs_better_images",
       report: null,
       annotations: [],
@@ -681,8 +685,8 @@ describe("review route handlers", () => {
   });
 
   it("AI 失败后将状态落为 failed 并返回 502", async () => {
-    repository.create({ id: "review-1", config });
-    await imageService.upload("review-1", repository.getById("review-1")?.revision ?? 0, [
+    repository.create(OWNER_ID, { id: "review-1", config });
+    await imageService.upload(OWNER_ID, "review-1", repository.getById(OWNER_ID, "review-1")?.revision ?? 0, [
       {
         originalName: "page.jpg",
         mimeType: "image/jpeg",
@@ -697,13 +701,13 @@ describe("review route handlers", () => {
         status: 502,
       }),
     );
-    const handlers = createAnalyzeRouteHandlers({ reviewService });
+    const handlers = createAnalyzeRouteHandlers({ reviewService, ownerId: OWNER_ID });
 
     const response = await handlers.POST(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
 
     expect(response.status).toBe(502);
-    expect(repository.getById("review-1")?.status).toBe("failed");
+    expect(repository.getById(OWNER_ID, "review-1")?.status).toBe("failed");
   });
 });

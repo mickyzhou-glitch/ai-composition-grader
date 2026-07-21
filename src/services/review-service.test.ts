@@ -17,6 +17,8 @@ import { PdfService } from "../pdf/pdf-service";
 import { InMemoryReviewLock } from "./review-lock";
 import { ReviewService } from "./review-service";
 
+const OWNER_ID = "local-admin";
+
 const config: AssignmentConfig = {
   title: "为自己喝彩",
   grade: "上海五四学制六年级",
@@ -76,7 +78,7 @@ describe("ReviewService analysis CAS", () => {
     repository = new ReviewRepository(drizzle(sqlite, { schema }));
     temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "grader-cas-"));
     fileStore = new ReviewFileStore(path.join(temporaryDirectory, "reviews"));
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     await fileStore.writeFile("review-1", "images", "page-original.jpg", "original");
     await fileStore.writeFile("review-1", "images", "page-annotation.jpg", "annotation");
     await fileStore.writeFile("review-1", "images", "page-ai.jpg", "ai");
@@ -92,7 +94,7 @@ describe("ReviewService analysis CAS", () => {
       rotation: 0,
       crop: null,
     };
-    repository.replaceImages("review-1", 0, [image]);
+    repository.replaceImages(OWNER_ID, "review-1", 0, [image]);
   });
 
   afterEach(async () => {
@@ -113,16 +115,16 @@ describe("ReviewService analysis CAS", () => {
     const analyze = vi.fn(() => ai.promise);
     const service = serviceFor(analyze);
 
-    const pending = service.analyze("review-1");
+    const pending = service.analyze(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    await service.update("review-1", {
+    await service.update(OWNER_ID, "review-1", {
       expectedRevision: 1,
       config: { ...config, title: "新题目" },
     });
     ai.resolve(readyEnvelope);
 
     await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "draft",
       revision: 2,
       analysisRunId: null,
@@ -153,9 +155,9 @@ describe("ReviewService analysis CAS", () => {
     const analyze = vi.fn(() => ai.promise);
     const service = serviceFor(analyze);
 
-    const pending = service.analyze("review-1");
+    const pending = service.analyze(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    const edited = await service.update("review-1", { ...edits, expectedRevision: 1 });
+    const edited = await service.update(OWNER_ID, "review-1", { ...edits, expectedRevision: 1 });
     ai.resolve(readyEnvelope);
 
     expect(edited).toMatchObject({
@@ -164,7 +166,7 @@ describe("ReviewService analysis CAS", () => {
       ...saved,
     });
     await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       revision: 2,
       analysisRunId: null,
       ...saved,
@@ -176,13 +178,13 @@ describe("ReviewService analysis CAS", () => {
     const analyze = vi.fn(() => ai.promise);
     const service = serviceFor(analyze);
 
-    const pending = service.analyze("review-1");
+    const pending = service.analyze(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    repository.replaceImages("review-1", 1, [{ ...image, originalName: "new.jpg" }]);
+    repository.replaceImages(OWNER_ID, "review-1", 1, [{ ...image, originalName: "new.jpg" }]);
     ai.resolve(readyEnvelope);
 
     await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "draft",
       revision: 2,
       analysisRunId: null,
@@ -200,14 +202,14 @@ describe("ReviewService analysis CAS", () => {
       .mockImplementationOnce(() => second.promise);
     const service = serviceFor(analyze);
 
-    const firstPending = service.analyze("review-1");
+    const firstPending = service.analyze(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledTimes(1));
-    const secondPending = service.analyze("review-1");
+    const secondPending = service.analyze(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledTimes(2));
     first.resolve(readyEnvelope);
 
     await expect(firstPending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "analyzing",
       analysisRunId: "run-2",
     });
@@ -219,15 +221,15 @@ describe("ReviewService analysis CAS", () => {
 
   it("教师修改内容时将旧 PDF 加入 best-effort 清理队列", async () => {
     const service = serviceFor(async () => readyEnvelope);
-    const ready = repository.updateReport("review-1", readyEnvelope.report);
-    const exported = repository.markExported("review-1", ready.revision, {
+    const ready = repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old.pdf",
       pdfPath: "pdf/old.pdf",
       exportedAt: new Date("2026-07-21T06:00:00.000Z"),
     });
     const cleanup = vi.spyOn(fileStore, "queuePdfCleanup");
 
-    const saved = await service.update("review-1", {
+    const saved = await service.update(OWNER_ID, "review-1", {
       expectedRevision: exported.revision,
       report: { ...readyEnvelope.report, personalizedComment: "教师新总评" },
     });
@@ -248,8 +250,8 @@ describe("ReviewService analysis CAS", () => {
       { analyze: async () => readyEnvelope },
       { lock },
     );
-    const ready = repository.updateReport("review-1", readyEnvelope.report);
-    const exported = repository.markExported("review-1", ready.revision, {
+    const ready = repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "cached.pdf",
       pdfPath: "pdf/cached.pdf",
       exportedAt: new Date("2026-07-21T06:00:00.000Z"),
@@ -270,14 +272,14 @@ describe("ReviewService analysis CAS", () => {
       { lock },
     );
 
-    const downloading = pdfService.getOrCreate("review-1");
+    const downloading = pdfService.getOrCreate(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(fileStore.readFile).toHaveBeenCalledWith(
       "review-1",
       "pdf",
       "cached.pdf",
     ));
     let editSettled = false;
-    const editing = service.update("review-1", {
+    const editing = service.update(OWNER_ID, "review-1", {
       expectedRevision: exported.revision,
       report: {
         ...readyEnvelope.report,
@@ -290,7 +292,7 @@ describe("ReviewService analysis CAS", () => {
     await Promise.resolve();
 
     expect(editSettled).toBe(false);
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "exported",
       pdfFilename: "cached.pdf",
     });
@@ -316,17 +318,17 @@ describe("ReviewService analysis CAS", () => {
       { lock },
     );
 
-    const pendingAnalysis = service.analyze("review-1");
+    const pendingAnalysis = service.analyze(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    const analyzingRevision = repository.getById("review-1")!.revision;
+    const analyzingRevision = repository.getById(OWNER_ID, "review-1")!.revision;
 
     await expect(
-      pdfService.getOrCreate("review-1"),
+      pdfService.getOrCreate(OWNER_ID, "review-1"),
     ).rejects.toMatchObject({
       code: "PDF_ANALYSIS_IN_PROGRESS",
       status: 409,
     });
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "analyzing",
       revision: analyzingRevision,
     });
@@ -344,11 +346,11 @@ describe("ReviewService analysis CAS", () => {
       throw new Error("database delete failed");
     });
 
-    await expect(service.delete("review-1")).rejects.toThrow(
+    await expect(service.delete(OWNER_ID, "review-1")).rejects.toThrow(
       "database delete failed",
     );
 
-    expect(repository.getById("review-1")).not.toBeNull();
+    expect(repository.getById(OWNER_ID, "review-1")).not.toBeNull();
     await expect(
       fileStore.readFile("review-1", "images", "page-ai.jpg"),
     ).resolves.toEqual(Buffer.from("ai"));
@@ -359,7 +361,7 @@ describe("ReviewService analysis CAS", () => {
     const analyze = vi.fn(async () => readyEnvelope);
     const service = serviceFor(analyze);
 
-    await expect(service.analyze("review-1")).resolves.toMatchObject({
+    await expect(service.analyze(OWNER_ID, "review-1")).resolves.toMatchObject({
       review: { status: "ready_for_review" },
     });
 
@@ -379,15 +381,15 @@ describe("ReviewService analysis CAS", () => {
     });
     const service = serviceFor(async () => readyEnvelope);
 
-    await expect(service.delete("review-1")).resolves.toBeUndefined();
+    await expect(service.delete(OWNER_ID, "review-1")).resolves.toBeUndefined();
 
-    expect(repository.getById("review-1")).toBeNull();
+    expect(repository.getById(OWNER_ID, "review-1")).toBeNull();
     await expect(
       readdir(path.join(fileStore.rootDirectory, ".trash")),
     ).resolves.toHaveLength(1);
 
     const restarted = serviceFor(async () => readyEnvelope);
-    await restarted.create(config);
+    await restarted.create(OWNER_ID, config);
     await expect(
       readdir(path.join(fileStore.rootDirectory, ".trash")),
     ).resolves.toEqual([]);

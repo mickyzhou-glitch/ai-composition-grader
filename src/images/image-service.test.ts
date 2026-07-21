@@ -14,13 +14,15 @@ import {
   type ImageRepository,
 } from "./image-service";
 
+const OWNER_ID = "local-admin";
+
 class MemoryImageRepository implements ImageRepository {
   images: ReviewImage[] = [];
   revision = 0;
   pdfFilename: string | null = null;
   replaceError: Error | null = null;
 
-  getById(id: string) {
+  getById(_ownerId: string, id: string) {
     return id === "review-1"
       ? {
           images: this.images,
@@ -30,7 +32,7 @@ class MemoryImageRepository implements ImageRepository {
       : null;
   }
 
-  replaceImages(reviewId: string, expectedRevision: number, images: ReviewImageInput[]) {
+  replaceImages(_ownerId: string, reviewId: string, expectedRevision: number, images: ReviewImageInput[]) {
     if (this.replaceError) throw this.replaceError;
     if (expectedRevision !== this.revision) {
       throw Object.assign(new Error("stale revision"), {
@@ -82,7 +84,7 @@ describe("ImageService", () => {
       data,
     }));
 
-    await expect(service.upload("review-1", repository.revision, files)).rejects.toMatchObject({
+    await expect(service.upload(OWNER_ID, "review-1", repository.revision, files)).rejects.toMatchObject({
       code: "IMAGE_COUNT_INVALID",
       status: 400,
     });
@@ -90,7 +92,7 @@ describe("ImageService", () => {
 
   it("拒绝大于 20MB 的单张图片", async () => {
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         {
           originalName: "large.jpg",
           mimeType: "image/jpeg",
@@ -113,7 +115,7 @@ describe("ImageService", () => {
       .toBuffer();
 
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         {
           originalName: "too-many-pixels.png",
           mimeType: "image/png",
@@ -130,7 +132,7 @@ describe("ImageService", () => {
     "拒绝不支持的 MIME %s",
     async (mimeType) => {
       await expect(
-        service.upload("review-1", repository.revision, [
+        service.upload(OWNER_ID, "review-1", repository.revision, [
           { originalName: "spoofed.jpg", mimeType, data: await jpeg() },
         ]),
       ).rejects.toMatchObject({ code: "UNSUPPORTED_IMAGE_TYPE", status: 422 });
@@ -138,7 +140,7 @@ describe("ImageService", () => {
   );
 
   it("不信任文件扩展名但会真实解码图片", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       {
         originalName: "homework.exe",
         mimeType: "image/jpeg",
@@ -162,7 +164,7 @@ describe("ImageService", () => {
 
   it("无法解码时返回 INVALID_IMAGE 而不是 Sharp 原始错误", async () => {
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         {
           originalName: "fake.jpg",
           mimeType: "image/jpeg",
@@ -179,7 +181,7 @@ describe("ImageService", () => {
 
   it("第二张图片处理失败时不遗留第一张的新文件", async () => {
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         { originalName: "valid.jpg", mimeType: "image/jpeg", data: await jpeg() },
         {
           originalName: "broken.jpg",
@@ -195,7 +197,7 @@ describe("ImageService", () => {
   });
 
   it("DB 替换失败时清理新版本并完整保留旧图片文件", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "old.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
     const old = repository.images[0];
@@ -203,7 +205,7 @@ describe("ImageService", () => {
     repository.replaceError = new Error("database failed");
 
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
       ]),
     ).rejects.toThrow("database failed");
@@ -218,7 +220,7 @@ describe("ImageService", () => {
   });
 
   it("重传成功后数据库切换到新版本并清理全部旧文件", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "old.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
     const oldPaths = [
@@ -227,7 +229,7 @@ describe("ImageService", () => {
       repository.images[0].aiPath,
     ];
 
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
 
@@ -241,7 +243,7 @@ describe("ImageService", () => {
   });
 
   it("旧文件清理失败不回滚 DB 切换，并持久排队到同 review 下次操作重试", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "old.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
     const oldFilenames = [
@@ -260,7 +262,7 @@ describe("ImageService", () => {
     );
 
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
       ]),
     ).resolves.toMatchObject({ images: [{ originalName: "new.jpg" }] });
@@ -281,7 +283,7 @@ describe("ImageService", () => {
     deleteSpy.mockRestore();
     store = new ReviewFileStore(path.join(temporaryDirectory, "reviews"));
     service = new ImageService(store, repository);
-    await service.update("review-1", { expectedRevision: repository.revision,
+    await service.update(OWNER_ID, "review-1", { expectedRevision: repository.revision,
       images: [{ id: repository.images[0].id, position: 0 }],
     });
 
@@ -298,7 +300,7 @@ describe("ImageService", () => {
   it("有效 HEIC 在当前 Sharp 缺少解码器时返回 UNSUPPORTED_HEIC", async () => {
     const heicHeader = Buffer.from("00000018667479706865696300000000", "hex");
     await expect(
-      service.upload("review-1", repository.revision, [
+      service.upload(OWNER_ID, "review-1", repository.revision, [
         {
           originalName: "page.heic",
           mimeType: "image/heic",
@@ -318,7 +320,7 @@ describe("ImageService", () => {
         .toBuffer();
 
       await expect(
-        service.upload("review-1", repository.revision, [
+        service.upload(OWNER_ID, "review-1", repository.revision, [
           { originalName: "spoofed.heic", mimeType, data: avif },
         ]),
       ).rejects.toMatchObject({ code: "INVALID_IMAGE", status: 422 });
@@ -327,7 +329,7 @@ describe("ImageService", () => {
   );
 
   it("生成最长边受限的高质量批注底图和带 10x10 网格的 AI 副本", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       {
         originalName: "large.jpg",
         mimeType: "image/jpeg",
@@ -359,7 +361,7 @@ describe("ImageService", () => {
       .withMetadata({ orientation: 6 })
       .toBuffer();
 
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "phone.jpg", mimeType: "image/jpeg", data: oriented },
     ]);
 
@@ -367,7 +369,7 @@ describe("ImageService", () => {
   });
 
   it("按 90 度旋转后应用 0..1 归一化裁剪并重新处理", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       {
         originalName: "page.jpg",
         mimeType: "image/jpeg",
@@ -376,7 +378,7 @@ describe("ImageService", () => {
     ]);
     const current = repository.images[0];
 
-    await service.update("review-1", { expectedRevision: repository.revision,
+    await service.update(OWNER_ID, "review-1", { expectedRevision: repository.revision,
       images: [
         {
           id: current.id,
@@ -398,13 +400,13 @@ describe("ImageService", () => {
   });
 
   it("拒绝越界裁剪和非 90 度倍数旋转", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "page.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
     const id = repository.images[0].id;
 
     await expect(
-      service.update("review-1", { expectedRevision: repository.revision,
+      service.update(OWNER_ID, "review-1", { expectedRevision: repository.revision,
         images: [
           {
             id,
@@ -421,7 +423,7 @@ describe("ImageService", () => {
     repository.revision = 1;
 
     await expect(
-      service.update("review-1", {
+      service.update(OWNER_ID, "review-1", {
         expectedRevision: 0,
         images: [{ id: 999, rotation: 90 }],
       }),
@@ -432,7 +434,7 @@ describe("ImageService", () => {
     repository.pdfFilename = "old.pdf";
     const cleanup = vi.spyOn(store, "queuePdfCleanup");
 
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
 
@@ -441,12 +443,12 @@ describe("ImageService", () => {
 
   it("PATCH 仅调整顺序时保留已有旋转和裁剪", async () => {
     const data = await jpeg();
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "first.jpg", mimeType: "image/jpeg", data },
       { originalName: "second.jpg", mimeType: "image/jpeg", data },
     ]);
 
-    await service.update("review-1", { expectedRevision: repository.revision,
+    await service.update(OWNER_ID, "review-1", { expectedRevision: repository.revision,
       images: [
         { id: repository.images[0].id, position: 1 },
         { id: repository.images[1].id, position: 0 },
@@ -464,7 +466,7 @@ describe("ImageService", () => {
   });
 
   it("update 使用新版本路径，DB 失败时不覆盖旧批注和 AI 文件", async () => {
-    await service.upload("review-1", repository.revision, [
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
       { originalName: "page.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
     const old = repository.images[0];
@@ -476,7 +478,7 @@ describe("ImageService", () => {
     repository.replaceError = new Error("database failed");
 
     await expect(
-      service.update("review-1", { expectedRevision: repository.revision,
+      service.update(OWNER_ID, "review-1", { expectedRevision: repository.revision,
         images: [{ id: old.id, rotation: 90 }],
       }),
     ).rejects.toThrow("database failed");

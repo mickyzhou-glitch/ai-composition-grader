@@ -51,8 +51,9 @@ export interface BrowserFactory {
 }
 
 interface PdfRepository {
-  getById(id: string): ReviewRecord | null;
+  getById(ownerId: string, id: string): ReviewRecord | null;
   markExported(
+    ownerId: string,
     id: string,
     expectedRevision: number,
     input: ExportedPdfInput,
@@ -273,17 +274,19 @@ export class PdfService {
   }
 
   async getOrCreate(
+    ownerId: string,
     reviewId: string,
   ): Promise<{ data: Buffer; filename: string; cached: boolean }> {
     return this.lock.runExclusive(reviewId, () =>
-      this.getOrCreateExclusive(reviewId),
+      this.getOrCreateExclusive(ownerId, reviewId),
     );
   }
 
   private async getOrCreateExclusive(
+    ownerId: string,
     reviewId: string,
   ): Promise<{ data: Buffer; filename: string; cached: boolean }> {
-    const review = this.repository.getById(reviewId);
+    const review = this.repository.getById(ownerId, reviewId);
     if (!review) {
       throw new PdfServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     }
@@ -324,7 +327,7 @@ export class PdfService {
     const data = await this.render(reviewId, review.config.title);
     await this.fileStore.writeFile(reviewId, "pdf", filename, data);
     try {
-      this.repository.markExported(reviewId, review.revision, {
+      this.repository.markExported(ownerId, reviewId, review.revision, {
         pdfFilename: filename,
         pdfPath: `pdf/${filename}`,
         exportedAt: generatedAt,

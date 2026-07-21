@@ -6,9 +6,14 @@ import { PrintReview } from "./PrintReview";
 
 const review: ReviewRecord = {
   id: "review-1",
+  ownerId: "local-admin",
   status: "ready_for_review",
   revision: 4,
   analysisRunId: null,
+  pdfFilename: null,
+  pdfPath: null,
+  pdfRevision: null,
+  exportedAt: null,
   config: {
     title: "为自己鼓掌",
     grade: "上海五四学制六年级",

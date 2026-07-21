@@ -54,10 +54,7 @@ export const reviews = sqliteTable(
   "reviews",
   {
     id: text("id").primaryKey(),
-    ownerId: text("owner_id")
-      .notNull()
-      .default("local-admin")
-      .references(() => users.id),
+    ownerId: text("owner_id").notNull().references(() => users.id),
     status: text("status").$type<ReviewStatus>().notNull(),
     config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
     report: text("report", { mode: "json" }).$type<EvaluationReport>(),

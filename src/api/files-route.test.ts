@@ -1,4 +1,6 @@
 // @vitest-environment node
+
+const OWNER_ID = "local-admin";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,10 +22,10 @@ async function fixture() {
     id: "review-1",
     images: [{ id: 7, originalPath: "images/safe.jpg", annotationPath: "images/marked.jpg", aiPath: "images/ai.jpg" }],
   };
-  const repository = { getById: (id: string) => (id === "review-1" ? record : null) };
+  const repository = { getById: (_ownerId: string, id: string) => (id === "review-1" ? record : null) };
   const reviewer = { analyze: async () => { throw new Error("unused"); } };
   const service = new ReviewService(repository as never, store, reviewer);
-  return createReviewFilesRouteHandlers({ reviewService: service });
+  return createReviewFilesRouteHandlers({ reviewService: service, ownerId: OWNER_ID });
 }
 
 describe("review files route", () => {

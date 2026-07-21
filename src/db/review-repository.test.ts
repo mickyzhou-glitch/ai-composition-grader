@@ -16,6 +16,8 @@ import {
 } from "./review-repository";
 import * as schema from "./schema";
 
+const OWNER_ID = "local-admin";
+
 const config: AssignmentConfig = {
   title: "为自己喝彩",
   grade: "上海五四学制六年级",
@@ -88,7 +90,7 @@ describe("ReviewRepository", () => {
   afterEach(() => sqlite.close());
 
   it("创建并按 id 读取强类型配置和图片", () => {
-    repository.create({
+    repository.create(OWNER_ID, {
       id: "review-1",
       config,
       images: [
@@ -107,7 +109,7 @@ describe("ReviewRepository", () => {
       ],
     });
 
-    const saved = repository.getById("review-1");
+    const saved = repository.getById(OWNER_ID, "review-1");
 
     expect(saved).toMatchObject({
       id: "review-1",
@@ -130,21 +132,21 @@ describe("ReviewRepository", () => {
   });
 
   it("在一个同步读事务内聚合 review 快照", () => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     const database = drizzle(sqlite, { schema });
     const transaction = vi.spyOn(database, "transaction");
     repository = new ReviewRepository(database);
 
-    expect(repository.getById("review-1")?.id).toBe("review-1");
+    expect(repository.getById(OWNER_ID, "review-1")?.id).toBe("review-1");
     expect(transaction).toHaveBeenCalledOnce();
   });
 
   it("SQLite 查询错误保持原错误而不伪装成损坏数据", () => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     sqlite.exec("ALTER TABLE reviews RENAME COLUMN config TO broken_config");
 
     try {
-      repository.getById("review-1");
+      repository.getById(OWNER_ID, "review-1");
       throw new Error("expected getById to fail");
     } catch (error) {
       expect(error).not.toBeInstanceOf(CorruptReviewDataError);
@@ -153,26 +155,26 @@ describe("ReviewRepository", () => {
   });
 
   it("按更新时间倒序列出历史记录", () => {
-    repository.create({ id: "older", config });
-    repository.create({ id: "newer", config });
+    repository.create(OWNER_ID, { id: "older", config });
+    repository.create(OWNER_ID, { id: "newer", config });
 
-    expect(repository.list().map((review) => review.id)).toEqual([
+    expect(repository.list(OWNER_ID).map((review) => review.id)).toEqual([
       "newer",
       "older",
     ]);
   });
 
   it("更新配置即使仍兼容旧报告也清理分析结果并回到 draft", () => {
-    repository.create({ id: "review-1", config });
-    repository.updateReport("review-1", report);
-    repository.replaceAnnotations("review-1", [annotation]);
-    repository.updateStatus("review-1", "ready_for_review");
-    repository.updateConfig("review-1", {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    repository.updateReport(OWNER_ID, "review-1", report);
+    repository.replaceAnnotations(OWNER_ID, "review-1", [annotation]);
+    repository.updateStatus(OWNER_ID, "review-1", "ready_for_review");
+    repository.updateConfig(OWNER_ID, "review-1", {
       ...config,
       title: "我为自己喝彩",
     });
 
-    const updated = repository.getById("review-1");
+    const updated = repository.getById(OWNER_ID, "review-1");
     expect(updated?.report).toBeNull();
     expect(updated?.annotations).toEqual([]);
     expect(updated?.status).toBe("draft");
@@ -184,20 +186,20 @@ describe("ReviewRepository", () => {
   });
 
   it("写入报告时传递 incompleteEvent 评分约束", () => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
 
     expect(() =>
-      repository.updateReport("review-1", report, { incompleteEvent: true }),
+      repository.updateReport(OWNER_ID, "review-1", report, { incompleteEvent: true }),
     ).toThrow(/29/);
   });
 
   it("从 custom 改为 preset 时清理不合规报告与批注并降级为 draft", () => {
-    repository.create({ id: "review-1", config: customConfig });
-    repository.updateReport("review-1", customReport);
-    repository.replaceAnnotations("review-1", [annotation]);
-    repository.updateStatus("review-1", "ready_for_review");
+    repository.create(OWNER_ID, { id: "review-1", config: customConfig });
+    repository.updateReport(OWNER_ID, "review-1", customReport);
+    repository.replaceAnnotations(OWNER_ID, "review-1", [annotation]);
+    repository.updateStatus(OWNER_ID, "review-1", "ready_for_review");
 
-    const updated = repository.updateConfig("review-1", config);
+    const updated = repository.updateConfig(OWNER_ID, "review-1", config);
 
     expect(updated.config.templateType).toBe("preset_self_applause");
     expect(updated.report).toBeNull();
@@ -206,10 +208,10 @@ describe("ReviewRepository", () => {
   });
 
   it("配置切换清理失败时回滚整个事务", () => {
-    repository.create({ id: "review-1", config: customConfig });
-    repository.updateReport("review-1", customReport);
-    repository.replaceAnnotations("review-1", [annotation]);
-    repository.updateStatus("review-1", "ready_for_review");
+    repository.create(OWNER_ID, { id: "review-1", config: customConfig });
+    repository.updateReport(OWNER_ID, "review-1", customReport);
+    repository.replaceAnnotations(OWNER_ID, "review-1", [annotation]);
+    repository.updateStatus(OWNER_ID, "review-1", "ready_for_review");
     sqlite.exec(`
       CREATE TRIGGER reject_annotation_delete
       BEFORE DELETE ON annotations
@@ -218,12 +220,12 @@ describe("ReviewRepository", () => {
       END;
     `);
 
-    expect(() => repository.updateConfig("review-1", config)).toThrow(
+    expect(() => repository.updateConfig(OWNER_ID, "review-1", config)).toThrow(
       /forced annotation delete failure/,
     );
     sqlite.exec("DROP TRIGGER reject_annotation_delete");
 
-    const unchanged = repository.getById("review-1");
+    const unchanged = repository.getById(OWNER_ID, "review-1");
     expect(unchanged?.config).toEqual(customConfig);
     expect(unchanged?.report).toEqual(customReport);
     expect(unchanged?.annotations).toEqual([annotation]);
@@ -240,13 +242,13 @@ describe("ReviewRepository", () => {
       }),
     ],
   ])("读取损坏的 %s JSON 时抛出明确错误", (field, value) => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     sqlite.prepare(`update reviews set ${field} = ? where id = ?`).run(
       value,
       "review-1",
     );
 
-    expect(() => repository.getById("review-1")).toThrow(
+    expect(() => repository.getById(OWNER_ID, "review-1")).toThrow(
       new RegExp(`corrupt.*${field}`, "i"),
     );
   });
@@ -254,51 +256,52 @@ describe("ReviewRepository", () => {
   it.each(["config", "report"])(
     "读取语法损坏的 %s JSON 时指明字段",
     (field) => {
-      repository.create({ id: "review-1", config });
+      repository.create(OWNER_ID, { id: "review-1", config });
       sqlite.prepare(`update reviews set ${field} = ? where id = ?`).run(
         "{not-json",
         "review-1",
       );
 
-      expect(() => repository.getById("review-1")).toThrow(
+      expect(() => repository.getById(OWNER_ID, "review-1")).toThrow(
         new RegExp(`corrupt.*${field}`, "i"),
       );
     },
   );
 
   it("配置更新在事务内清理 falsy 损坏报告", () => {
-    repository.create({ id: "review-1", config: customConfig });
+    repository.create(OWNER_ID, { id: "review-1", config: customConfig });
     sqlite.prepare("update reviews set report = 'false' where id = ?").run(
       "review-1",
     );
 
-    const updated = repository.updateConfig("review-1", config);
+    const updated = repository.updateConfig(OWNER_ID, "review-1", config);
 
     expect(updated.report).toBeNull();
     expect(updated.status).toBe("draft");
   });
 
   it("原子替换一篇作文的全部批注", () => {
-    repository.create({ id: "review-1", config });
-    repository.replaceAnnotations("review-1", [annotation, { ...annotation, x: 0.8 }]);
-    repository.replaceAnnotations("review-1", [
+    repository.create(OWNER_ID, { id: "review-1", config });
+    repository.replaceAnnotations(OWNER_ID, "review-1", [annotation, { ...annotation, x: 0.8 }]);
+    repository.replaceAnnotations(OWNER_ID, "review-1", [
       { ...annotation, category: "highlight", isHighlight: true },
     ]);
 
-    expect(repository.getById("review-1")?.annotations).toEqual([
+    expect(repository.getById(OWNER_ID, "review-1")?.annotations).toEqual([
       { ...annotation, category: "highlight", isHighlight: true },
     ]);
   });
 
   it("替换图片会清理旧分析并回到 draft", () => {
-    repository.create({ id: "review-1", config });
-    repository.updateReport("review-1", report);
-    repository.replaceAnnotations("review-1", [annotation]);
-    repository.updateStatus("review-1", "ready_for_review");
+    repository.create(OWNER_ID, { id: "review-1", config });
+    repository.updateReport(OWNER_ID, "review-1", report);
+    repository.replaceAnnotations(OWNER_ID, "review-1", [annotation]);
+    repository.updateStatus(OWNER_ID, "review-1", "ready_for_review");
 
     const updated = repository.replaceImages(
+      OWNER_ID,
       "review-1",
-      repository.getById("review-1")!.revision,
+      repository.getById(OWNER_ID, "review-1")!.revision,
       [],
     );
 
@@ -306,9 +309,9 @@ describe("ReviewRepository", () => {
   });
 
   it("原子保存可辨认或不可辨认的 AI 分析结果", () => {
-    repository.create({ id: "review-1", config });
-    const firstRun = repository.beginAnalysis("review-1", "run-1", 0);
-    const ready = repository.saveAnalysis("review-1", firstRun, {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const firstRun = repository.beginAnalysis(OWNER_ID, "review-1", "run-1", 0);
+    const ready = repository.saveAnalysis(OWNER_ID, "review-1", firstRun, {
       readable: true,
       pageWarnings: [],
       report,
@@ -321,11 +324,12 @@ describe("ReviewRepository", () => {
     });
 
     const secondRun = repository.beginAnalysis(
+      OWNER_ID,
       "review-1",
       "run-2",
       ready.revision,
     );
-    const unreadable = repository.saveAnalysis("review-1", secondRun, {
+    const unreadable = repository.saveAnalysis(OWNER_ID, "review-1", secondRun, {
       readable: false,
       pageWarnings: ["图片模糊"],
       annotations: [],
@@ -338,10 +342,10 @@ describe("ReviewRepository", () => {
   });
 
   it("导出 PDF 原子绑定内容 revision 并将状态置为 exported", () => {
-    repository.create({ id: "review-1", config });
-    const ready = repository.updateReport("review-1", report);
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
 
-    const exported = repository.markExported("review-1", ready.revision, {
+    const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "作文批改-为自己喝彩-20260721-1405.pdf",
       pdfPath: "pdf/作文批改-为自己喝彩-20260721-1405.pdf",
       exportedAt: new Date("2026-07-21T06:05:00.000Z"),
@@ -358,17 +362,17 @@ describe("ReviewRepository", () => {
   });
 
   it("报告或批注改动会递增 revision、清理 PDF 元数据并回到待复核", () => {
-    repository.create({ id: "review-1", config });
-    const ready = repository.updateReport("review-1", report);
-    const exported = repository.markExported("review-1", ready.revision, {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old.pdf",
       pdfPath: "pdf/old.pdf",
       exportedAt: new Date("2026-07-21T06:05:00.000Z"),
     });
 
-    const annotationChanged = repository.replaceAnnotations("review-1", [annotation]);
+    const annotationChanged = repository.replaceAnnotations(OWNER_ID, "review-1", [annotation]);
     expect(annotationChanged).toEqual([annotation]);
-    const afterAnnotations = repository.getById("review-1");
+    const afterAnnotations = repository.getById(OWNER_ID, "review-1");
     expect(afterAnnotations).toMatchObject({
       status: "ready_for_review",
       revision: exported.revision + 1,
@@ -378,12 +382,12 @@ describe("ReviewRepository", () => {
       exportedAt: null,
     });
 
-    const reExported = repository.markExported("review-1", afterAnnotations!.revision, {
+    const reExported = repository.markExported(OWNER_ID, "review-1", afterAnnotations!.revision, {
       pdfFilename: "second.pdf",
       pdfPath: "pdf/second.pdf",
       exportedAt: new Date("2026-07-21T06:06:00.000Z"),
     });
-    const reportChanged = repository.updateReport("review-1", {
+    const reportChanged = repository.updateReport(OWNER_ID, "review-1", {
       ...report,
       personalizedComment: "新总评",
     });
@@ -398,15 +402,15 @@ describe("ReviewRepository", () => {
   });
 
   it("配置或图片改动清理 PDF 元数据并回到 draft", () => {
-    repository.create({ id: "review-1", config });
-    const ready = repository.updateReport("review-1", report);
-    const exported = repository.markExported("review-1", ready.revision, {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old.pdf",
       pdfPath: "pdf/old.pdf",
       exportedAt: new Date("2026-07-21T06:05:00.000Z"),
     });
 
-    const configChanged = repository.updateConfig("review-1", {
+    const configChanged = repository.updateConfig(OWNER_ID, "review-1", {
       ...config,
       title: "新题目",
     });
@@ -419,10 +423,11 @@ describe("ReviewRepository", () => {
       exportedAt: null,
     });
 
-    repository.updateReport("review-1", report);
+    repository.updateReport(OWNER_ID, "review-1", report);
     const secondExport = repository.markExported(
+      OWNER_ID,
       "review-1",
-      repository.getById("review-1")!.revision,
+      repository.getById(OWNER_ID, "review-1")!.revision,
       {
         pdfFilename: "second.pdf",
         pdfPath: "pdf/second.pdf",
@@ -430,6 +435,7 @@ describe("ReviewRepository", () => {
       },
     );
     const imagesChanged = repository.replaceImages(
+      OWNER_ID,
       "review-1",
       secondExport.revision,
       [],
@@ -445,24 +451,24 @@ describe("ReviewRepository", () => {
   });
 
   it("第二次分析用新 runId 使第一次结果失效", () => {
-    repository.create({ id: "review-1", config });
-    const first = repository.beginAnalysis("review-1", "run-first", 0);
-    const second = repository.beginAnalysis("review-1", "run-second", 0);
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const first = repository.beginAnalysis(OWNER_ID, "review-1", "run-first", 0);
+    const second = repository.beginAnalysis(OWNER_ID, "review-1", "run-second", 0);
 
     expect(() =>
-      repository.saveAnalysis("review-1", first, {
+      repository.saveAnalysis(OWNER_ID, "review-1", first, {
         readable: true,
         pageWarnings: [],
         report,
         annotations: [],
       }),
     ).toThrow(expect.objectContaining({ code: "ANALYSIS_CONFLICT", status: 409 }));
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "analyzing",
       analysisRunId: "run-second",
     });
     expect(
-      repository.saveAnalysis("review-1", second, {
+      repository.saveAnalysis(OWNER_ID, "review-1", second, {
         readable: true,
         pageWarnings: [],
         report,
@@ -472,10 +478,10 @@ describe("ReviewRepository", () => {
   });
 
   it("配置变化递增 revision 并使在途分析无法保存或标记失败", () => {
-    repository.create({ id: "review-1", config });
-    const run = repository.beginAnalysis("review-1", "run-old", 0);
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const run = repository.beginAnalysis(OWNER_ID, "review-1", "run-old", 0);
 
-    const changed = repository.updateTeacherEdits("review-1", {
+    const changed = repository.updateTeacherEdits(OWNER_ID, "review-1", {
       expectedRevision: 0,
       config: { ...config, title: "新题目" },
     });
@@ -485,23 +491,23 @@ describe("ReviewRepository", () => {
       analysisRunId: null,
       status: "draft",
     });
-    expect(repository.failAnalysis("review-1", run)).toBe(false);
+    expect(repository.failAnalysis(OWNER_ID, "review-1", run)).toBe(false);
     expect(() =>
-      repository.saveAnalysis("review-1", run, {
+      repository.saveAnalysis(OWNER_ID, "review-1", run, {
         readable: true,
         pageWarnings: [],
         report,
         annotations: [],
       }),
     ).toThrow(expect.objectContaining({ code: "ANALYSIS_CONFLICT" }));
-    expect(repository.getById("review-1")?.status).toBe("draft");
+    expect(repository.getById(OWNER_ID, "review-1")?.status).toBe("draft");
   });
 
   it("图片变化递增 revision、清理 runId 并回到 draft", () => {
-    repository.create({ id: "review-1", config });
-    repository.beginAnalysis("review-1", "run-old", 0);
+    repository.create(OWNER_ID, { id: "review-1", config });
+    repository.beginAnalysis(OWNER_ID, "review-1", "run-old", 0);
 
-    const changed = repository.replaceImages("review-1", 0, []);
+    const changed = repository.replaceImages(OWNER_ID, "review-1", 0, []);
 
     expect(changed).toMatchObject({
       revision: 1,
@@ -511,7 +517,7 @@ describe("ReviewRepository", () => {
   });
 
   it("旧 revision 替换图片返回 409 且保留当前图片", () => {
-    repository.create({
+    repository.create(OWNER_ID, {
       id: "review-1",
       config,
       images: [{
@@ -527,22 +533,22 @@ describe("ReviewRepository", () => {
         crop: null,
       }],
     });
-    repository.updateTeacherEdits("review-1", {
+    repository.updateTeacherEdits(OWNER_ID, "review-1", {
       expectedRevision: 0,
       config: { ...config, title: "另一标签页已更新" },
     });
 
-    expect(() => repository.replaceImages("review-1", 0, [])).toThrow(
+    expect(() => repository.replaceImages(OWNER_ID, "review-1", 0, [])).toThrow(
       expect.objectContaining({ code: "REVISION_CONFLICT", status: 409 }),
     );
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       revision: 1,
       images: [{ originalName: "current.jpg" }],
     });
   });
 
   it("教师编辑 report/annotations 原子提交并由仓储置为 ready", () => {
-    repository.create({ id: "review-1", config });
+    repository.create(OWNER_ID, { id: "review-1", config });
     sqlite.exec(`
       CREATE TRIGGER reject_teacher_annotation
       BEFORE INSERT ON annotations
@@ -552,14 +558,14 @@ describe("ReviewRepository", () => {
     `);
 
     expect(() =>
-      repository.updateTeacherEdits("review-1", {
+      repository.updateTeacherEdits(OWNER_ID, "review-1", {
         expectedRevision: 0,
         config: { ...config, title: "不应半保存" },
         report,
         annotations: [annotation],
       }),
     ).toThrow(/forced teacher edit failure/);
-    expect(repository.getById("review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "draft",
       report: null,
       config,
@@ -568,7 +574,7 @@ describe("ReviewRepository", () => {
 
     sqlite.exec("DROP TRIGGER reject_teacher_annotation");
     expect(
-      repository.updateTeacherEdits("review-1", {
+      repository.updateTeacherEdits(OWNER_ID, "review-1", {
         expectedRevision: 0,
         report,
         annotations: [annotation],
@@ -577,7 +583,7 @@ describe("ReviewRepository", () => {
   });
 
   it("删除 review 并级联删除图片和批注记录", () => {
-    repository.create({
+    repository.create(OWNER_ID, {
       id: "review-1",
       config,
       images: [{
@@ -593,16 +599,18 @@ describe("ReviewRepository", () => {
         crop: null,
       }],
     });
-    repository.replaceAnnotations("review-1", [annotation]);
+    repository.replaceAnnotations(OWNER_ID, "review-1", [annotation]);
 
-    expect(repository.delete("review-1")).toBe(true);
-    expect(repository.getById("review-1")).toBeNull();
+    expect(repository.delete(OWNER_ID, "review-1")).toBe(true);
+    expect(repository.getById(OWNER_ID, "review-1")).toBeNull();
     expect(
       sqlite.prepare("select count(*) as count from review_images").get(),
     ).toEqual({ count: 0 });
     expect(
       sqlite.prepare("select count(*) as count from annotations").get(),
     ).toEqual({ count: 0 });
-    expect(repository.delete("missing")).toBe(false);
+    expect(() => repository.delete(OWNER_ID, "missing")).toThrow(
+      /Review not found/,
+    );
   });
 });
