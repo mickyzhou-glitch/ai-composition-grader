@@ -242,6 +242,9 @@ function snapshotSafeMetadata(
         throw new InvalidSecurityMetadataError();
       }
       ancestors.add(value);
+      if (Reflect.ownKeys(value).length > MAX_METADATA_NODES) {
+        throw new InvalidSecurityMetadataError();
+      }
       const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
       if (
         !Number.isSafeInteger(length) ||
@@ -279,6 +282,9 @@ function snapshotSafeMetadata(
     }
     if (ancestors.has(value)) throw new InvalidSecurityMetadataError();
     ancestors.add(value);
+    if (Reflect.ownKeys(value).length > MAX_METADATA_NODES) {
+      throw new InvalidSecurityMetadataError();
+    }
     const descriptors = Object.getOwnPropertyDescriptors(value);
     const snapshot: Record<string, unknown> = {};
     for (const key of Reflect.ownKeys(descriptors)) {
@@ -427,7 +433,7 @@ export class AuthRepository {
   ): UserRecord {
     assertPasswordHash(passwordHash);
     assertBoolean(mustChangePassword, "mustChangePassword");
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       this.database.transaction((transaction) => {
         const update = transaction
@@ -447,7 +453,7 @@ export class AuthRepository {
   }
 
   disableUser(userId: string): UserRecord {
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       this.database.transaction((transaction) => {
         const update = transaction
@@ -467,7 +473,7 @@ export class AuthRepository {
   }
 
   restoreUser(userId: string): UserRecord {
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       const update = this.database
         .update(users)
@@ -488,7 +494,7 @@ export class AuthRepository {
     }
     assertSha256Hash(tokenHash, "Session token hash");
     const expiresAt = snapshotDate(inputExpiresAt, "Session expiration");
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     const id = this.createId();
     try {
       this.database.transaction((transaction) => {
@@ -556,7 +562,7 @@ export class AuthRepository {
 
   findValidSessionByTokenHash(tokenHash: string): SessionRecord | null {
     if (typeof tokenHash !== "string" || !SHA_256_HEX_PATTERN.test(tokenHash)) return null;
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       const row = this.database
         .select({
@@ -597,8 +603,8 @@ export class AuthRepository {
   }
 
   refreshSession(sessionId: string): SessionRecord {
-    const timestamp = this.now();
-    const expiresAt = new Date(timestamp.valueOf() + SESSION_EXTENSION_MS);
+    const timestamp = snapshotDate(this.now(), "Current time");
+    const expiresAt = new Date(timestamp.getTime() + SESSION_EXTENSION_MS);
     return this.safely(() => {
       this.database.transaction((transaction) => {
         const active = transaction
@@ -626,7 +632,7 @@ export class AuthRepository {
   }
 
   revokeSession(sessionId: string): boolean {
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     return this.safely(
       () =>
         this.database
@@ -638,7 +644,7 @@ export class AuthRepository {
   }
 
   revokeAllUserSessions(userId: string): number {
-    const timestamp = this.now();
+    const timestamp = snapshotDate(this.now(), "Current time");
     return this.safely(
       () =>
         this.database
@@ -652,7 +658,7 @@ export class AuthRepository {
   recordLoginAttempt(input: LoginAttemptInput): LoginAttemptRecord {
     const { normalizedUsername, ipHash, succeeded } =
       snapshotLoginAttemptInput(input);
-    const attemptedAt = this.now();
+    const attemptedAt = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       const result = this.database
         .insert(loginAttempts)
@@ -697,7 +703,8 @@ export class AuthRepository {
     if (typeof username !== "string") throw new TypeError("Username must be a string");
     const normalizedUsername = normalizeUsername(username);
     assertSha256Hash(ipHash, "IP hash");
-    const cutoff = new Date(this.now().valueOf() - LOGIN_FAILURE_WINDOW_MS);
+    const timestamp = snapshotDate(this.now(), "Current time");
+    const cutoff = new Date(timestamp.getTime() - LOGIN_FAILURE_WINDOW_MS);
     return this.safely(() => {
       const usernameFailures = this.countConsecutiveFailures(
         eq(loginAttempts.normalizedUsername, normalizedUsername),
@@ -721,8 +728,8 @@ export class AuthRepository {
   ): RecordedLoginAttemptStatus {
     const { normalizedUsername, ipHash, succeeded } =
       snapshotLoginAttemptInput(input);
-    const attemptedAt = this.now();
-    const cutoff = new Date(attemptedAt.valueOf() - LOGIN_FAILURE_WINDOW_MS);
+    const attemptedAt = snapshotDate(this.now(), "Current time");
+    const cutoff = new Date(attemptedAt.getTime() - LOGIN_FAILURE_WINDOW_MS);
 
     return this.safely(() =>
       this.database.transaction((transaction) => {
@@ -789,7 +796,7 @@ export class AuthRepository {
     const metadata = snapshotSafeMetadata(
       inputMetadata as Record<string, unknown>,
     );
-    const createdAt = this.now();
+    const createdAt = snapshotDate(this.now(), "Current time");
     return this.safely(() => {
       const result = this.database
         .insert(securityEvents)

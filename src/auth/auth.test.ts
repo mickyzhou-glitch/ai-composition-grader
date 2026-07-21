@@ -652,6 +652,36 @@ describe("AuthRepository", () => {
     }
   });
 
+  it.each(["object", "array"] as const)(
+    "rejects oversized %s metadata before reading property descriptors",
+    (kind) => {
+      const target: Record<string, unknown> | unknown[] =
+        kind === "array" ? [] : {};
+      for (let index = 0; index < 513; index += 1) {
+        Object.defineProperty(target, `field${index}`, {
+          enumerable: kind === "object",
+          value: index,
+        });
+      }
+      let descriptorReads = 0;
+      const metadata = new Proxy(target, {
+        getOwnPropertyDescriptor: (proxyTarget, key) => {
+          descriptorReads += 1;
+          return Reflect.getOwnPropertyDescriptor(proxyTarget, key);
+        },
+      });
+
+      expect(() =>
+        repository.recordSecurityEvent({
+          userId: null,
+          eventType: "metadata_rejected",
+          metadata: metadata as Record<string, unknown>,
+        }),
+      ).toThrow(InvalidSecurityMetadataError);
+      expect(descriptorReads).toBe(0);
+    },
+  );
+
   it.each([
     "",
     "   ",
@@ -792,6 +822,68 @@ describe("AuthRepository", () => {
 
     expect(() => closedRepository.findUserByUsername("teacher.one")).toThrow(
       AuthStorageError,
+    );
+  });
+
+  class MisleadingDate extends Date {
+    override getTime(): number {
+      return Date.prototype.getTime.call(this) + 2 * 60 * 60 * 1000;
+    }
+
+    override valueOf(): number {
+      return Date.prototype.getTime.call(this) + 2 * 60 * 60 * 1000;
+    }
+  }
+
+  function repositoryWithMisleadingClock() {
+    return new AuthRepository(opened.db, {
+      now: () => new MisleadingDate(now),
+      randomUUID: () => `misleading-clock-${nextId++}`,
+    });
+  }
+
+  it("stores the clock's internal time instead of overridden date methods", () => {
+    const clockRepository = repositoryWithMisleadingClock();
+    const ipHash = hashSourceIp("198.51.100.30", "audit-secret");
+
+    const attempt = clockRepository.recordLoginAttempt({
+      username: "clock.user",
+      ipHash,
+      succeeded: false,
+    });
+
+    expect(attempt.attemptedAt).toEqual(now);
+    expect(
+      opened.sqlite.prepare("SELECT attempted_at FROM login_attempts").get(),
+    ).toEqual({ attempted_at: now.valueOf() });
+  });
+
+  it("uses the clock's internal time for login failure cutoffs", () => {
+    const ipHash = hashSourceIp("198.51.100.31", "audit-secret");
+    repository.recordLoginAttempt({
+      username: "clock.user",
+      ipHash,
+      succeeded: false,
+    });
+
+    expect(
+      repositoryWithMisleadingClock().getLoginFailureStatus({
+        username: "clock.user",
+        ipHash,
+      }),
+    ).toMatchObject({ usernameFailures: 1, ipFailures: 1 });
+  });
+
+  it("uses the clock's internal time when refreshing a session", async () => {
+    const user = await createUser("clock.user");
+    const session = createSession(user.id);
+    now = new Date(now.valueOf() + 30 * 60 * 1000);
+
+    const refreshed = repositoryWithMisleadingClock().refreshSession(session.record.id);
+
+    expect(refreshed.lastSeenAt).toEqual(now);
+    expect(refreshed.expiresAt).toEqual(
+      new Date(now.valueOf() + 12 * 60 * 60 * 1000),
     );
   });
 });
