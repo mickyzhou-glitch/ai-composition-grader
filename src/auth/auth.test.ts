@@ -181,6 +181,34 @@ describe("AuthRepository", () => {
     ).toThrow(TypeError);
   });
 
+  it("rejects non-boolean mustChangePassword values before they reach SQLite", async () => {
+    const passwordHash = await hashPassword("password");
+    for (const value of ["true", 1]) {
+      expect(() =>
+        repository.createUser({
+          username: "invalid.boolean",
+          passwordHash,
+          role: "teacher",
+          mustChangePassword: value as unknown as boolean,
+        }),
+      ).toThrow(TypeError);
+    }
+    expect(repository.findUserByUsername("invalid.boolean")).toBeNull();
+
+    const user = await createUser("valid.boolean");
+    const session = createSession(user.id);
+    expect(() =>
+      repository.updatePasswordHash(
+        user.id,
+        passwordHash,
+        "false" as unknown as boolean,
+      ),
+    ).toThrow(TypeError);
+    expect(
+      repository.findValidSessionByTokenHash(hashSessionToken(session.rawToken)),
+    ).not.toBeNull();
+  });
+
   it("stores only token hashes and returns a safe user view for valid sessions", async () => {
     const user = await createUser();
     const { rawToken, record } = createSession(user.id);
@@ -378,6 +406,36 @@ describe("AuthRepository", () => {
     });
   });
 
+  it("atomically records a login attempt and returns the post-write lock status", () => {
+    const ipHash = hashSourceIp("203.0.113.11", "audit-secret");
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      const result = repository.recordLoginAttemptAndGetStatus({
+        username: "teacher.atomic",
+        ipHash,
+        succeeded: false,
+      });
+      expect(result.attempt.normalizedUsername).toBe("teacher.atomic");
+      expect(result.status).toEqual({
+        usernameFailures: attempt,
+        ipFailures: attempt,
+        usernameLocked: attempt === 5,
+        ipLocked: attempt === 5,
+      });
+    }
+
+    const reset = repository.recordLoginAttemptAndGetStatus({
+      username: "teacher.atomic",
+      ipHash,
+      succeeded: true,
+    });
+    expect(reset.status).toEqual({
+      usernameFailures: 0,
+      ipFailures: 0,
+      usernameLocked: false,
+      ipLocked: false,
+    });
+  });
+
   it("stores normalized usernames and only HMAC IP values for login attempts", () => {
     const rawIp = "198.51.100.20";
     const ipHash = hashSourceIp(rawIp, "audit-secret");
@@ -394,6 +452,22 @@ describe("AuthRepository", () => {
     expect(stored.normalized_username).toBe("unknown.user");
     expect(stored.ip_hash).toBe(ipHash);
     expect(JSON.stringify(stored)).not.toContain(rawIp);
+  });
+
+  it("rejects non-boolean login attempt outcomes before they reach SQLite", () => {
+    const ipHash = hashSourceIp("198.51.100.21", "audit-secret");
+    for (const value of ["false", 0]) {
+      expect(() =>
+        repository.recordLoginAttempt({
+          username: "unknown.user",
+          ipHash,
+          succeeded: value as unknown as boolean,
+        }),
+      ).toThrow(TypeError);
+    }
+    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM login_attempts").get()).toEqual(
+      { count: 0 },
+    );
   });
 
   it.each([
@@ -417,6 +491,76 @@ describe("AuthRepository", () => {
         metadata,
       }),
     ).toThrow(InvalidSecurityMetadataError);
+  });
+
+  it.each([
+    { "ｅｓｓａｙContent": "full essay" },
+    { nested: { "𝖊ssayContent": "full essay" } },
+    { nested: { "еssayContent": "full essay" } },
+    { "": "empty key" },
+    { [`a${"b".repeat(64)}`]: "overlong key" },
+    { "unsafe$key": "symbol key" },
+  ])("rejects unsafe metadata keys: %j", (metadata) => {
+    expect(() =>
+      repository.recordSecurityEvent({
+        userId: null,
+        eventType: "metadata_rejected",
+        metadata,
+      }),
+    ).toThrow(InvalidSecurityMetadataError);
+  });
+
+  it("rejects metadata arrays that exceed the safe length budget", () => {
+    const sparse = new Array<unknown>(101);
+    expect(() =>
+      repository.recordSecurityEvent({
+        userId: null,
+        eventType: "metadata_rejected",
+        metadata: { items: sparse },
+      }),
+    ).toThrow(InvalidSecurityMetadataError);
+  });
+
+  it("rejects metadata that exceeds depth, node, or string budgets", () => {
+    let deeplyNested: Record<string, unknown> = { value: true };
+    for (let depth = 0; depth < 9; depth += 1) {
+      deeplyNested = { nested: deeplyNested };
+    }
+    const tooManyNodes = Object.fromEntries(
+      Array.from({ length: 513 }, (_, index) => [`field${index}`, index]),
+    );
+
+    for (const metadata of [
+      deeplyNested,
+      tooManyNodes,
+      { message: "x".repeat(16_385) },
+    ]) {
+      expect(() =>
+        repository.recordSecurityEvent({
+          userId: null,
+          eventType: "metadata_rejected",
+          metadata,
+        }),
+      ).toThrow(InvalidSecurityMetadataError);
+    }
+  });
+
+  it.each([
+    "",
+    "   ",
+    "password=secret",
+    "data:image/png;base64,AAAA",
+    "登录失败",
+    "Login_Failed",
+    `a${"b".repeat(64)}`,
+  ])("rejects an unsafe security event type: %j", (eventType) => {
+    expect(() =>
+      repository.recordSecurityEvent({
+        userId: null,
+        eventType,
+        metadata: { reason: "validation" },
+      }),
+    ).toThrow(TypeError);
   });
 
   it("stores ordinary JSON security event metadata", async () => {

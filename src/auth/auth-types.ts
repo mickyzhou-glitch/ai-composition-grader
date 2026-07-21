@@ -63,6 +63,11 @@ export interface LoginFailureStatus {
   ipLocked: boolean;
 }
 
+export interface RecordedLoginAttemptStatus {
+  attempt: LoginAttemptRecord;
+  status: LoginFailureStatus;
+}
+
 export interface SecurityEventInput {
   userId: string | null;
   eventType: string;

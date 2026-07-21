@@ -12,6 +12,7 @@ import type {
   LoginAttemptRecord,
   LoginFailureQuery,
   LoginFailureStatus,
+  RecordedLoginAttemptStatus,
   SecurityEventInput,
   SecurityEventRecord,
   SessionRecord,
@@ -24,6 +25,12 @@ const SESSION_EXTENSION_MS = 12 * 60 * 60 * 1000;
 const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_FAILURE_LIMIT = 5;
 const SHA_256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const SECURITY_EVENT_TYPE_PATTERN = /^[a-z][a-z0-9_.-]{0,63}$/;
+const SECURITY_METADATA_KEY_PATTERN = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/;
+const MAX_METADATA_ARRAY_LENGTH = 100;
+const MAX_METADATA_DEPTH = 8;
+const MAX_METADATA_NODES = 512;
+const MAX_METADATA_STRING_LENGTH = 16_384;
 const SENSITIVE_METADATA_KEYS = new Set([
   "password",
   "passwordhash",
@@ -154,14 +161,28 @@ function assertValidDate(value: Date, label: string): void {
   }
 }
 
+function assertBoolean(value: unknown, label: string): asserts value is boolean {
+  if (typeof value !== "boolean") throw new TypeError(`${label} must be a boolean`);
+}
+
 function snapshotSafeMetadata(
   metadata: Record<string, unknown>,
 ): Record<string, unknown> {
   const ancestors = new Set<object>();
+  let nodes = 0;
+  let stringLength = 0;
 
-  const clone = (value: unknown): unknown => {
+  const clone = (value: unknown, depth: number): unknown => {
+    nodes += 1;
+    if (nodes > MAX_METADATA_NODES || depth > MAX_METADATA_DEPTH) {
+      throw new InvalidSecurityMetadataError();
+    }
     if (typeof value === "string") {
       if (/^data:/i.test(value.trim())) throw new InvalidSecurityMetadataError();
+      stringLength += value.length;
+      if (stringLength > MAX_METADATA_STRING_LENGTH) {
+        throw new InvalidSecurityMetadataError();
+      }
       return value;
     }
     if (value === null || typeof value === "boolean" || typeof value === "number") {
@@ -176,11 +197,15 @@ function snapshotSafeMetadata(
         throw new InvalidSecurityMetadataError();
       }
       ancestors.add(value);
-      const descriptors = Object.getOwnPropertyDescriptors(value);
       const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
-      if (!Number.isSafeInteger(length) || length < 0) {
+      if (
+        !Number.isSafeInteger(length) ||
+        length < 0 ||
+        length > MAX_METADATA_ARRAY_LENGTH
+      ) {
         throw new InvalidSecurityMetadataError();
       }
+      const descriptors = Object.getOwnPropertyDescriptors(value);
       const snapshot: unknown[] = [];
       for (let index = 0; index < length; index += 1) {
         const descriptor = descriptors[String(index)];
@@ -189,7 +214,7 @@ function snapshotSafeMetadata(
           continue;
         }
         if (!("value" in descriptor)) throw new InvalidSecurityMetadataError();
-        snapshot.push(clone(descriptor.value));
+        snapshot.push(clone(descriptor.value, depth + 1));
       }
       for (const key of Reflect.ownKeys(descriptors)) {
         if (typeof key !== "string") throw new InvalidSecurityMetadataError();
@@ -214,11 +239,14 @@ function snapshotSafeMetadata(
     for (const key of Reflect.ownKeys(descriptors)) {
       if (typeof key !== "string") throw new InvalidSecurityMetadataError();
       const descriptor = descriptors[key];
+      if (!SECURITY_METADATA_KEY_PATTERN.test(key)) {
+        throw new InvalidSecurityMetadataError();
+      }
       if (!descriptor.enumerable) continue;
       if (!("value" in descriptor)) {
         throw new InvalidSecurityMetadataError();
       }
-      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, "");
+      const normalizedKey = key.toLowerCase().replace(/[._-]/g, "");
       if (
         SENSITIVE_METADATA_KEYS.has(normalizedKey) ||
         normalizedKey.includes("essay") ||
@@ -230,7 +258,7 @@ function snapshotSafeMetadata(
       Object.defineProperty(snapshot, key, {
         configurable: true,
         enumerable: true,
-        value: clone(descriptor.value),
+        value: clone(descriptor.value, depth + 1),
         writable: true,
       });
     }
@@ -239,7 +267,7 @@ function snapshotSafeMetadata(
   };
 
   try {
-    const snapshot = clone(metadata);
+    const snapshot = clone(metadata, 0);
     if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) {
       throw new InvalidSecurityMetadataError();
     }
@@ -283,6 +311,9 @@ export class AuthRepository {
     const username = normalizeUsername(input.username);
     assertRole(input.role);
     assertPasswordHash(input.passwordHash);
+    if (input.mustChangePassword !== undefined) {
+      assertBoolean(input.mustChangePassword, "mustChangePassword");
+    }
     const timestamp = this.now();
     assertValidDate(timestamp, "Current time");
     const id = this.createId();
@@ -336,6 +367,7 @@ export class AuthRepository {
     mustChangePassword = false,
   ): UserRecord {
     assertPasswordHash(passwordHash);
+    assertBoolean(mustChangePassword, "mustChangePassword");
     const timestamp = this.now();
     return this.safely(() => {
       this.database.transaction((transaction) => {
@@ -555,6 +587,7 @@ export class AuthRepository {
   recordLoginAttempt(input: LoginAttemptInput): LoginAttemptRecord {
     const normalizedUsername = normalizeUsername(input.username);
     assertSha256Hash(input.ipHash, "IP hash");
+    assertBoolean(input.succeeded, "succeeded");
     const attemptedAt = this.now();
     return this.safely(() => {
       const result = this.database
@@ -616,9 +649,70 @@ export class AuthRepository {
     });
   }
 
+  recordLoginAttemptAndGetStatus(
+    input: LoginAttemptInput,
+  ): RecordedLoginAttemptStatus {
+    const normalizedUsername = normalizeUsername(input.username);
+    assertSha256Hash(input.ipHash, "IP hash");
+    assertBoolean(input.succeeded, "succeeded");
+    const attemptedAt = this.now();
+    const cutoff = new Date(attemptedAt.valueOf() - LOGIN_FAILURE_WINDOW_MS);
+
+    return this.safely(() =>
+      this.database.transaction((transaction) => {
+        const inserted = transaction
+          .insert(loginAttempts)
+          .values({
+            normalizedUsername,
+            ipHash: input.ipHash,
+            succeeded: input.succeeded,
+            attemptedAt,
+          })
+          .run();
+        const countFailures = (condition: ReturnType<typeof eq>): number => {
+          const attempts = transaction
+            .select({ succeeded: loginAttempts.succeeded })
+            .from(loginAttempts)
+            .where(and(condition, gte(loginAttempts.attemptedAt, cutoff)))
+            .orderBy(desc(loginAttempts.attemptedAt), desc(loginAttempts.id))
+            .all();
+          let failures = 0;
+          for (const attempt of attempts) {
+            if (attempt.succeeded) break;
+            failures += 1;
+          }
+          return failures;
+        };
+        const usernameFailures = countFailures(
+          eq(loginAttempts.normalizedUsername, normalizedUsername),
+        );
+        const ipFailures = countFailures(eq(loginAttempts.ipHash, input.ipHash));
+
+        return {
+          attempt: {
+            id: Number(inserted.lastInsertRowid),
+            normalizedUsername,
+            ipHash: input.ipHash,
+            succeeded: input.succeeded,
+            attemptedAt,
+          },
+          status: {
+            usernameFailures,
+            ipFailures,
+            usernameLocked: usernameFailures >= LOGIN_FAILURE_LIMIT,
+            ipLocked: ipFailures >= LOGIN_FAILURE_LIMIT,
+          },
+        };
+      }),
+    );
+  }
+
   recordSecurityEvent(input: SecurityEventInput): SecurityEventRecord {
-    if (typeof input.eventType !== "string" || input.eventType.trim().length === 0) {
-      throw new TypeError("Security event type must not be empty");
+    if (
+      typeof input.eventType !== "string" ||
+      !SECURITY_EVENT_TYPE_PATTERN.test(input.eventType)
+    ) {
+      throw new TypeError("Security event type must use the safe ASCII format");
     }
     const metadata = snapshotSafeMetadata(input.metadata);
     const createdAt = this.now();
@@ -651,6 +745,7 @@ export type {
   LoginAttemptRecord,
   LoginFailureQuery,
   LoginFailureStatus,
+  RecordedLoginAttemptStatus,
   SecurityEventInput,
   SecurityEventRecord,
   SessionRecord,
