@@ -31,10 +31,14 @@ function createApplicationServices(): ApplicationServices {
   const reviewRepository = new ReviewRepository(database.db);
   const fileStore = new ReviewFileStore();
   const reviewLock = new InMemoryReviewLock();
-  const retentionService = new RetentionService(reviewRepository, fileStore);
+  const authRepository = new AuthRepository(database.db);
+  const retentionService = new RetentionService(reviewRepository, fileStore, {
+    lock: reviewLock,
+    audit: authRepository,
+  });
   const aiReviewer = new OpenAIReviewAdapter(settingsService);
   return {
-    authService: new AuthService(new AuthRepository(database.db)),
+    authService: new AuthService(authRepository),
     settingsService,
     imageService: new ImageService(fileStore, reviewRepository, {
       lock: reviewLock,

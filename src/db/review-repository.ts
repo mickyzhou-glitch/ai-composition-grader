@@ -863,6 +863,15 @@ export class ReviewRepository {
     });
   }
 
+  /** 保留期状态机用：即使已标记删除也确认该 owner 的记录是否仍存在。 */
+  existsOwned(ownerId: string, id: string): boolean {
+    return this.database
+      .select({ id: reviews.id })
+      .from(reviews)
+      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId)))
+      .get() !== undefined;
+  }
+
   /** Internal cleanup probe; never exposed to request handlers. */
   exists(id: string): boolean {
     return this.database

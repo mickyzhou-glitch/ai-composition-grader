@@ -1,9 +1,17 @@
 import type { ReviewRepository, RetentionCandidate } from "../db/review-repository";
 import { ReviewNotFoundError } from "../db/review-repository";
+import type { SecurityEventInput } from "../auth/auth-types";
+import { InMemoryReviewLock, type ReviewLock } from "../services/review-lock";
 import type { ReviewFileStore } from "../storage/review-file-store";
+
+interface RetentionAudit {
+  recordSecurityEvent(input: SecurityEventInput): unknown;
+}
 
 export interface RetentionServiceOptions {
   now?: () => Date;
+  lock?: ReviewLock;
+  audit?: RetentionAudit;
 }
 export interface RetentionInspectItem {
   id: string;
@@ -38,6 +46,8 @@ function safeErrorCode(error: unknown): string {
  */
 export class RetentionService {
   private readonly now: () => Date;
+  private readonly lock: ReviewLock;
+  private readonly audit?: RetentionAudit;
 
   constructor(
     private readonly repository: ReviewRepository,
@@ -45,6 +55,8 @@ export class RetentionService {
     options: RetentionServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
+    this.lock = options.lock ?? new InMemoryReviewLock();
+    this.audit = options.audit;
   }
 
   inspect(): RetentionInspectItem[] {
@@ -66,7 +78,9 @@ export class RetentionService {
       errors: [],
     };
     for (const candidate of candidates) {
-      const outcome = await this.processCandidate(candidate, false);
+      const outcome = await this.lock.runExclusive(candidate.id, () =>
+        this.processCandidate(candidate, false),
+      );
       if (outcome.claimed) result.claimed += 1;
       if (outcome.deleted) result.deleted += 1;
       if (!outcome.deleted && outcome.errorCode) {
@@ -82,9 +96,18 @@ export class RetentionService {
   }
 
   async delete(ownerId: string, reviewId: string): Promise<void> {
+    // A request that observed the review before waiting for the lock succeeds
+    // when a concurrent cleanup finishes first. A genuinely absent review stays
+    // a 404 to preserve the owner-scoped API contract.
+    const existedBeforeWaiting = this.repository.existsOwned(ownerId, reviewId);
+    if (!existedBeforeWaiting) throw new ReviewNotFoundError(reviewId);
+    await this.lock.runExclusive(reviewId, async () => {
     const now = this.now();
     const marked = this.repository.markDeleting(ownerId, reviewId, now, { force: true });
-    if (!marked) throw new ReviewNotFoundError(reviewId);
+    if (!marked) {
+      if (!this.repository.existsOwned(ownerId, reviewId)) return;
+      throw new ReviewNotFoundError(reviewId);
+    }
     const candidate: RetentionCandidate = {
       id: reviewId,
       ownerId,
@@ -99,6 +122,7 @@ export class RetentionService {
       error.name = outcome.errorCode ?? "RETENTION_DELETE_FAILED";
       throw error;
     }
+    });
   }
 
   private async processCandidate(
@@ -110,15 +134,46 @@ export class RetentionService {
       if (!claimed) {
         claimed = this.repository.markDeleting(candidate.ownerId, candidate.id, this.now());
       }
-      if (!claimed) return { claimed: false, deleted: false, errorCode: "NOT_FOUND" };
+      if (!claimed) {
+        // Another manual/automatic caller may have finalized the same record
+        // while this candidate was waiting for the shared lock.
+        if (!this.repository.existsOwned(candidate.ownerId, candidate.id)) {
+          return { claimed: false, deleted: true };
+        }
+        return this.failure(candidate.ownerId, claimed, "NOT_FOUND");
+      }
 
       // 任务取消先于文件删除，避免 worker 在删除期间重新写入作文目录。
       this.repository.cancelActiveAnalysis(candidate.ownerId, candidate.id, this.now());
+      // Older installations may still hold the only copy under .data/reviews.
+      // Migrate it while deletion is exclusively locked, then remove that exact
+      // tenant-scoped review directory.
+      await this.fileStore.migrateLegacyReview(candidate.ownerId, candidate.id);
       await this.fileStore.deleteReview(candidate.ownerId, candidate.id);
       const finalized = this.repository.finalizeDeletion(candidate.ownerId, candidate.id);
-      return { claimed: true, deleted: finalized };
+      if (finalized || !this.repository.existsOwned(candidate.ownerId, candidate.id)) {
+        return { claimed: true, deleted: true };
+      }
+      return this.failure(candidate.ownerId, claimed, "FINALIZE_FAILED");
     } catch (error) {
-      return { claimed, deleted: false, errorCode: safeErrorCode(error) };
+      return this.failure(candidate.ownerId, claimed, safeErrorCode(error));
     }
+  }
+
+  private failure(
+    ownerId: string,
+    claimed: boolean,
+    code: string,
+  ): { claimed: boolean; deleted: false; errorCode: string } {
+    try {
+      this.audit?.recordSecurityEvent({
+        userId: ownerId,
+        eventType: "retention.delete_failed",
+        metadata: { code },
+      });
+    } catch {
+      // Audit storage failure must not erase the durable deletingAt retry mark.
+    }
+    return { claimed, deleted: false, errorCode: code };
   }
 }

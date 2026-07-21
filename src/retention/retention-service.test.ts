@@ -1,18 +1,22 @@
 // @vitest-environment node
 
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AssignmentConfig } from "../domain/contracts";
 import { EMPTY_DRAFT_RETENTION_MS, REVIEW_RETENTION_MS } from "../domain/contracts";
+import { AuthRepository } from "../auth/auth-repository";
 import { initializeSchema } from "../db/init";
 import { ReviewRepository, type ReviewImageInput } from "../db/review-repository";
 import * as schema from "../db/schema";
+import { ImageService } from "../images/image-service";
+import { InMemoryReviewLock } from "../services/review-lock";
 import { ReviewFileStore, UnsafeStoragePathError } from "../storage/review-file-store";
 import { RetentionService } from "./retention-service";
 
@@ -45,10 +49,17 @@ function image(position = 0): ReviewImageInput {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe("RetentionService", () => {
   let sqlite: Database.Database;
   let database: ReturnType<typeof drizzle<typeof schema>>;
   let repository: ReviewRepository;
+  let audit: AuthRepository;
   let store: ReviewFileStore;
   let temporaryDirectory: string;
   let now: Date;
@@ -64,6 +75,7 @@ describe("RetentionService", () => {
     database = drizzle(sqlite, { schema });
     now = new Date(START);
     repository = new ReviewRepository(database, { now: () => new Date(now) });
+    audit = new AuthRepository(database, { now: () => new Date(now) });
     temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "grader-retention-"));
     store = new ReviewFileStore(path.join(temporaryDirectory, "users"));
   });
@@ -74,7 +86,10 @@ describe("RetentionService", () => {
   });
 
   function service(fileStore = store): RetentionService {
-    return new RetentionService(repository, fileStore, { now: () => new Date(now) });
+    return new RetentionService(repository, fileStore, {
+      now: () => new Date(now),
+      audit,
+    });
   }
 
   async function createWithImage(ownerId = OWNER, id = "review-1"): Promise<void> {
@@ -191,5 +206,85 @@ describe("RetentionService", () => {
     now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
     await expect(service(unsafeStore).run()).resolves.toMatchObject({ failed: 1 });
     await expect(store.readFile(OWNER, "review-1", "images", "page.jpg")).resolves.toEqual(Buffer.from("page"));
+  });
+
+  it("清理先迁移仅存在于旧目录的作文，再永久删除旧目录", async () => {
+    const legacyRoot = path.join(temporaryDirectory, "legacy-reviews");
+    const legacyReview = path.join(legacyRoot, "legacy-only");
+    repository.create(OWNER, { id: "legacy-only", config, images: [image()] });
+    await mkdir(path.join(legacyReview, "images"), { recursive: true });
+    await writeFile(path.join(legacyReview, "images", "page.jpg"), "legacy");
+    const legacyStore = new ReviewFileStore(store.rootDirectory, legacyRoot);
+    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+
+    await expect(service(legacyStore).run()).resolves.toMatchObject({ deleted: 1, failed: 0 });
+    await expect(stat(legacyReview)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(repository.getById(OWNER, "legacy-only")).toBeNull();
+  });
+
+  it("清理失败仅记录安全错误码，不记录作文路径或正文", async () => {
+    await createWithImage();
+    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    vi.spyOn(store, "deleteReview").mockRejectedValueOnce(Object.assign(new Error("disk busy"), { code: "EIO" }));
+
+    await service().run();
+    const event = sqlite.prepare(
+      "SELECT user_id AS userId, event_type AS eventType, metadata FROM security_events ORDER BY id DESC LIMIT 1",
+    ).get() as { userId: string; eventType: string; metadata: string } | undefined;
+    expect(event).toMatchObject({ userId: OWNER, eventType: "retention.delete_failed" });
+    expect(event?.metadata).toContain("EIO");
+    expect(event?.metadata).not.toContain("page.jpg");
+    expect(event?.metadata).not.toContain(store.rootDirectory);
+  });
+
+  it("清理和上传共用同一作文锁，删除完成后上传得到不存在且不会重建目录", async () => {
+    await createWithImage();
+    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    const lock = new InMemoryReviewLock();
+    const blockingDelete = deferred<void>();
+    const enteredDelete = deferred<void>();
+    vi.spyOn(store, "deleteReview").mockImplementationOnce(async () => {
+      enteredDelete.resolve();
+      await blockingDelete.promise;
+      await ReviewFileStore.prototype.deleteReview.call(store, OWNER, "review-1");
+    });
+    const imageService = new ImageService(store, repository, { lock, createId: () => "new-image" });
+    const cleanup = new RetentionService(repository, store, { now: () => new Date(now), lock }).run();
+    await enteredDelete.promise;
+    const jpeg = await sharp({ create: { width: 4, height: 4, channels: 3, background: "white" } }).jpeg().toBuffer();
+    const upload = imageService.upload(OWNER, "review-1", 0, [{
+      originalName: "new.jpg",
+      mimeType: "image/jpeg",
+      data: jpeg,
+    }]).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    blockingDelete.resolve();
+    await expect(cleanup).resolves.toMatchObject({ deleted: 1, failed: 0 });
+    await expect(upload).resolves.toMatchObject({ code: "REVIEW_NOT_FOUND", status: 404 });
+    await expect(stat(store.getReviewPaths(OWNER, "review-1").reviewDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("并发清理与手动删除在另一方已完成时均视为幂等成功", async () => {
+    await createWithImage();
+    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    const lock = new InMemoryReviewLock();
+    const blockingDelete = deferred<void>();
+    const enteredDelete = deferred<void>();
+    vi.spyOn(store, "deleteReview").mockImplementationOnce(async () => {
+      enteredDelete.resolve();
+      await blockingDelete.promise;
+      await ReviewFileStore.prototype.deleteReview.call(store, OWNER, "review-1");
+    });
+    const retained = new RetentionService(repository, store, { now: () => new Date(now), lock });
+    const scheduled = retained.run();
+    await enteredDelete.promise;
+    const manual = retained.delete(OWNER, "review-1");
+
+    blockingDelete.resolve();
+    await expect(scheduled).resolves.toMatchObject({ deleted: 1, failed: 0 });
+    await expect(manual).resolves.toBeUndefined();
   });
 });
