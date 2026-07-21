@@ -12,6 +12,8 @@ import { ReviewFileStore } from "../storage/review-file-store";
 import { AuthRepository } from "../auth/auth-repository";
 import { AuthService } from "../auth/auth-service";
 import { RetentionService } from "../retention/retention-service";
+import { AnalysisJobRepository } from "../jobs/analysis-job-repository";
+import { AnalysisJobService } from "../jobs/analysis-job-service";
 
 export interface ApplicationServices {
   authService: AuthService;
@@ -20,6 +22,7 @@ export interface ApplicationServices {
   imageService: ImageService;
   pdfService: PdfService;
   retentionService: RetentionService;
+  analysisJobService: AnalysisJobService;
 }
 
 function createApplicationServices(): ApplicationServices {
@@ -32,6 +35,7 @@ function createApplicationServices(): ApplicationServices {
   const fileStore = new ReviewFileStore();
   const reviewLock = new InMemoryReviewLock();
   const authRepository = new AuthRepository(database.db);
+  const analysisJobRepository = new AnalysisJobRepository(database.db);
   const retentionService = new RetentionService(reviewRepository, fileStore, {
     lock: reviewLock,
     audit: authRepository,
@@ -51,6 +55,7 @@ function createApplicationServices(): ApplicationServices {
       retention: retentionService,
     }),
     retentionService,
+    analysisJobService: new AnalysisJobService(analysisJobRepository),
   };
 }
 

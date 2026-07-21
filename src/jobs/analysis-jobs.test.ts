@@ -1,0 +1,186 @@
+// @vitest-environment node
+
+import Database from "better-sqlite3";
+import { drizzle } from "drizzle-orm/better-sqlite3";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { initializeSchema } from "../db/init";
+import { ReviewRepository } from "../db/review-repository";
+import * as schema from "../db/schema";
+import {
+  AnalysisJobNotFoundError,
+  AnalysisJobRepository,
+} from "./analysis-job-repository";
+import { AnalysisJobService } from "./analysis-job-service";
+
+const ownerA = "teacher-a";
+const ownerB = "teacher-b";
+const config = {
+  title: "为自己鼓掌",
+  grade: "上海五四学制六年级",
+  writingRequirements: "写一件亲身经历的事。",
+  targetCharacters: 600,
+  structureRequirements: "五段展开。",
+  scoringFocus: "细节描写。",
+  templateType: "custom" as const,
+};
+
+function addTeacher(sqlite: Database.Database, id: string): void {
+  sqlite.prepare(
+    `INSERT INTO users (id, username, password_hash, role, must_change_password, created_at, updated_at)
+     VALUES (?, ?, '!test', 'teacher', 0, 1, 1)`,
+  ).run(id, id);
+}
+
+describe("AnalysisJobService", () => {
+  let sqlite: Database.Database;
+  let now: Date;
+  let reviewRepository: ReviewRepository;
+  let repository: AnalysisJobRepository;
+  let service: AnalysisJobService;
+  let nextId = 0;
+
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    initializeSchema(sqlite);
+    addTeacher(sqlite, ownerA);
+    addTeacher(sqlite, ownerB);
+    now = new Date("2026-07-21T00:00:00.000Z");
+    nextId = 0;
+    const database = drizzle(sqlite, { schema });
+    reviewRepository = new ReviewRepository(database, { now: () => now });
+    repository = new AnalysisJobRepository(database, {
+      now: () => now,
+      createId: () => `job-${++nextId}`,
+      maxAttempts: 2,
+      leaseMs: 60_000,
+    });
+    service = new AnalysisJobService(repository);
+    reviewRepository.create(ownerA, { id: "review-a", config });
+    reviewRepository.create(ownerB, { id: "review-b", config });
+  });
+
+  afterEach(() => sqlite.close());
+
+  it("创建 queued 任务且对同一作文重复点击返回活动任务", () => {
+    const first = service.enqueue(ownerA, "review-a");
+    const duplicate = service.enqueue(ownerA, "review-a");
+
+    expect(first).toMatchObject({
+      id: "job-1",
+      reviewId: "review-a",
+      status: "queued",
+      progressStage: "queued",
+      message: null,
+      createdAt: now.toISOString(),
+      finishedAt: null,
+    });
+    expect(duplicate).toEqual(first);
+    expect(sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 1 });
+  });
+
+  it("不同教师可以排队，而同一时刻只有一个领取者取得每个任务", () => {
+    service.enqueue(ownerA, "review-a");
+    service.enqueue(ownerB, "review-b");
+
+    const first = repository.claimNext();
+    const second = repository.claimNext();
+    const third = repository.claimNext();
+
+    expect(first).toMatchObject({ status: "running", attempt: 1, progressStage: "reading_images" });
+    expect(second).toMatchObject({ status: "running", attempt: 1, progressStage: "reading_images" });
+    expect(first?.id).not.toBe(second?.id);
+    expect(third).toBeNull();
+  });
+
+  it("领取原子写入运行状态、租约、尝试次数和读取阶段", () => {
+    service.enqueue(ownerA, "review-a");
+
+    const claimed = repository.claimNext();
+
+    expect(claimed).toMatchObject({
+      status: "running",
+      attempt: 1,
+      progressStage: "reading_images",
+      startedAt: now,
+      leaseExpiresAt: new Date(now.valueOf() + 60_000),
+    });
+  });
+
+  it("有效租约不能被重复领取，过期后可以回收再领取", () => {
+    service.enqueue(ownerA, "review-a");
+    const first = repository.claimNext();
+    expect(repository.claimNext()).toBeNull();
+
+    now = new Date(now.valueOf() + 60_001);
+    const recovered = repository.claimNext();
+
+    expect(recovered).toMatchObject({ id: first?.id, status: "running", attempt: 2 });
+  });
+
+  it("到达尝试上限的过期任务会失败且不会无限重试", () => {
+    service.enqueue(ownerA, "review-a");
+    repository.claimNext();
+    now = new Date(now.valueOf() + 60_001);
+    repository.claimNext();
+    now = new Date(now.valueOf() + 60_001);
+
+    expect(repository.claimNext()).toBeNull();
+    expect(service.get(ownerA, "job-1")).toMatchObject({ status: "failed", finishedAt: now.toISOString() });
+  });
+
+  it("仅允许合法的状态转换", () => {
+    service.enqueue(ownerA, "review-a");
+    const job = repository.claimNext();
+    expect(job).not.toBeNull();
+
+    expect(() => repository.transition(job!.id, "queued")).toThrow(/非法/);
+    repository.transition(job!.id, "succeeded");
+    expect(() => repository.transition(job!.id, "failed")).toThrow(/非法/);
+  });
+
+  it("删除中或到期的作文会取消活动任务", () => {
+    service.enqueue(ownerA, "review-a");
+    sqlite.prepare("UPDATE reviews SET deleting_at = ? WHERE id = ?").run(now.valueOf(), "review-a");
+    expect(repository.cancelUnavailable()).toBe(1);
+    expect(service.get(ownerA, "job-1")).toMatchObject({ status: "canceled" });
+
+    reviewRepository.create(ownerA, { id: "expiring", config });
+    service.enqueue(ownerA, "expiring");
+    sqlite.prepare("UPDATE reviews SET expires_at = ? WHERE id = ?").run(now.valueOf(), "expiring");
+    expect(repository.cancelUnavailable()).toBe(1);
+    expect(service.get(ownerA, "job-2")).toMatchObject({ status: "canceled" });
+  });
+
+  it("按 jobId 和 ownerId 查询，其他教师只得到 NOT_FOUND", () => {
+    service.enqueue(ownerA, "review-a");
+
+    expect(() => service.get(ownerB, "job-1")).toThrow(AnalysisJobNotFoundError);
+    try {
+      service.get(ownerB, "job-1");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "NOT_FOUND" });
+    }
+  });
+
+  it("对页面公开的任务视图不泄露租约、尝试或内部错误", () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext();
+    repository.transition(claimed!.id, "failed", { errorCode: "UPSTREAM_500", message: "请稍后重试" });
+
+    const view = service.get(ownerA, claimed!.id);
+
+    expect(view).toEqual({
+      id: claimed!.id,
+      reviewId: "review-a",
+      status: "failed",
+      progressStage: "reading_images",
+      message: "分析暂未完成，请稍后重试",
+      createdAt: now.toISOString(),
+      finishedAt: now.toISOString(),
+    });
+    expect(view).not.toHaveProperty("attempt");
+    expect(view).not.toHaveProperty("leaseExpiresAt");
+    expect(view).not.toHaveProperty("errorCode");
+  });
+});
