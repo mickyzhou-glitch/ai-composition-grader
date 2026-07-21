@@ -1028,6 +1028,21 @@ describe("AuthService", () => {
     opened.close();
   });
 
+  it("revokes old sessions and returns a new session after password change", async () => {
+    const opened = openAppDatabase(":memory:");
+    const repository = new AuthRepository(opened.db);
+    const service = new AuthService(repository);
+    await service.createInvitedUser({ username: "change.user", password: "old password", role: "admin" });
+    const ipHash = hashSourceIp("127.0.0.1", "change-test");
+    const loggedIn = await service.login({ username: "change.user", password: "old password", ipHash });
+    const changed = await service.changePassword({ userId: loggedIn.user.id, currentPassword: "old password", newPassword: "new password" });
+    expect(service.authenticateSession(loggedIn.rawToken)).toBeNull();
+    expect(service.authenticateSession(changed.rawToken)?.user.id).toBe(loggedIn.user.id);
+    const stored = opened.sqlite.prepare("SELECT token_hash FROM sessions WHERE id = ?").get(changed.session.id) as { token_hash: string };
+    expect(stored.token_hash).toBe(hashSessionToken(changed.rawToken));
+    opened.close();
+  });
+
   it.each(["", "not-a-hash", "A".repeat(64), null])("rejects malformed ipHash safely: %j", async (ipHash) => {
     const opened = openAppDatabase(":memory:");
     const service = new AuthService(new AuthRepository(opened.db));

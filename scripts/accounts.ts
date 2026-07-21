@@ -52,12 +52,12 @@ async function readHiddenPassword(): Promise<string> {
   const readline = createInterface({ input: process.stdin, output: process.stdout });
   let echoDisabled = false;
   try {
-    const result = spawnSync("stty", ["-echo"], { stdio: ["ignore", "ignore", "ignore"] });
+    const result = spawnSync("stty", ["-echo"], { stdio: "inherit" });
     echoDisabled = result.status === 0;
     if (!echoDisabled) throw new Error("Unable to protect password input");
     return await readline.question("Password (hidden): ");
   } finally {
-    if (echoDisabled) spawnSync("stty", ["echo"], { stdio: ["ignore", "ignore", "ignore"] });
+    if (echoDisabled) spawnSync("stty", ["echo"], { stdio: "inherit" });
     readline.close();
     process.stdout.write("\n");
   }
@@ -86,6 +86,9 @@ async function run(argv: string[]): Promise<void> {
       return;
     }
     const username = requiredFlag(flags, "username");
+    if (command === "reset-password" && (!process.stdin.isTTY || !process.stdout.isTTY)) {
+      throw new Error("Password output requires an interactive terminal");
+    }
     if (command === "create") {
       const role = requiredFlag(flags, "role");
       const entered = await readHiddenPassword();

@@ -227,7 +227,7 @@ export class AuthService {
     if (session) this.repository.revokeSession(session.id);
   }
 
-  async changePassword(input: { userId: string; currentPassword: string; newPassword: string }): Promise<AuthenticatedUser> {
+  async changePassword(input: { userId: string; currentPassword: string; newPassword: string }): Promise<{ user: AuthenticatedUser; rawToken: string; session: SessionRecord }> {
     const user = this.findUserById(input.userId);
     const current = typeof input.currentPassword === "string" && input.currentPassword.length > 0 ? input.currentPassword : "invalid-password";
     const matches = await this.verify(
@@ -239,8 +239,14 @@ export class AuthService {
     if (input.newPassword === current) throw new AuthServiceError("PASSWORD_REUSE", "New password must differ from current password");
     const passwordHash = await this.hash(input.newPassword);
     const updated = this.repository.updatePasswordHash(user.id, passwordHash, false);
+    const rawToken = this.createSessionToken();
+    const session = this.repository.createSession({
+      userId: user.id,
+      tokenHash: hashSessionToken(rawToken),
+      expiresAt: new Date(this.currentTime().getTime() + this.sessionLifetimeMs),
+    });
     this.recordEvent(user.id, "password_changed", { reason: "password_change" });
-    return asSafeUser(updated);
+    return { user: asSafeUser(updated), rawToken, session };
   }
 
   async createInvitedUser(input: { username: string; password: string; role: UserRole; mustChangePassword?: boolean }): Promise<AuthenticatedUser> {
