@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import {
   AuthRecordNotFoundError,
   AuthRepository,
+  AuthStorageError,
   DuplicateUsernameError,
   TeacherLimitReachedError,
 } from "./auth-repository";
@@ -257,7 +258,14 @@ export class AuthService {
   }
 
   async resetPassword(username: string): Promise<string> {
-    const user = this.repository.findUserByUsername(username);
+    let user: UserRecord | null;
+    try {
+      user = this.repository.findUserByUsername(username);
+    } catch (error) {
+      if (error instanceof AuthStorageError) throw error;
+      if (error instanceof TypeError) user = null;
+      else throw error;
+    }
     if (!user) throw new AuthServiceError("AUTH_NOT_FOUND", "Account was not found");
     const temporaryPassword = this.createInitialPassword();
     const passwordHash = await this.hash(temporaryPassword);
@@ -299,7 +307,14 @@ export class AuthService {
   }
 
   findUserByUsername(username: string): AuthenticatedUser | null {
-    const user = this.repository.findUserByUsername(username);
+    let user: UserRecord | null;
+    try {
+      user = this.repository.findUserByUsername(username);
+    } catch (error) {
+      if (error instanceof AuthStorageError) throw error;
+      if (error instanceof TypeError) return null;
+      throw error;
+    }
     return user ? asSafeUser(user) : null;
   }
 }
