@@ -35,6 +35,8 @@ describe("password security primitives", () => {
     "a".repeat(33),
     "教师",
     "Ｔeacher",
+    "Kelvin",
+    "KKK",
     "teacher name",
     "teacher@example.com",
     ". leading",
@@ -402,6 +404,9 @@ describe("AuthRepository", () => {
     { cookie: "session=value" },
     { authorization: "Bearer value" },
     { essayBody: "作文正文" },
+    { essayContent: "an ordinary English sentence" },
+    { nested: { Composition_Content: "ordinary text" } },
+    { nested: [{ "作文-内容": "普通文本" }] },
     { imageDataUrl: "not-even-needed" },
     { preview: "data:image/png;base64,AAAA" },
   ])("rejects sensitive security event metadata: %j", (metadata) => {
@@ -462,13 +467,23 @@ describe("AuthRepository", () => {
       expiresAt: new Date(now.valueOf() + 1000),
     });
 
-    expect(() =>
+    let conflict: unknown;
+    try {
       repository.createSession({
         userId: user.id,
         tokenHash: secretTokenHash,
         expiresAt: new Date(now.valueOf() + 1000),
-      }),
-    ).toThrow(DuplicateSessionTokenError);
+      });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(conflict).toBeInstanceOf(DuplicateSessionTokenError);
+    expect((conflict as Error).message).toBe(
+      "Authentication record conflicts with existing data",
+    );
+    expect((conflict as Error).message).not.toMatch(
+      /sql|password|token|hash|secret|cookie|authorization/i,
+    );
 
     try {
       repository.createSession({

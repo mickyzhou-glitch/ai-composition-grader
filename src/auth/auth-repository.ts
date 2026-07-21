@@ -70,7 +70,7 @@ export class DuplicateSessionTokenError extends Error {
   readonly code = "DUPLICATE_SESSION_TOKEN";
 
   constructor() {
-    super("Session token is already in use");
+    super("Authentication record conflicts with existing data");
     this.name = "DuplicateSessionTokenError";
   }
 }
@@ -219,7 +219,12 @@ function snapshotSafeMetadata(
         throw new InvalidSecurityMetadataError();
       }
       const normalizedKey = key.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, "");
-      if (SENSITIVE_METADATA_KEYS.has(normalizedKey)) {
+      if (
+        SENSITIVE_METADATA_KEYS.has(normalizedKey) ||
+        normalizedKey.includes("essay") ||
+        normalizedKey.includes("composition") ||
+        normalizedKey.includes("作文")
+      ) {
         throw new InvalidSecurityMetadataError();
       }
       Object.defineProperty(snapshot, key, {

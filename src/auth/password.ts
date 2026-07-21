@@ -3,7 +3,7 @@ import { createHash, createHmac, randomBytes } from "node:crypto";
 
 import { argon2id, hash, verify } from "argon2";
 
-const NORMALIZED_USERNAME_PATTERN = /^[a-z0-9._-]{3,32}$/;
+const USERNAME_PATTERN = /^[A-Za-z0-9._-]{3,32}$/;
 const ARGON2ID_PHC_PATTERN =
   /^\$argon2id\$v=(\d+)\$([^$]+)\$([A-Za-z0-9+/]+)\$([A-Za-z0-9+/]+)$/;
 const MAX_ARGON2_MEMORY_KIB = 256 * 1024;
@@ -17,11 +17,11 @@ export function normalizeUsername(input: string): string {
   if (typeof input !== "string") {
     throw new TypeError("Username must be a string");
   }
-  const normalized = input.trim().toLowerCase();
-  if (!NORMALIZED_USERNAME_PATTERN.test(normalized)) {
+  const trimmed = input.trim();
+  if (!USERNAME_PATTERN.test(trimmed)) {
     throw new TypeError("Username must contain 3-32 allowed ASCII characters");
   }
-  return normalized;
+  return trimmed.toLowerCase();
 }
 
 function requireNonEmpty(value: string, message: string): void {
