@@ -17,9 +17,9 @@ npm run db:init
 npm run dev
 ```
 
-开发服务器只监听 `http://127.0.0.1:3000`，不会暴露到局域网。PDF 导出依赖 Chromium，因此首次安装时必须执行上述 Playwright Chromium 安装命令。
+开发服务器只监听 `http://127.0.0.1:3001`，不会暴露到局域网。PDF 导出依赖 Chromium，因此首次安装时必须执行上述 Playwright Chromium 安装命令。
 
-首次启动后，打开 `http://127.0.0.1:3000/settings`，填写 AI 服务的 API 根地址、模型和 API key，再点击「测试并保存」完成测试保存。API key 仅保存在 macOS Keychain，页面不会读取或回显。
+首次启动后，打开 `http://127.0.0.1:3001/settings`，填写 AI 服务的 API 根地址、模型和 API key，再点击「测试并保存」完成测试保存。API key 仅保存在 macOS Keychain，页面不会读取或回显。
 
 ## 验证命令
 
