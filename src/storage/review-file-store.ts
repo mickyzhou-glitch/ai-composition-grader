@@ -249,7 +249,20 @@ export class ReviewFileStore {
       await rm(legacyReview, { recursive: true, force: true });
       return;
     }
-    await rename(legacyReview, destination);
+    try {
+      await rename(legacyReview, destination);
+    } catch (error) {
+      // Two requests may race after both observed the legacy directory. If
+      // the first request won the rename, the destination is authoritative.
+      if (isMissing(error)) {
+        try {
+          if (await assertRealDirectory(reviewsDirectory, destination)) return;
+        } catch (destinationError) {
+          if (!isMissing(destinationError)) throw destinationError;
+        }
+      }
+      throw error;
+    }
   }
 
   async writeFile(

@@ -45,7 +45,9 @@ export function createPrintToken(
 ): string {
   if (!claims.ownerId || !claims.reviewId) throw new TypeError("print token claims are incomplete");
   const expiresAt = claims.expiresAt ?? now + TTL_MS;
-  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now) throw new TypeError("print token expiry is invalid");
+  if (!Number.isSafeInteger(expiresAt) || expiresAt <= now || expiresAt > now + TTL_MS) {
+    throw new TypeError("print token expiry is invalid");
+  }
   const payload = encode(JSON.stringify({ ...claims, expiresAt, nonce: randomBytes(16).toString("base64url") }));
   return `${payload}.${signature(payload, key)}`;
 }

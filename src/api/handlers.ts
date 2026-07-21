@@ -472,7 +472,7 @@ export function createReviewFilesRouteHandlers(dependencies: {
           status: 200,
           headers: {
             "content-type": file.contentType,
-            "cache-control": "private, max-age=3600",
+            "cache-control": "private, no-store",
             "x-content-type-options": "nosniff",
           },
         });

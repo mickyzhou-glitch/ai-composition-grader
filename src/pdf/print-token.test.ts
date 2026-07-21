@@ -27,6 +27,7 @@ describe("PDF print token", () => {
   it("rejects wrong key, owner, review and expiry", () => {
     const now = 1_700_000_000_000;
     const token = createPrintToken({ ownerId: "teacher-1", reviewId: "review-1", expiresAt: now + 10 }, SECRET, now);
+    expect(() => createPrintToken({ ownerId: "teacher-1", reviewId: "review-1", expiresAt: now + 2 * 60 * 1000 + 1 }, SECRET, now)).toThrow(/expiry/);
     expect(consumePrintToken(token, { ownerId: "teacher-2" }, SECRET, now + 1)).toBeNull();
     expect(consumePrintToken(token, { reviewId: "review-2" }, SECRET, now + 1)).toBeNull();
     expect(consumePrintToken(token, {}, "another-print-token-secret-with-at-least-32-chars", now + 1)).toBeNull();
