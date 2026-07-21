@@ -10,7 +10,11 @@ export const LOCAL_SESSION_COOKIE = "zuowen_local_session";
 const LOCAL_ORIGIN = "http://127.0.0.1:3001";
 
 export class AuthRequestError extends Error {
-  constructor(readonly status: 401 | 403, message = "Authentication required") {
+  constructor(
+    readonly status: 401 | 403,
+    message = "Authentication required",
+    readonly code: "UNAUTHENTICATED" | "PASSWORD_CHANGE_REQUIRED" | "FORBIDDEN" | "UNTRUSTED_ORIGIN" = status === 403 ? "FORBIDDEN" : "UNAUTHENTICATED",
+  ) {
     super(message);
     this.name = "AuthRequestError";
   }
@@ -120,7 +124,7 @@ export async function requireApiUser(
   const session = authenticate(tokenFromRequest(request));
   if (!session) throw new AuthRequestError(401);
   if (session.user.mustChangePassword && !options.allowMustChangePassword) {
-    throw new AuthRequestError(403, "Password change required");
+    throw new AuthRequestError(403, "Password change required", "PASSWORD_CHANGE_REQUIRED");
   }
   return session.user;
 }
@@ -134,14 +138,16 @@ export async function requireAdminApiUser(request: Request): Promise<Authenticat
 export function assertTrustedWriteOrigin(request: Request): void {
   const origin = request.headers.get("origin");
   const configured = applicationOrigin();
-  const trusted = configured ?? LOCAL_ORIGIN;
+  // In production there is no safe implicit origin. Local development keeps a
+  // fixed loopback default so the app remains convenient without a .env file.
+  const trusted = configured ?? (process.env.NODE_ENV === "production" ? null : LOCAL_ORIGIN);
   let requestOrigin: string;
   try {
     requestOrigin = new URL(request.url).origin;
   } catch {
-    throw new AuthRequestError(403, "请求来源不受信任");
+    throw new AuthRequestError(403, "请求来源不受信任", "UNTRUSTED_ORIGIN");
   }
-  if (!origin || origin !== requestOrigin || origin !== trusted) {
-    throw new AuthRequestError(403, "请求来源不受信任");
+  if (!trusted || !origin || origin !== requestOrigin || origin !== trusted) {
+    throw new AuthRequestError(403, "请求来源不受信任", "UNTRUSTED_ORIGIN");
   }
 }
