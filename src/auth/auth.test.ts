@@ -508,6 +508,20 @@ describe("AuthRepository", () => {
     });
   });
 
+  it("rejects accessor-backed login failure queries before validated values change", () => {
+    const validHash = hashSourceIp("203.0.113.12", "audit-secret");
+    let ipHashReads = 0;
+    const query = {} as Parameters<AuthRepository["getLoginFailureStatus"]>[0];
+    Object.defineProperties(query, {
+      username: { value: "teacher.query" },
+      ipHash: {
+        get: () => (++ipHashReads === 1 ? validHash : "unvalidated-ip-value"),
+      },
+    });
+
+    expect(() => repository.getLoginFailureStatus(query)).toThrow(TypeError);
+  });
+
   it("stores normalized usernames and only HMAC IP values for login attempts", () => {
     const rawIp = "198.51.100.20";
     const ipHash = hashSourceIp(rawIp, "audit-secret");

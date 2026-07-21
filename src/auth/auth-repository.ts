@@ -692,8 +692,11 @@ export class AuthRepository {
   }
 
   getLoginFailureStatus(query: LoginFailureQuery): LoginFailureStatus {
-    const normalizedUsername = normalizeUsername(query.username);
-    assertSha256Hash(query.ipHash, "IP hash");
+    const username = snapshotOwnDataProperty(query, "username");
+    const ipHash = snapshotOwnDataProperty(query, "ipHash");
+    if (typeof username !== "string") throw new TypeError("Username must be a string");
+    const normalizedUsername = normalizeUsername(username);
+    assertSha256Hash(ipHash, "IP hash");
     const cutoff = new Date(this.now().valueOf() - LOGIN_FAILURE_WINDOW_MS);
     return this.safely(() => {
       const usernameFailures = this.countConsecutiveFailures(
@@ -701,7 +704,7 @@ export class AuthRepository {
         cutoff,
       );
       const ipFailures = this.countConsecutiveFailures(
-        eq(loginAttempts.ipHash, query.ipHash),
+        eq(loginAttempts.ipHash, ipHash),
         cutoff,
       );
       return {
