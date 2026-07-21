@@ -9,8 +9,11 @@ import { SettingsService } from "../settings/settings-service";
 import { ReviewService } from "../services/review-service";
 import { InMemoryReviewLock } from "../services/review-lock";
 import { ReviewFileStore } from "../storage/review-file-store";
+import { AuthRepository } from "../auth/auth-repository";
+import { AuthService } from "../auth/auth-service";
 
 export interface ApplicationServices {
+  authService: AuthService;
   settingsService: SettingsService;
   reviewService: ReviewService;
   imageService: ImageService;
@@ -28,6 +31,7 @@ function createApplicationServices(): ApplicationServices {
   const reviewLock = new InMemoryReviewLock();
   const aiReviewer = new OpenAIReviewAdapter(settingsService);
   return {
+    authService: new AuthService(new AuthRepository(database.db)),
     settingsService,
     imageService: new ImageService(fileStore, reviewRepository, {
       lock: reviewLock,

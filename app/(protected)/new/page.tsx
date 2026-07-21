@@ -4,10 +4,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 import type { AssignmentConfig, NormalizedCrop } from "@/src/domain/contracts";
-import { AppHeader } from "../components/AppHeader";
-import { AsyncButton } from "../components/AsyncButton";
-import { ErrorBanner } from "../components/ErrorBanner";
-import { apiFetch, errorMessage } from "../lib/api";
+import { AppHeader } from "../../components/AppHeader";
+import { AsyncButton } from "../../components/AsyncButton";
+import { ErrorBanner } from "../../components/ErrorBanner";
+import { apiFetch, errorMessage } from "../../lib/api";
 
 const presetConfig: AssignmentConfig = {
   title: "为自己鼓掌",

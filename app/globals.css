@@ -132,6 +132,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 
 .paper-card { padding: 28px; border: 1px solid var(--line); border-radius: 12px; background: var(--ivory); box-shadow: var(--shadow); }
 .form-stack { display: grid; gap: 20px; }
+.auth-page { display: grid; min-height: 100vh; padding: 32px 24px; place-items: center; }
+.auth-card { width: min(440px, 100%); padding: 34px; }
+.auth-card h1 { margin-bottom: 8px; font: 700 2.25rem/1.1 STKaiti, KaiTi, serif; }
+.auth-card .error-banner { margin-bottom: 0; }
 .form-stack label, .field { display: grid; gap: 7px; font-size: .9rem; font-weight: 700; }
 input, textarea, select {
   width: 100%;

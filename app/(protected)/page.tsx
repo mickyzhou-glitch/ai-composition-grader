@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { AppHeader } from "./components/AppHeader";
-import { ErrorBanner } from "./components/ErrorBanner";
-import { StatusBadge } from "./components/StatusBadge";
-import { apiFetch, errorMessage } from "./lib/api";
-import { downloadReviewPdf } from "./lib/pdf-download";
-import type { ReviewView } from "./lib/types";
+import { AppHeader } from "../components/AppHeader";
+import { ErrorBanner } from "../components/ErrorBanner";
+import { StatusBadge } from "../components/StatusBadge";
+import { apiFetch, errorMessage } from "../lib/api";
+import { downloadReviewPdf } from "../lib/pdf-download";
+import type { ReviewView } from "../lib/types";
 
 function reviewDate(value: string) {
   const date = new Date(value);

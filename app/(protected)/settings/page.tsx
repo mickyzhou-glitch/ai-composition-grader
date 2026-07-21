@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { AppHeader } from "../components/AppHeader";
-import { AsyncButton } from "../components/AsyncButton";
-import { ErrorBanner } from "../components/ErrorBanner";
-import { apiFetch, errorMessage } from "../lib/api";
+import { AppHeader } from "../../components/AppHeader";
+import { AsyncButton } from "../../components/AsyncButton";
+import { ErrorBanner } from "../../components/ErrorBanner";
+import { apiFetch, errorMessage } from "../../lib/api";
 
 interface SettingsView {
   baseUrl: string;

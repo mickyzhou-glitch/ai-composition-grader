@@ -4,15 +4,15 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Annotation, EvaluationReport } from "@/src/domain/contracts";
-import { AppHeader } from "../../components/AppHeader";
-import { AsyncButton } from "../../components/AsyncButton";
-import { ErrorBanner } from "../../components/ErrorBanner";
-import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
-import { ReportEditor } from "../../components/ReportEditor";
-import { StatusBadge } from "../../components/StatusBadge";
-import { ApiError, apiFetch, errorMessage } from "../../lib/api";
-import { downloadReviewPdf } from "../../lib/pdf-download";
-import type { ReviewView } from "../../lib/types";
+import { AppHeader } from "../../../components/AppHeader";
+import { AsyncButton } from "../../../components/AsyncButton";
+import { ErrorBanner } from "../../../components/ErrorBanner";
+import { PhotoAnnotationEditor } from "../../../components/PhotoAnnotationEditor";
+import { ReportEditor } from "../../../components/ReportEditor";
+import { StatusBadge } from "../../../components/StatusBadge";
+import { ApiError, apiFetch, errorMessage } from "../../../lib/api";
+import { downloadReviewPdf } from "../../../lib/pdf-download";
+import type { ReviewView } from "../../../lib/types";
 
 interface AnalyzeResult { review: ReviewView; pageWarnings: string[] }
 
