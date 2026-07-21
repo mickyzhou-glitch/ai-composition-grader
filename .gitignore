@@ -17,6 +17,7 @@
 /blob-report/
 /output/
 /tmp/
+/.worktrees/
 
 # next.js
 /.next/
