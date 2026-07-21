@@ -81,7 +81,8 @@ export class MacOSKeychain {
         "-a",
         KEYCHAIN_ACCOUNT,
         "-w",
-      ], `${secret}\n`);
+        secret,
+      ]);
     } catch {
       // Deliberately omit the original command error because it can contain -w <secret>.
       throw new KeychainOperationError("set");
