@@ -7,7 +7,7 @@ import type { AuthenticatedUser, SessionRecord } from "./auth-types";
 export const PRODUCTION_SESSION_COOKIE = "__Host-zuowen_session";
 export const LOCAL_SESSION_COOKIE = "zuowen_local_session";
 
-const LOCAL_ORIGIN = "http://127.0.0.1:3000";
+const LOCAL_ORIGIN = "http://127.0.0.1:3001";
 
 export class AuthRequestError extends Error {
   constructor(readonly status: 401 | 403, message = "Authentication required") {
@@ -68,7 +68,13 @@ function tokenFromRequest(request: Request): string | null {
     const separator = item.indexOf("=");
     if (separator < 0) continue;
     const key = item.slice(0, separator).trim();
-    if (key === name) return decodeURIComponent(item.slice(separator + 1).trim());
+    if (key === name) {
+      try {
+        return decodeURIComponent(item.slice(separator + 1).trim());
+      } catch {
+        return null;
+      }
+    }
   }
   return null;
 }
@@ -103,9 +109,19 @@ export async function requirePageUser(): Promise<AuthenticatedUser> {
   return session.user;
 }
 
-export async function requireApiUser(request: Request): Promise<AuthenticatedUser> {
+export interface RequireApiUserOptions {
+  allowMustChangePassword?: boolean;
+}
+
+export async function requireApiUser(
+  request: Request,
+  options: RequireApiUserOptions = {},
+): Promise<AuthenticatedUser> {
   const session = authenticate(tokenFromRequest(request));
   if (!session) throw new AuthRequestError(401);
+  if (session.user.mustChangePassword && !options.allowMustChangePassword) {
+    throw new AuthRequestError(403, "Password change required");
+  }
   return session.user;
 }
 
@@ -119,7 +135,13 @@ export function assertTrustedWriteOrigin(request: Request): void {
   const origin = request.headers.get("origin");
   const configured = applicationOrigin();
   const trusted = configured ?? LOCAL_ORIGIN;
-  if (!origin || origin !== trusted) {
+  let requestOrigin: string;
+  try {
+    requestOrigin = new URL(request.url).origin;
+  } catch {
+    throw new AuthRequestError(403, "请求来源不受信任");
+  }
+  if (!origin || origin !== requestOrigin || origin !== trusted) {
     throw new AuthRequestError(403, "请求来源不受信任");
   }
 }

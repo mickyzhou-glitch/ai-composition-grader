@@ -12,7 +12,7 @@ const changePasswordSchema = z.object({ currentPassword: z.string().min(1), newP
 export async function POST(request: Request) {
   try {
     assertTrustedWriteOrigin(request);
-    const user = await requireApiUser(request);
+    const user = await requireApiUser(request, { allowMustChangePassword: true });
     const parsed = changePasswordSchema.parse(await request.json());
     const result = await getApplicationServices().authService.changePassword({
       userId: user.id,

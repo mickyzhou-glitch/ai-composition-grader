@@ -16,6 +16,7 @@ vi.mock("../runtime/application-services", () => ({
 import { POST as login } from "../../app/api/auth/login/route";
 import { POST as logout } from "../../app/api/auth/logout/route";
 import { GET as me } from "../../app/api/auth/me/route";
+import { requireApiUser } from "../auth/request-auth";
 
 function jsonRequest(url: string, method: string, body?: unknown, headers: Record<string, string> = {}) {
   return new Request(url, {
@@ -46,7 +47,7 @@ describe("authentication route handlers", () => {
   });
 
   it("sets a strict HttpOnly local cookie and returns only the safe user", async () => {
-    const response = await login(jsonRequest("http://127.0.0.1:3000/api/auth/login", "POST", { username: "teacher.one", password: "password" }, { "x-real-ip": "203.0.113.7" }));
+    const response = await login(jsonRequest("http://127.0.0.1:3001/api/auth/login", "POST", { username: "teacher.one", password: "password" }, { "x-real-ip": "203.0.113.7" }));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, data: { id: "user-1", username: "teacher.one", role: "teacher", mustChangePassword: false } });
     const cookie = response.headers.get("set-cookie") ?? "";
@@ -75,20 +76,45 @@ describe("authentication route handlers", () => {
 
   it("fails safely when the independent IP HMAC secret is missing", async () => {
     delete process.env.AUTH_IP_HMAC_SECRET;
-    const response = await login(jsonRequest("http://127.0.0.1:3000/api/auth/login", "POST", { username: "teacher.one", password: "password" }, { "x-real-ip": "203.0.113.7" }));
+    const response = await login(jsonRequest("http://127.0.0.1:3001/api/auth/login", "POST", { username: "teacher.one", password: "password" }, { "x-real-ip": "203.0.113.7" }));
     expect(response.status).toBe(503);
     expect(authService.login).not.toHaveBeenCalled();
   });
 
   it("returns 401 for me without a trusted session cookie", async () => {
-    const response = await me(new Request("http://127.0.0.1:3000/api/auth/me"));
+    const response = await me(new Request("http://127.0.0.1:3001/api/auth/me"));
     expect(response.status).toBe(401);
   });
 
+  it("rejects malformed cookie encoding without authenticating it", async () => {
+    const response = await me(new Request("http://127.0.0.1:3001/api/auth/me", {
+      headers: { cookie: "zuowen_local_session=%E0%A4%A" },
+    }));
+    expect(response.status).toBe(401);
+    expect(authService.authenticateSession).not.toHaveBeenCalled();
+  });
+
+  it("requires password change before business APIs while allowing explicit auth exceptions", async () => {
+    authService.authenticateSession.mockReturnValueOnce({
+      id: "session-1",
+      user: { id: "user-1", username: "teacher.one", role: "teacher", mustChangePassword: true },
+    });
+    await expect(requireApiUser(new Request("http://127.0.0.1:3001/api/reviews", {
+      headers: { cookie: "zuowen_local_session=raw-session-token" },
+    }))).rejects.toMatchObject({ status: 403 });
+    authService.authenticateSession.mockReturnValueOnce({
+      id: "session-1",
+      user: { id: "user-1", username: "teacher.one", role: "teacher", mustChangePassword: true },
+    });
+    await expect(requireApiUser(new Request("http://127.0.0.1:3001/api/auth/me", {
+      headers: { cookie: "zuowen_local_session=raw-session-token" },
+    }), { allowMustChangePassword: true })).resolves.toMatchObject({ mustChangePassword: true });
+  });
+
   it("revokes and clears a local session on logout", async () => {
-    const response = await logout(new Request("http://127.0.0.1:3000/api/auth/logout", {
+    const response = await logout(new Request("http://127.0.0.1:3001/api/auth/logout", {
       method: "POST",
-      headers: { origin: "http://127.0.0.1:3000", cookie: "zuowen_local_session=raw-session-token" },
+      headers: { origin: "http://127.0.0.1:3001", cookie: "zuowen_local_session=raw-session-token" },
     }));
     expect(response.status).toBe(200);
     expect(authService.logout).toHaveBeenCalledWith("raw-session-token");

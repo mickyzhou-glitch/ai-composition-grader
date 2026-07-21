@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export async function POST(request: Request) {
   try {
     assertTrustedWriteOrigin(request);
-    await requireApiUser(request);
+    await requireApiUser(request, { allowMustChangePassword: true });
     const token = requestSessionToken(request);
     if (token) getApplicationServices().authService.logout(token);
     const options = clearSessionCookieOptions(request);
