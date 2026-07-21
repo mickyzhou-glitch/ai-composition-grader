@@ -322,6 +322,29 @@ describe("复核页", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/analyze/status");
   });
 
+  it("初始作文读取与任务完成竞争时只刷新一次最终批改", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockImplementationOnce(() => json({
+        ...review,
+        revision: 2,
+        report: { ...review.report, personalizedComment: "最终批改已保存" },
+      }));
+    render(<ReviewPage />);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/analyze/status");
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1");
+    expect(await screen.findByLabelText("个性评语")).toHaveValue("最终批改已保存");
+    await Promise.resolve();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("刷新后按后台任务状态轮询，并在完成时刷新批改结果", async () => {
     const runningJob = {
       id: "job-1", reviewId: "review-1", status: "running", progressStage: "generating_review",

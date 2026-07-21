@@ -54,6 +54,7 @@ export default function ReviewPage() {
   const requestControllerRef = useRef<AbortController | null>(null);
   const jobRequestTokenRef = useRef(0);
   const jobRequestControllerRef = useRef<AbortController | null>(null);
+  const refreshedTerminalJobRef = useRef<string | null>(null);
 
   const invalidateLoad = useCallback(() => {
     requestTokenRef.current += 1;
@@ -176,13 +177,18 @@ export default function ReviewPage() {
   }, [applyReview, invalidateJobLoad, invalidateLoad, loadJob, reviewId]);
 
   useEffect(() => {
-    if (!analysisJob || (analysisJob.status !== "queued" && analysisJob.status !== "running")) return;
+    if (!analysisJob) return;
+    if (analysisJob.status === "succeeded" || analysisJob.status === "failed" || analysisJob.status === "canceled") {
+      const terminalKey = `${analysisJob.id}:${analysisJob.status}:${analysisJob.finishedAt ?? "pending"}`;
+      if (refreshedTerminalJobRef.current === terminalKey) return;
+      refreshedTerminalJobRef.current = terminalKey;
+      // The review read can race a just-finished worker. The durable job is
+      // authoritative here, so re-read once to avoid showing stale analysis.
+      void refresh(false, true);
+      return;
+    }
     const timer = window.setInterval(() => {
-      void loadJob().then((job) => {
-        if (job?.status === "succeeded" || job?.status === "failed" || job?.status === "canceled") {
-          void refresh(false, true);
-        }
-      }).catch(() => {
+      void loadJob().catch(() => {
         if (mountedRef.current) setNotice("任务状态暂时无法刷新，正在尝试重新连接。");
       });
     }, 1500);
