@@ -1,0 +1,654 @@
+import { randomUUID } from "node:crypto";
+
+import { and, desc, eq, gt, gte, isNull } from "drizzle-orm";
+
+import type { AppDatabase } from "../db/client";
+import { loginAttempts, securityEvents, sessions, users } from "../db/schema";
+import type {
+  AuthenticatedUser,
+  CreateSessionInput,
+  CreateUserInput,
+  LoginAttemptInput,
+  LoginAttemptRecord,
+  LoginFailureQuery,
+  LoginFailureStatus,
+  SecurityEventInput,
+  SecurityEventRecord,
+  SessionRecord,
+  UserRecord,
+  UserRole,
+} from "./auth-types";
+import { isValidArgon2idHash, normalizeUsername } from "./password";
+
+const SESSION_EXTENSION_MS = 12 * 60 * 60 * 1000;
+const LOGIN_FAILURE_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_FAILURE_LIMIT = 5;
+const SHA_256_HEX_PATTERN = /^[a-f0-9]{64}$/;
+const SENSITIVE_METADATA_KEYS = new Set([
+  "password",
+  "passwordhash",
+  "token",
+  "tokenhash",
+  "apikey",
+  "cookie",
+  "authorization",
+  "essay",
+  "essaybody",
+  "essaytext",
+  "compositionbody",
+  "compositiontext",
+  "imagedataurl",
+  "imagebase64",
+  "作文正文",
+  "作文内容",
+]);
+
+export interface AuthRepositoryOptions {
+  now?: () => Date;
+  randomUUID?: () => string;
+}
+
+export class AuthStorageError extends Error {
+  readonly code = "AUTH_STORAGE_ERROR";
+
+  constructor() {
+    super("Authentication storage operation failed");
+    this.name = "AuthStorageError";
+  }
+}
+
+export class DuplicateUsernameError extends Error {
+  readonly code = "DUPLICATE_USERNAME";
+
+  constructor() {
+    super("Username is already in use");
+    this.name = "DuplicateUsernameError";
+  }
+}
+
+export class DuplicateSessionTokenError extends Error {
+  readonly code = "DUPLICATE_SESSION_TOKEN";
+
+  constructor() {
+    super("Session token is already in use");
+    this.name = "DuplicateSessionTokenError";
+  }
+}
+
+export class AuthRecordNotFoundError extends Error {
+  readonly code = "AUTH_RECORD_NOT_FOUND";
+
+  constructor() {
+    super("Authentication record was not found");
+    this.name = "AuthRecordNotFoundError";
+  }
+}
+
+export class InvalidSecurityMetadataError extends Error {
+  readonly code = "INVALID_SECURITY_METADATA";
+
+  constructor() {
+    super("Security event metadata contains disallowed data");
+    this.name = "InvalidSecurityMetadataError";
+  }
+}
+
+function isSqliteError(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string" &&
+    error.code === code
+  );
+}
+
+function asUserRecord(row: typeof users.$inferSelect): UserRecord {
+  return {
+    id: row.id,
+    username: row.username,
+    passwordHash: row.passwordHash,
+    role: row.role,
+    mustChangePassword: row.mustChangePassword,
+    disabledAt: row.disabledAt,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function asAuthenticatedUser(row: {
+  id: string;
+  username: string;
+  role: UserRole;
+  mustChangePassword: boolean;
+}): AuthenticatedUser {
+  return {
+    id: row.id,
+    username: row.username,
+    role: row.role,
+    mustChangePassword: row.mustChangePassword,
+  };
+}
+
+function assertRole(role: string): asserts role is UserRole {
+  if (role !== "admin" && role !== "teacher") {
+    throw new TypeError("Role must be admin or teacher");
+  }
+}
+
+function assertPasswordHash(passwordHash: string): void {
+  if (!isValidArgon2idHash(passwordHash)) {
+    throw new TypeError("Password hash must be a valid Argon2id PHC string");
+  }
+}
+
+function assertSha256Hash(value: string, label: string): void {
+  if (typeof value !== "string" || !SHA_256_HEX_PATTERN.test(value)) {
+    throw new TypeError(`${label} must be a SHA-256 hex hash`);
+  }
+}
+
+function assertValidDate(value: Date, label: string): void {
+  if (!(value instanceof Date) || Number.isNaN(value.valueOf())) {
+    throw new TypeError(`${label} must be a valid date`);
+  }
+}
+
+function snapshotSafeMetadata(
+  metadata: Record<string, unknown>,
+): Record<string, unknown> {
+  const ancestors = new Set<object>();
+
+  const clone = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      if (/^data:/i.test(value.trim())) throw new InvalidSecurityMetadataError();
+      return value;
+    }
+    if (value === null || typeof value === "boolean" || typeof value === "number") {
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        throw new InvalidSecurityMetadataError();
+      }
+      return value;
+    }
+    if (Array.isArray(value)) {
+      if (ancestors.has(value)) throw new InvalidSecurityMetadataError();
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new InvalidSecurityMetadataError();
+      }
+      ancestors.add(value);
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
+      if (!Number.isSafeInteger(length) || length < 0) {
+        throw new InvalidSecurityMetadataError();
+      }
+      const snapshot: unknown[] = [];
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor) {
+          snapshot.push(null);
+          continue;
+        }
+        if (!("value" in descriptor)) throw new InvalidSecurityMetadataError();
+        snapshot.push(clone(descriptor.value));
+      }
+      for (const key of Reflect.ownKeys(descriptors)) {
+        if (typeof key !== "string") throw new InvalidSecurityMetadataError();
+        if (key === "length" || /^\d+$/u.test(key)) continue;
+        const descriptor = descriptors[key];
+        if (descriptor.enumerable) throw new InvalidSecurityMetadataError();
+      }
+      ancestors.delete(value);
+      return snapshot;
+    }
+    if (typeof value !== "object" || value === null) {
+      throw new InvalidSecurityMetadataError();
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new InvalidSecurityMetadataError();
+    }
+    if (ancestors.has(value)) throw new InvalidSecurityMetadataError();
+    ancestors.add(value);
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const snapshot: Record<string, unknown> = {};
+    for (const key of Reflect.ownKeys(descriptors)) {
+      if (typeof key !== "string") throw new InvalidSecurityMetadataError();
+      const descriptor = descriptors[key];
+      if (!descriptor.enumerable) continue;
+      if (!("value" in descriptor)) {
+        throw new InvalidSecurityMetadataError();
+      }
+      const normalizedKey = key.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, "");
+      if (SENSITIVE_METADATA_KEYS.has(normalizedKey)) {
+        throw new InvalidSecurityMetadataError();
+      }
+      Object.defineProperty(snapshot, key, {
+        configurable: true,
+        enumerable: true,
+        value: clone(descriptor.value),
+        writable: true,
+      });
+    }
+    ancestors.delete(value);
+    return snapshot;
+  };
+
+  try {
+    const snapshot = clone(metadata);
+    if (typeof snapshot !== "object" || snapshot === null || Array.isArray(snapshot)) {
+      throw new InvalidSecurityMetadataError();
+    }
+    return snapshot as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof InvalidSecurityMetadataError) throw error;
+    throw new InvalidSecurityMetadataError();
+  }
+}
+
+export class AuthRepository {
+  private readonly now: () => Date;
+  private readonly createId: () => string;
+
+  constructor(
+    private readonly database: AppDatabase,
+    options: AuthRepositoryOptions = {},
+  ) {
+    this.now = options.now ?? (() => new Date());
+    this.createId = options.randomUUID ?? randomUUID;
+  }
+
+  private safely<T>(operation: () => T): T {
+    try {
+      return operation();
+    } catch (error) {
+      if (
+        error instanceof AuthStorageError ||
+        error instanceof DuplicateUsernameError ||
+        error instanceof DuplicateSessionTokenError ||
+        error instanceof AuthRecordNotFoundError ||
+        error instanceof InvalidSecurityMetadataError
+      ) {
+        throw error;
+      }
+      throw new AuthStorageError();
+    }
+  }
+
+  createUser(input: CreateUserInput): UserRecord {
+    const username = normalizeUsername(input.username);
+    assertRole(input.role);
+    assertPasswordHash(input.passwordHash);
+    const timestamp = this.now();
+    assertValidDate(timestamp, "Current time");
+    const id = this.createId();
+
+    try {
+      this.database
+        .insert(users)
+        .values({
+          id,
+          username,
+          passwordHash: input.passwordHash,
+          role: input.role,
+          mustChangePassword: input.mustChangePassword ?? false,
+          disabledAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        })
+        .run();
+    } catch (error) {
+      if (isSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE")) {
+        throw new DuplicateUsernameError();
+      }
+      throw new AuthStorageError();
+    }
+    return this.requireUserById(id);
+  }
+
+  findUserByUsername(username: string): UserRecord | null {
+    const normalizedUsername = normalizeUsername(username);
+    return this.safely(() => {
+      const row = this.database
+        .select()
+        .from(users)
+        .where(eq(users.username, normalizedUsername))
+        .get();
+      return row ? asUserRecord(row) : null;
+    });
+  }
+
+  private requireUserById(userId: string): UserRecord {
+    return this.safely(() => {
+      const row = this.database.select().from(users).where(eq(users.id, userId)).get();
+      if (!row) throw new AuthRecordNotFoundError();
+      return asUserRecord(row);
+    });
+  }
+
+  updatePasswordHash(
+    userId: string,
+    passwordHash: string,
+    mustChangePassword = false,
+  ): UserRecord {
+    assertPasswordHash(passwordHash);
+    const timestamp = this.now();
+    return this.safely(() => {
+      this.database.transaction((transaction) => {
+        const update = transaction
+          .update(users)
+          .set({ passwordHash, mustChangePassword, updatedAt: timestamp })
+          .where(eq(users.id, userId))
+          .run();
+        if (update.changes === 0) throw new AuthRecordNotFoundError();
+        transaction
+          .update(sessions)
+          .set({ revokedAt: timestamp })
+          .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+          .run();
+      });
+      return this.requireUserById(userId);
+    });
+  }
+
+  disableUser(userId: string): UserRecord {
+    const timestamp = this.now();
+    return this.safely(() => {
+      this.database.transaction((transaction) => {
+        const update = transaction
+          .update(users)
+          .set({ disabledAt: timestamp, updatedAt: timestamp })
+          .where(eq(users.id, userId))
+          .run();
+        if (update.changes === 0) throw new AuthRecordNotFoundError();
+        transaction
+          .update(sessions)
+          .set({ revokedAt: timestamp })
+          .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+          .run();
+      });
+      return this.requireUserById(userId);
+    });
+  }
+
+  restoreUser(userId: string): UserRecord {
+    const timestamp = this.now();
+    return this.safely(() => {
+      const update = this.database
+        .update(users)
+        .set({ disabledAt: null, updatedAt: timestamp })
+        .where(eq(users.id, userId))
+        .run();
+      if (update.changes === 0) throw new AuthRecordNotFoundError();
+      return this.requireUserById(userId);
+    });
+  }
+
+  createSession(input: CreateSessionInput): SessionRecord {
+    assertSha256Hash(input.tokenHash, "Session token hash");
+    assertValidDate(input.expiresAt, "Session expiration");
+    const timestamp = this.now();
+    const id = this.createId();
+    try {
+      this.database.transaction((transaction) => {
+        const activeUser = transaction
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.id, input.userId), isNull(users.disabledAt)))
+          .get();
+        if (!activeUser) throw new AuthStorageError();
+        transaction
+          .insert(sessions)
+          .values({
+            id,
+            userId: input.userId,
+            tokenHash: input.tokenHash,
+            lastSeenAt: timestamp,
+            expiresAt: input.expiresAt,
+            createdAt: timestamp,
+            revokedAt: null,
+          })
+          .run();
+      });
+    } catch (error) {
+      if (error instanceof AuthStorageError) throw error;
+      if (isSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE")) {
+        throw new DuplicateSessionTokenError();
+      }
+      throw new AuthStorageError();
+    }
+    return this.requireSessionById(id);
+  }
+
+  private requireSessionById(sessionId: string): SessionRecord {
+    return this.safely(() => {
+      const row = this.database
+        .select({
+          id: sessions.id,
+          lastSeenAt: sessions.lastSeenAt,
+          expiresAt: sessions.expiresAt,
+          createdAt: sessions.createdAt,
+          userId: users.id,
+          username: users.username,
+          role: users.role,
+          mustChangePassword: users.mustChangePassword,
+        })
+        .from(sessions)
+        .innerJoin(users, eq(sessions.userId, users.id))
+        .where(eq(sessions.id, sessionId))
+        .get();
+      if (!row) throw new AuthRecordNotFoundError();
+      return {
+        id: row.id,
+        user: asAuthenticatedUser({
+          id: row.userId,
+          username: row.username,
+          role: row.role,
+          mustChangePassword: row.mustChangePassword,
+        }),
+        lastSeenAt: row.lastSeenAt,
+        expiresAt: row.expiresAt,
+        createdAt: row.createdAt,
+      };
+    });
+  }
+
+  findValidSessionByTokenHash(tokenHash: string): SessionRecord | null {
+    if (typeof tokenHash !== "string" || !SHA_256_HEX_PATTERN.test(tokenHash)) return null;
+    const timestamp = this.now();
+    return this.safely(() => {
+      const row = this.database
+        .select({
+          id: sessions.id,
+          lastSeenAt: sessions.lastSeenAt,
+          expiresAt: sessions.expiresAt,
+          createdAt: sessions.createdAt,
+          userId: users.id,
+          username: users.username,
+          role: users.role,
+          mustChangePassword: users.mustChangePassword,
+        })
+        .from(sessions)
+        .innerJoin(users, eq(sessions.userId, users.id))
+        .where(
+          and(
+            eq(sessions.tokenHash, tokenHash),
+            isNull(sessions.revokedAt),
+            gt(sessions.expiresAt, timestamp),
+            isNull(users.disabledAt),
+          ),
+        )
+        .get();
+      if (!row) return null;
+      return {
+        id: row.id,
+        user: asAuthenticatedUser({
+          id: row.userId,
+          username: row.username,
+          role: row.role,
+          mustChangePassword: row.mustChangePassword,
+        }),
+        lastSeenAt: row.lastSeenAt,
+        expiresAt: row.expiresAt,
+        createdAt: row.createdAt,
+      };
+    });
+  }
+
+  refreshSession(sessionId: string): SessionRecord {
+    const timestamp = this.now();
+    const expiresAt = new Date(timestamp.valueOf() + SESSION_EXTENSION_MS);
+    return this.safely(() => {
+      this.database.transaction((transaction) => {
+        const active = transaction
+          .select({ id: sessions.id })
+          .from(sessions)
+          .innerJoin(users, eq(sessions.userId, users.id))
+          .where(
+            and(
+              eq(sessions.id, sessionId),
+              isNull(sessions.revokedAt),
+              gt(sessions.expiresAt, timestamp),
+              isNull(users.disabledAt),
+            ),
+          )
+          .get();
+        if (!active) throw new AuthRecordNotFoundError();
+        transaction
+          .update(sessions)
+          .set({ lastSeenAt: timestamp, expiresAt })
+          .where(eq(sessions.id, sessionId))
+          .run();
+      });
+      return this.requireSessionById(sessionId);
+    });
+  }
+
+  revokeSession(sessionId: string): boolean {
+    const timestamp = this.now();
+    return this.safely(
+      () =>
+        this.database
+          .update(sessions)
+          .set({ revokedAt: timestamp })
+          .where(and(eq(sessions.id, sessionId), isNull(sessions.revokedAt)))
+          .run().changes > 0,
+    );
+  }
+
+  revokeAllUserSessions(userId: string): number {
+    const timestamp = this.now();
+    return this.safely(
+      () =>
+        this.database
+          .update(sessions)
+          .set({ revokedAt: timestamp })
+          .where(and(eq(sessions.userId, userId), isNull(sessions.revokedAt)))
+          .run().changes,
+    );
+  }
+
+  recordLoginAttempt(input: LoginAttemptInput): LoginAttemptRecord {
+    const normalizedUsername = normalizeUsername(input.username);
+    assertSha256Hash(input.ipHash, "IP hash");
+    const attemptedAt = this.now();
+    return this.safely(() => {
+      const result = this.database
+        .insert(loginAttempts)
+        .values({
+          normalizedUsername,
+          ipHash: input.ipHash,
+          succeeded: input.succeeded,
+          attemptedAt,
+        })
+        .run();
+      return {
+        id: Number(result.lastInsertRowid),
+        normalizedUsername,
+        ipHash: input.ipHash,
+        succeeded: input.succeeded,
+        attemptedAt,
+      };
+    });
+  }
+
+  private countConsecutiveFailures(
+    condition: ReturnType<typeof eq>,
+    cutoff: Date,
+  ): number {
+    const attempts = this.database
+      .select({ succeeded: loginAttempts.succeeded })
+      .from(loginAttempts)
+      .where(and(condition, gte(loginAttempts.attemptedAt, cutoff)))
+      .orderBy(desc(loginAttempts.attemptedAt), desc(loginAttempts.id))
+      .all();
+    let failures = 0;
+    for (const attempt of attempts) {
+      if (attempt.succeeded) break;
+      failures += 1;
+    }
+    return failures;
+  }
+
+  getLoginFailureStatus(query: LoginFailureQuery): LoginFailureStatus {
+    const normalizedUsername = normalizeUsername(query.username);
+    assertSha256Hash(query.ipHash, "IP hash");
+    const cutoff = new Date(this.now().valueOf() - LOGIN_FAILURE_WINDOW_MS);
+    return this.safely(() => {
+      const usernameFailures = this.countConsecutiveFailures(
+        eq(loginAttempts.normalizedUsername, normalizedUsername),
+        cutoff,
+      );
+      const ipFailures = this.countConsecutiveFailures(
+        eq(loginAttempts.ipHash, query.ipHash),
+        cutoff,
+      );
+      return {
+        usernameFailures,
+        ipFailures,
+        usernameLocked: usernameFailures >= LOGIN_FAILURE_LIMIT,
+        ipLocked: ipFailures >= LOGIN_FAILURE_LIMIT,
+      };
+    });
+  }
+
+  recordSecurityEvent(input: SecurityEventInput): SecurityEventRecord {
+    if (typeof input.eventType !== "string" || input.eventType.trim().length === 0) {
+      throw new TypeError("Security event type must not be empty");
+    }
+    const metadata = snapshotSafeMetadata(input.metadata);
+    const createdAt = this.now();
+    return this.safely(() => {
+      const result = this.database
+        .insert(securityEvents)
+        .values({
+          userId: input.userId,
+          eventType: input.eventType,
+          metadata,
+          createdAt,
+        })
+        .run();
+      return {
+        id: Number(result.lastInsertRowid),
+        userId: input.userId,
+        eventType: input.eventType,
+        metadata,
+        createdAt,
+      };
+    });
+  }
+}
+
+export type {
+  AuthenticatedUser,
+  CreateSessionInput,
+  CreateUserInput,
+  LoginAttemptInput,
+  LoginAttemptRecord,
+  LoginFailureQuery,
+  LoginFailureStatus,
+  SecurityEventInput,
+  SecurityEventRecord,
+  SessionRecord,
+  UserRecord,
+  UserRole,
+} from "./auth-types";
