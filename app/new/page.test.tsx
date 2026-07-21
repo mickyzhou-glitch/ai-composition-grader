@@ -46,15 +46,15 @@ describe("新建作文批改", () => {
   it("按调整后的三图顺序上传，并提交旋转和裁剪", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => json({ id: "review-new" }, 201))
+      .mockImplementationOnce(() => json({ id: "review-new", revision: 0 }, 201))
       .mockImplementationOnce(() =>
         json({ images: [
           { id: 11, position: 0 },
           { id: 12, position: 1 },
           { id: 13, position: 2 },
-        ] }),
+        ], revision: 1 }),
       )
-      .mockImplementationOnce(() => json({ images: [] }));
+      .mockImplementationOnce(() => json({ images: [], revision: 2 }));
     const user = userEvent.setup();
     render(<NewReviewPage />);
 
@@ -95,11 +95,11 @@ describe("新建作文批改", () => {
   it("上传失败后改题重试会先 PATCH 最新配置，再上传图片", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => json({ id: "review-retry" }, 201))
+      .mockImplementationOnce(() => json({ id: "review-retry", revision: 0 }, 201))
       .mockImplementationOnce(() => json({ code: "UPLOAD_FAILED", message: "上传失败" }, 502))
-      .mockImplementationOnce(() => json({ id: "review-retry" }))
-      .mockImplementationOnce(() => json({ images: [{ id: 31, position: 0 }] }))
-      .mockImplementationOnce(() => json({ images: [] }));
+      .mockImplementationOnce(() => json({ id: "review-retry", revision: 1 }))
+      .mockImplementationOnce(() => json({ images: [{ id: 31, position: 0 }], revision: 2 }))
+      .mockImplementationOnce(() => json({ images: [], revision: 3 }));
     const user = userEvent.setup();
     render(<NewReviewPage />);
 
@@ -133,7 +133,39 @@ describe("新建作文批改", () => {
       url === "/api/reviews/review-retry" && (init as RequestInit).method === "PATCH",
     );
     expect(JSON.parse((configRequest?.[1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 0,
       config: { title: "修订后的题目" },
+    });
+  });
+
+  it("图片后续接口返回新版本时，重试配置同步使用最新版本", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ id: "review-versioned", revision: 0 }, 201))
+      .mockImplementationOnce(() => json({ images: [{ id: 41, position: 0 }], revision: 1 }))
+      .mockImplementationOnce(() => json({ code: "TRANSFORM_FAILED", message: "处理失败" }, 502))
+      .mockImplementationOnce(() => json({ id: "review-versioned", revision: 2 }))
+      .mockImplementationOnce(() => json({ images: [{ id: 41, position: 0 }], revision: 3 }));
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+
+    await user.click(screen.getByRole("button", { name: /为自己鼓掌/ }));
+    await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
+    await user.upload(
+      screen.getByLabelText("选择作文图片"),
+      new File(["image"], "versioned.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("处理失败");
+
+    await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+
+    const retryConfig = fetchMock.mock.calls[3];
+    expect(retryConfig[0]).toBe("/api/reviews/review-versioned");
+    expect(JSON.parse((retryConfig[1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 1,
     });
   });
 });

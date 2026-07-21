@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Annotation, EvaluationReport } from "@/src/domain/contracts";
 import { AppHeader } from "../../components/AppHeader";
@@ -15,6 +15,10 @@ import type { ReviewView } from "../../lib/types";
 
 interface AnalyzeResult { review: ReviewView; pageWarnings: string[] }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 export default function ReviewPage() {
   const { id } = useParams<{ id: string }>();
   const reviewId = String(id);
@@ -27,6 +31,15 @@ export default function ReviewPage() {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const mountedRef = useRef(false);
+  const requestTokenRef = useRef(0);
+  const requestControllerRef = useRef<AbortController | null>(null);
+
+  const invalidateLoad = useCallback(() => {
+    requestTokenRef.current += 1;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+  }, []);
 
   const applyReview = useCallback((loaded: ReviewView) => {
     setReview(loaded);
@@ -35,22 +48,41 @@ export default function ReviewPage() {
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
   }, []);
 
+  const loadReview = useCallback(async (showLoading = true) => {
+    const token = requestTokenRef.current + 1;
+    requestTokenRef.current = token;
+    requestControllerRef.current?.abort();
+    requestControllerRef.current = null;
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const isLatest = () =>
+      mountedRef.current &&
+      requestTokenRef.current === token;
+
+    if (showLoading && isLatest()) setLoading(true);
+    if (isLatest()) setError("");
+    try {
+      const loaded = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
+        signal: controller.signal,
+      });
+      if (isLatest()) {
+        applyReview(loaded);
+        setDirty(false);
+      }
+    } catch (caught) {
+      if (isLatest() && !isAbortError(caught)) setError(errorMessage(caught));
+    } finally {
+      if (showLoading && isLatest()) setLoading(false);
+    }
+  }, [applyReview, reviewId]);
+
   const refresh = useCallback(async (showLoading = true, force = false) => {
     if (dirty && !force) {
       setNotice("本地复核内容尚未保存，已保留当前草稿。");
       return;
     }
-    if (showLoading) setLoading(true);
-    setError("");
-    try {
-      applyReview(await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`));
-      setDirty(false);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      if (showLoading) setLoading(false);
-    }
-  }, [applyReview, dirty, reviewId]);
+    await loadReview(showLoading);
+  }, [dirty, loadReview]);
 
   async function forceRefresh() {
     if (!window.confirm("将放弃当前未保存的复核修改并加载服务器最新内容，确定继续吗？")) return;
@@ -58,19 +90,44 @@ export default function ReviewPage() {
   }
 
   useEffect(() => {
-    let active = true;
-    void apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`)
-      .then((loaded) => { if (active) applyReview(loaded); })
-      .catch((caught) => { if (active) setError(errorMessage(caught)); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [applyReview, reviewId]);
+    mountedRef.current = true;
+    const token = requestTokenRef.current + 1;
+    requestTokenRef.current = token;
+    requestControllerRef.current?.abort();
+    const controller = new AbortController();
+    requestControllerRef.current = controller;
+    const isLatest = () => mountedRef.current && requestTokenRef.current === token;
+
+    void Promise.resolve().then(() => {
+      if (!isLatest()) return;
+      setLoading(true);
+      setError("");
+    });
+    void apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
+      signal: controller.signal,
+    })
+      .then((loaded) => {
+        if (isLatest()) applyReview(loaded);
+      })
+      .catch((caught) => {
+        if (!isLatest() || isAbortError(caught)) return;
+        setReview((current) => current?.id === reviewId ? current : null);
+        setError(errorMessage(caught));
+      })
+      .finally(() => {
+        if (isLatest()) setLoading(false);
+      });
+    return () => {
+      mountedRef.current = false;
+      invalidateLoad();
+    };
+  }, [applyReview, invalidateLoad, reviewId]);
 
   useEffect(() => {
-    if (review?.status !== "analyzing") return;
+    if (review?.status !== "analyzing" || busy !== null) return;
     const timer = window.setInterval(() => { void refresh(false); }, 1500);
     return () => window.clearInterval(timer);
-  }, [refresh, review?.status]);
+  }, [busy, refresh, review?.status]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -97,26 +154,28 @@ export default function ReviewPage() {
   );
 
   function changeAnnotations(next: Annotation[]) {
+    invalidateLoad();
     setAnnotations(next);
     setDirty(true);
     setNotice("");
   }
 
   function changeReport(next: EvaluationReport) {
+    invalidateLoad();
     setReport(next);
     setDirty(true);
     setNotice("");
   }
 
   async function save() {
-    if (!report) return;
+    if (!report || !review || busy) return;
     setBusy("save");
     setError("");
     try {
       const saved = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ report, annotations }),
+        body: JSON.stringify({ expectedRevision: review.revision, report, annotations }),
       });
       applyReview(saved);
       setDirty(false);
@@ -129,9 +188,11 @@ export default function ReviewPage() {
   }
 
   async function analyze() {
+    if (busy) return;
     if (dirty && !window.confirm("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？")) {
       return;
     }
+    invalidateLoad();
     setBusy("analyze");
     setError("");
     setNotice("");
@@ -148,6 +209,7 @@ export default function ReviewPage() {
   }
 
   async function replaceImages(files: File[]) {
+    if (busy) return;
     if (files.length < 1 || files.length > 3) {
       setError("请选择 1 至 3 张作文图片");
       return;
@@ -155,13 +217,14 @@ export default function ReviewPage() {
     if (dirty && !window.confirm("当前复核内容尚未保存，替换图片会清空这些修改。确定继续吗？")) {
       return;
     }
+    invalidateLoad();
     setBusy("replace");
     setError("");
     setNotice("");
     try {
       const form = new FormData();
       files.forEach((file) => form.append("images", file));
-      const uploaded = await apiFetch<{ images: ReviewView["images"] }>(
+      const uploaded = await apiFetch<{ images: ReviewView["images"]; revision: number }>(
         `/api/reviews/${encodeURIComponent(reviewId)}/images`,
         { method: "POST", body: form },
       );
@@ -171,7 +234,7 @@ export default function ReviewPage() {
         status: "draft",
         report: null,
         annotations: [],
-        revision: current.revision + 1,
+        revision: uploaded.revision,
       } : current);
       setReport(null);
       setAnnotations([]);
@@ -194,7 +257,7 @@ export default function ReviewPage() {
         type="file"
         accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
         multiple
-        disabled={busy === "replace"}
+        disabled={busy !== null}
         onChange={(event) => {
           void replaceImages(Array.from(event.target.files ?? []));
           event.currentTarget.value = "";
@@ -203,7 +266,7 @@ export default function ReviewPage() {
     </label>;
   }
 
-  if (loading) return <div className="app-shell"><AppHeader compact /><main className="review-loading" role="status">正在展开作文与批改报告…</main></div>;
+  if (loading || (review !== null && review.id !== reviewId)) return <div className="app-shell"><AppHeader compact /><main className="review-loading" role="status">正在展开作文与批改报告…</main></div>;
   if (!review) return <div className="app-shell"><AppHeader compact /><main className="narrow-page"><ErrorBanner message={error || "批改记录不存在"} onRetry={() => void refresh()} /></main></div>;
 
   return (
@@ -212,7 +275,7 @@ export default function ReviewPage() {
       <main className="review-page">
         <header className="review-heading">
           <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
-          <div className="review-actions"><AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" onClick={() => void analyze()}>重新分析</AsyncButton>{review.status !== "needs_better_images" ? replacementControl() : null}{report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty} onClick={() => void save()}>保存复核</AsyncButton> : null}</div>
+          <div className="review-actions"><AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={busy !== null} onClick={() => void analyze()}>重新分析</AsyncButton>{review.status !== "needs_better_images" ? replacementControl() : null}{report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null} onClick={() => void save()}>保存复核</AsyncButton> : null}</div>
         </header>
         {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
@@ -224,7 +287,7 @@ export default function ReviewPage() {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 3 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={review.images.length === 0} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor report={report} onChange={changeReport} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={review.images.length === 0 || busy !== null} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
         </section>
       </main>

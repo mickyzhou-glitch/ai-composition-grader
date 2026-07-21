@@ -39,6 +39,8 @@ interface PendingImage {
 }
 
 interface UploadedImage { id: number; position: number }
+interface ReviewSession { id: string; revision: number }
+interface ImageMutationResult { images: UploadedImage[]; revision: number }
 
 function asCrop(edges: CropEdges): NormalizedCrop | null {
   const { left, top, right, bottom } = edges;
@@ -66,7 +68,7 @@ export default function NewReviewPage() {
   const [step, setStep] = useState(1);
   const [config, setConfig] = useState<AssignmentConfig>(presetConfig);
   const [images, setImages] = useState<PendingImage[]>([]);
-  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [review, setReview] = useState<ReviewSession | null>(null);
   const [uploaded, setUploaded] = useState<UploadedImage[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -118,34 +120,36 @@ export default function NewReviewPage() {
     setBusy(true);
     setError("");
     try {
-      let id = reviewId;
-      if (!id) {
-        const created = await apiFetch<{ id: string }>("/api/reviews", {
+      let currentReview = review;
+      if (!currentReview) {
+        currentReview = await apiFetch<ReviewSession>("/api/reviews", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ config }),
         });
-        id = created.id;
-        setReviewId(id);
+        setReview(currentReview);
       } else {
-        await apiFetch(`/api/reviews/${encodeURIComponent(id)}`, {
+        currentReview = await apiFetch<ReviewSession>(`/api/reviews/${encodeURIComponent(currentReview.id)}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ config }),
+          body: JSON.stringify({ expectedRevision: currentReview.revision, config }),
         });
+        setReview(currentReview);
       }
       let serverImages = uploaded;
       if (!serverImages) {
         const form = new FormData();
         images.forEach(({ file }) => form.append("images", file));
-        const uploadResult = await apiFetch<{ images: UploadedImage[] }>(`/api/reviews/${encodeURIComponent(id)}/images`, {
+        const uploadResult = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
           method: "POST",
           body: form,
         });
         serverImages = [...uploadResult.images].sort((a, b) => a.position - b.position);
         setUploaded(serverImages);
+        currentReview = { ...currentReview, revision: uploadResult.revision };
+        setReview(currentReview);
       }
-      await apiFetch(`/api/reviews/${encodeURIComponent(id)}/images`, {
+      const transformed = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -157,7 +161,8 @@ export default function NewReviewPage() {
           })),
         }),
       });
-      router.push(`/reviews/${encodeURIComponent(id)}`);
+      setReview({ ...currentReview, revision: transformed.revision });
+      router.push(`/reviews/${encodeURIComponent(currentReview.id)}`);
     } catch (caught) {
       setError(`${errorMessage(caught)}。已保留当前内容，可直接重试。`);
     } finally {

@@ -1,8 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: "review-1" }) }));
+const navigation = vi.hoisted(() => ({ reviewId: "review-1" }));
+
+vi.mock("next/navigation", () => ({ useParams: () => ({ id: navigation.reviewId }) }));
 
 import ReviewPage from "./page";
 
@@ -30,13 +32,20 @@ function json(data: unknown, status = 200) {
   }));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
 describe("复核页", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("保存时 PATCH 完整 report 与 annotations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
-      .mockImplementationOnce(() => json(review));
+      .mockImplementationOnce(() => json({ ...review, revision: 7 }))
+      .mockImplementationOnce(() => json({ ...review, revision: 8 }));
     const user = userEvent.setup();
     render(<ReviewPage />);
 
@@ -48,12 +57,40 @@ describe("复核页", () => {
     const request = fetchMock.mock.calls[1];
     expect(request[0]).toBe("/api/reviews/review-1");
     expect(JSON.parse((request[1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 1,
       report: { personalizedComment: "观察细致，继续保持" }, annotations: [],
     });
     expect(screen.getByAltText("第 1 页作文")).toHaveAttribute(
       "src",
       "/api/reviews/review-1/files?imageId=1&variant=annotation",
     );
+
+    await user.clear(screen.getByLabelText("个性评语"));
+    await user.type(screen.getByLabelText("个性评语"), "第二次保存");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 7,
+    });
+  });
+
+  it("保存进行时禁用保存、分析和替换，避免同页写入重叠", async () => {
+    const saved = deferred<Response>();
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => saved.promise);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.clear(await screen.findByLabelText("个性评语"));
+    await user.type(screen.getByLabelText("个性评语"), "待保存内容");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "重新分析" })).toBeDisabled();
+    expect(screen.getByLabelText("替换/重拍作文图片")).toBeDisabled();
+
+    saved.resolve(await json({ ...review, revision: 2 }));
   });
 
   it("替换图片控件使用 file-label 显示键盘焦点", async () => {
@@ -157,9 +194,9 @@ describe("复核页", () => {
         report: { ...review.report, personalizedComment: "服务端轮询内容" },
       }));
     const intervals: Array<() => void> = [];
-    vi.spyOn(window, "setInterval").mockImplementation((callback) => {
-      intervals.push(callback as () => void);
-      return intervals.length as never;
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
+      if (delay === 1500) intervals.push(callback as () => void);
+      return (intervals.length || 1) as never;
     });
     vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
     const user = userEvent.setup();
@@ -172,6 +209,140 @@ describe("复核页", () => {
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText("个性评语")).toHaveValue("本地轮询草稿");
+  });
+
+  it("轮询发出后开始编辑时废弃在途响应", async () => {
+    const pending = deferred<Response>();
+    const intervals: Array<() => void> = [];
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
+      if (delay === 1500) intervals.push(callback as () => void);
+      return (intervals.length || 1) as never;
+    });
+    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => pending.promise);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await screen.findByLabelText("个性评语");
+    await waitFor(() => expect(intervals).toHaveLength(1));
+    intervals[0]();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    await user.clear(screen.getByLabelText("个性评语"));
+    await user.type(screen.getByLabelText("个性评语"), "请求发出后的本地草稿");
+    await act(async () => {
+      pending.resolve(await json({
+        ...review,
+        report: { ...review.report, personalizedComment: "迟到的服务端内容" },
+      }));
+    });
+
+    expect(screen.getByLabelText("个性评语")).toHaveValue("请求发出后的本地草稿");
+  });
+
+  it("较旧轮询响应晚到时不会覆盖最新响应", async () => {
+    const older = deferred<Response>();
+    const latest = deferred<Response>();
+    let olderSignal: AbortSignal | undefined;
+    const intervals: Array<() => void> = [];
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
+      if (delay === 1500) intervals.push(callback as () => void);
+      return (intervals.length || 1) as never;
+    });
+    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce((_input, init) => {
+        olderSignal = (init as RequestInit | undefined)?.signal as AbortSignal | undefined;
+        return older.promise;
+      })
+      .mockImplementationOnce(() => latest.promise);
+    render(<ReviewPage />);
+
+    await screen.findByLabelText("个性评语");
+    await waitFor(() => expect(intervals).toHaveLength(1));
+    intervals[0]();
+    intervals[0]();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(olderSignal?.aborted).toBe(true);
+
+    latest.resolve(await json({
+      ...review,
+      report: { ...review.report, personalizedComment: "最新轮询结果" },
+    }));
+    await waitFor(() => expect(screen.getByLabelText("个性评语")).toHaveValue("最新轮询结果"));
+
+    older.resolve(await json({
+      ...review,
+      report: { ...review.report, personalizedComment: "过期轮询结果" },
+    }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(screen.getByLabelText("个性评语")).toHaveValue("最新轮询结果");
+  });
+
+  it("替换图片会废弃在途轮询，防止旧图片回写", async () => {
+    const pendingPoll = deferred<Response>();
+    const intervals: Array<() => void> = [];
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
+      if (delay === 1500) intervals.push(callback as () => void);
+      return (intervals.length || 1) as never;
+    });
+    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => pendingPoll.promise)
+      .mockImplementationOnce(() => json({
+        images: [{ ...review.images[0], id: 8, originalName: "替换.jpg" }],
+        revision: 9,
+      }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await screen.findByAltText("第 1 页作文");
+    await waitFor(() => expect(intervals).toHaveLength(1));
+    intervals[0]();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await user.upload(
+      screen.getByLabelText("替换/重拍作文图片"),
+      new File(["image"], "替换.jpg", { type: "image/jpeg" }),
+    );
+    await waitFor(() => expect(screen.getByAltText("第 1 页作文")).toHaveAttribute(
+      "src",
+      "/api/reviews/review-1/files?imageId=8&variant=annotation",
+    ));
+
+    await act(async () => {
+      pendingPoll.resolve(await json(review));
+    });
+
+    expect(screen.getByAltText("第 1 页作文")).toHaveAttribute(
+      "src",
+      "/api/reviews/review-1/files?imageId=8&variant=annotation",
+    );
+  });
+
+  it("卸载时中止未完成请求且不触发状态更新警告", async () => {
+    const pending = deferred<Response>();
+    let signal: AbortSignal | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      signal = (init as RequestInit | undefined)?.signal as AbortSignal | undefined;
+      return pending.promise;
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { unmount } = render(<ReviewPage />);
+
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(1));
+    unmount();
+
+    expect(signal?.aborted).toBe(true);
+    pending.resolve(await json(review));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(consoleError).not.toHaveBeenCalled();
   });
 
   it("分析遇到 409 时提示刷新后重试", async () => {
