@@ -79,7 +79,9 @@ export class RetentionService {
     };
     for (const candidate of candidates) {
       const outcome = await this.lock.runExclusive(candidate.id, () =>
-        this.processCandidate(candidate, false),
+        this.fileStore.withReviewLock(candidate.ownerId, candidate.id, () =>
+          this.processCandidate(candidate, false),
+        ),
       );
       if (outcome.claimed) result.claimed += 1;
       if (outcome.deleted) result.deleted += 1;
@@ -101,28 +103,30 @@ export class RetentionService {
     // a 404 to preserve the owner-scoped API contract.
     const existedBeforeWaiting = this.repository.existsOwned(ownerId, reviewId);
     if (!existedBeforeWaiting) throw new ReviewNotFoundError(reviewId);
-    await this.lock.runExclusive(reviewId, async () => {
-    const now = this.now();
-    const marked = this.repository.markDeleting(ownerId, reviewId, now, { force: true });
-    if (!marked) {
-      if (!this.repository.existsOwned(ownerId, reviewId)) return;
-      throw new ReviewNotFoundError(reviewId);
-    }
-    const candidate: RetentionCandidate = {
-      id: reviewId,
-      ownerId,
-      createdAt: now,
-      expiresAt: null,
-      deletingAt: now,
-      imageCount: 0,
-    };
-    const outcome = await this.processCandidate(candidate, true);
-    if (!outcome.deleted) {
-      const error = new Error("作文删除暂未完成");
-      error.name = outcome.errorCode ?? "RETENTION_DELETE_FAILED";
-      throw error;
-    }
-    });
+    await this.lock.runExclusive(reviewId, () =>
+      this.fileStore.withReviewLock(ownerId, reviewId, async () => {
+        const now = this.now();
+        const marked = this.repository.markDeleting(ownerId, reviewId, now, { force: true });
+        if (!marked) {
+          if (!this.repository.existsOwned(ownerId, reviewId)) return;
+          throw new ReviewNotFoundError(reviewId);
+        }
+        const candidate: RetentionCandidate = {
+          id: reviewId,
+          ownerId,
+          createdAt: now,
+          expiresAt: null,
+          deletingAt: now,
+          imageCount: 0,
+        };
+        const outcome = await this.processCandidate(candidate, true);
+        if (!outcome.deleted) {
+          const error = new Error("作文删除暂未完成");
+          error.name = outcome.errorCode ?? "RETENTION_DELETE_FAILED";
+          throw error;
+        }
+      }),
+    );
   }
 
   private async processCandidate(

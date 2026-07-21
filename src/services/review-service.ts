@@ -83,73 +83,79 @@ export class ReviewService {
     data: Buffer;
     contentType: string;
   }> {
-    const review = this.get(ownerId, id);
-    await this.fileStore.migrateLegacyReview(ownerId, id);
-    const image = review.images.find((candidate) => candidate.id === imageId);
-    if (!image) {
-      throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
-    }
-    const storedPath = image[`${variant}Path`];
-    if (!/^images\/[^/\\\0]+$/.test(storedPath)) {
-      throw new ReviewServiceError("INVALID_FILE_PATH", "图片路径无效", 400);
-    }
-    const extension = storedPath.split(".").at(-1)?.toLowerCase();
-    const contentTypes: Record<string, string> = {
-      jpg: "image/jpeg",
-      jpeg: "image/jpeg",
-      png: "image/png",
-      webp: "image/webp",
-      heic: "image/heic",
-      heif: "image/heif",
-    };
-    const contentType = extension ? contentTypes[extension] : undefined;
-    if (!contentType) {
-      throw new ReviewServiceError("INVALID_FILE_PATH", "图片格式无效", 400);
-    }
-    try {
-      return {
-        data: await this.fileStore.readFile(
-          ownerId,
-          id,
-          "images",
-          storedPath.slice("images/".length),
-        ),
-        contentType,
-      };
-    } catch (error) {
-      if (
-        typeof error === "object" &&
-        error !== null &&
-        "code" in error &&
-        error.code === "ENOENT"
-      ) {
+    return this.fileStore.withReviewLock(ownerId, id, async () => {
+      const review = this.get(ownerId, id);
+      await this.fileStore.migrateLegacyReview(ownerId, id);
+      const image = review.images.find((candidate) => candidate.id === imageId);
+      if (!image) {
         throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
       }
-      throw error;
-    }
+      const storedPath = image[`${variant}Path`];
+      if (!/^images\/[^/\\\0]+$/.test(storedPath)) {
+        throw new ReviewServiceError("INVALID_FILE_PATH", "图片路径无效", 400);
+      }
+      const extension = storedPath.split(".").at(-1)?.toLowerCase();
+      const contentTypes: Record<string, string> = {
+        jpg: "image/jpeg",
+        jpeg: "image/jpeg",
+        png: "image/png",
+        webp: "image/webp",
+        heic: "image/heic",
+        heif: "image/heif",
+      };
+      const contentType = extension ? contentTypes[extension] : undefined;
+      if (!contentType) {
+        throw new ReviewServiceError("INVALID_FILE_PATH", "图片格式无效", 400);
+      }
+      try {
+        return {
+          data: await this.fileStore.readFile(
+            ownerId,
+            id,
+            "images",
+            storedPath.slice("images/".length),
+          ),
+          contentType,
+        };
+      } catch (error) {
+        if (
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "ENOENT"
+        ) {
+          throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
+        }
+        throw error;
+      }
+    });
   }
 
   async create(ownerId: string, config: AssignmentConfig): Promise<ReviewRecord> {
     await this.recovery;
     const id = this.createId();
-    await this.fileStore.createReview(ownerId, id);
-    try {
-      return this.repository.create(ownerId, { id, config });
-    } catch (error) {
-      await this.fileStore.deleteReview(ownerId, id);
-      throw error;
-    }
+    return this.fileStore.withReviewLock(ownerId, id, async () => {
+      await this.fileStore.createReview(ownerId, id);
+      try {
+        return this.repository.create(ownerId, { id, config });
+      } catch (error) {
+        await this.fileStore.deleteReview(ownerId, id);
+        throw error;
+      }
+    });
   }
 
   async update(ownerId: string, id: string, input: TeacherReviewEdits): Promise<ReviewRecord> {
     return this.lock.runExclusive(id, async () => {
-      const current = this.get(ownerId, id);
-      await this.fileStore.migrateLegacyReview(ownerId, id);
-      const updated = this.repository.updateTeacherEdits(ownerId, id, input);
-      if (current.pdfFilename) {
-        await this.fileStore.queuePdfCleanup(ownerId, id, [current.pdfFilename]);
-      }
-      return updated;
+      return this.fileStore.withReviewLock(ownerId, id, async () => {
+        const current = this.get(ownerId, id);
+        await this.fileStore.migrateLegacyReview(ownerId, id);
+        const updated = this.repository.updateTeacherEdits(ownerId, id, input);
+        if (current.pdfFilename) {
+          await this.fileStore.queuePdfCleanup(ownerId, id, [current.pdfFilename]);
+        }
+        return updated;
+      });
     });
   }
 
@@ -160,20 +166,22 @@ export class ReviewService {
       return;
     }
     await this.lock.runExclusive(id, async () => {
-      this.get(ownerId, id);
-      await this.fileStore.migrateLegacyReview(ownerId, id);
-      const staged = await this.fileStore.stageDelete(ownerId, id);
-      try {
-        this.repository.delete(ownerId, id);
-      } catch (error) {
-        await staged.rollback();
-        throw error;
-      }
-      try {
-        await staged.commit();
-      } catch {
-        // The DB deletion is authoritative; startup recovery retries trash cleanup.
-      }
+      await this.fileStore.withReviewLock(ownerId, id, async () => {
+        this.get(ownerId, id);
+        await this.fileStore.migrateLegacyReview(ownerId, id);
+        const staged = await this.fileStore.stageDelete(ownerId, id);
+        try {
+          this.repository.delete(ownerId, id);
+        } catch (error) {
+          await staged.rollback();
+          throw error;
+        }
+        try {
+          await staged.commit();
+        } catch {
+          // The DB deletion is authoritative; startup recovery retries trash cleanup.
+        }
+      });
     });
   }
 
@@ -182,7 +190,7 @@ export class ReviewService {
     pageWarnings: string[];
   }> {
     await this.recovery;
-    const prepared = await this.lock.runExclusive(id, async () => {
+    const prepared = await this.lock.runExclusive(id, () => this.fileStore.withReviewLock(ownerId, id, async () => {
       const review = this.get(ownerId, id);
       await this.fileStore.migrateLegacyReview(ownerId, id);
       if (review.images.length < 1 || review.images.length > 3) {
@@ -214,7 +222,7 @@ export class ReviewService {
         this.repository.failAnalysis(ownerId, id, token);
         throw error;
       }
-    });
+    }));
 
     let envelope: AiReviewEnvelope;
     try {

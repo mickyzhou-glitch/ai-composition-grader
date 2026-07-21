@@ -1,7 +1,8 @@
 // @vitest-environment node
 
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +11,12 @@ import { ReviewFileStore, UnsafeStoragePathError } from "./review-file-store";
 
 const OWNER = "teacher-01";
 const REVIEW = "review-1";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
 
 describe("ReviewFileStore", () => {
   let temporaryDirectory: string;
@@ -62,6 +69,42 @@ describe("ReviewFileStore", () => {
     await store.deleteReview(OWNER, REVIEW);
     await expect(stat(store.getReviewPaths(OWNER, REVIEW).reviewDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     expect((await stat(store.getReviewPaths("teacher-02", REVIEW).reviewDirectory)).isDirectory()).toBe(true);
+  });
+
+  it("不同 FileStore 实例也会串行化同一篇作文的文件操作", async () => {
+    const anotherProcessStore = new ReviewFileStore(store.rootDirectory);
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    let secondEntered = false;
+    const first = store.withReviewLock(OWNER, REVIEW, async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const second = anotherProcessStore.withReviewLock(OWNER, REVIEW, async () => {
+      secondEntered = true;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    expect(secondEntered).toBe(false);
+    release.resolve();
+    await Promise.all([first, second]);
+    expect(secondEntered).toBe(true);
+  });
+
+  it("回收超过五分钟的崩溃残留锁，不会阻塞后续文件操作", async () => {
+    await store.createReview(OWNER, REVIEW);
+    const locksDirectory = path.join(store.rootDirectory, ".review-locks");
+    await mkdir(locksDirectory);
+    const lockName = `${createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex")}.lock`;
+    const staleLock = path.join(locksDirectory, lockName);
+    await writeFile(staleLock, "");
+    const staleAt = new Date(Date.now() - 6 * 60 * 1000);
+    await utimes(staleLock, staleAt, staleAt);
+
+    let called = false;
+    await store.withReviewLock(OWNER, REVIEW, async () => { called = true; });
+    expect(called).toBe(true);
+    await expect(stat(staleLock)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("清理队列带 owner 且不触及其他文件", async () => {

@@ -1,5 +1,7 @@
-import { openAppDatabase } from "../src/db/client";
 import { pathToFileURL } from "node:url";
+
+import { AuthRepository } from "../src/auth/auth-repository";
+import { openAppDatabase } from "../src/db/client";
 import { ReviewRepository } from "../src/db/review-repository";
 import { RetentionService } from "../src/retention/retention-service";
 import { ReviewFileStore } from "../src/storage/review-file-store";
@@ -16,7 +18,9 @@ export async function runRetentionCommand(command: string): Promise<void> {
   const opened = openAppDatabase(databasePath || undefined);
   try {
     const repository = new ReviewRepository(opened.db);
-    const service = new RetentionService(repository, new ReviewFileStore());
+    const service = new RetentionService(repository, new ReviewFileStore(), {
+      audit: new AuthRepository(opened.db),
+    });
     if (command === "inspect") {
       for (const item of service.inspect()) {
         console.log(JSON.stringify({

@@ -253,7 +253,9 @@ export class ImageService {
 
   async upload(ownerId: string, reviewId: string, expectedRevision: number, files: UploadedImage[]) {
     return this.lock.runExclusive(reviewId, () =>
-      this.uploadExclusive(ownerId, reviewId, expectedRevision, files),
+      this.fileStore.withReviewLock(ownerId, reviewId, () =>
+        this.uploadExclusive(ownerId, reviewId, expectedRevision, files),
+      ),
     );
   }
 
@@ -322,7 +324,9 @@ export class ImageService {
 
   async update(ownerId: string, reviewId: string, input: UpdateImagesInput) {
     return this.lock.runExclusive(reviewId, () =>
-      this.updateExclusive(ownerId, reviewId, input),
+      this.fileStore.withReviewLock(ownerId, reviewId, () =>
+        this.updateExclusive(ownerId, reviewId, input),
+      ),
     );
   }
 

@@ -73,6 +73,11 @@ interface PdfFileStore {
   deleteFile(ownerId: string, reviewId: string, kind: ReviewStorageKind, filename: string): Promise<void>;
   queuePdfCleanup(ownerId: string, reviewId: string, filenames: string[]): Promise<void>;
   migrateLegacyReview?(ownerId: string, reviewId: string): Promise<void>;
+  withReviewLock?<T>(
+    ownerId: string,
+    reviewId: string,
+    operation: () => Promise<T>,
+  ): Promise<T>;
 }
 
 interface PdfServiceOptions {
@@ -280,9 +285,16 @@ export class PdfService {
     ownerId: string,
     reviewId: string,
   ): Promise<{ data: Buffer; filename: string; cached: boolean }> {
-    return this.lock.runExclusive(reviewId, () =>
-      this.getOrCreateExclusive(ownerId, reviewId),
-    );
+    return this.lock.runExclusive(reviewId, async () => {
+      if (!this.fileStore.withReviewLock) {
+        return this.getOrCreateExclusive(ownerId, reviewId);
+      }
+      return this.fileStore.withReviewLock(
+        ownerId,
+        reviewId,
+        () => this.getOrCreateExclusive(ownerId, reviewId),
+      );
+    });
   }
 
   private async getOrCreateExclusive(

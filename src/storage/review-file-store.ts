@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import {
   chmod,
@@ -43,6 +43,12 @@ interface CleanupQueueEntry {
 }
 
 const CLEANUP_QUEUE_FILENAME = ".cleanup-queue.json";
+const REVIEW_LOCKS_DIRECTORY = ".review-locks";
+const REVIEW_LOCK_WAIT_MS = 10_000;
+const REVIEW_LOCK_RETRY_MS = 25;
+// PDF rendering has a 60 second upper bound. Five minutes leaves a wide
+// margin for normal work while making a lock left by a crashed process recover.
+const REVIEW_LOCK_STALE_MS = 5 * 60 * 1000;
 const STAGED_DELETE_PATTERN =
   /^(.*)--(.*)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -50,6 +56,16 @@ export class UnsafeStoragePathError extends Error {
   constructor(segment: string) {
     super(`Unsafe storage path segment: ${JSON.stringify(segment)}`);
     this.name = "UnsafeStoragePathError";
+  }
+}
+
+export class ReviewFileLockBusyError extends Error {
+  readonly code = "REVIEW_LOCK_BUSY";
+  readonly status = 409;
+
+  constructor() {
+    super("作文正在由另一项操作处理，请稍后重试");
+    this.name = "ReviewFileLockBusyError";
   }
 }
 
@@ -163,6 +179,35 @@ async function assertSafeFile(parent: string, filename: string): Promise<void> {
   }
 }
 
+async function reclaimStaleReviewLock(
+  parent: string,
+  lockPath: string,
+): Promise<boolean> {
+  let info;
+  try {
+    info = await lstat(lockPath);
+  } catch (error) {
+    if (isMissing(error)) return true;
+    throw error;
+  }
+  if (info.isSymbolicLink() || !info.isFile()) {
+    throw new UnsafeStoragePathError(lockPath);
+  }
+  if (Date.now() - info.mtimeMs <= REVIEW_LOCK_STALE_MS) return false;
+
+  // Revalidate the real path immediately before unlinking. The lock file has
+  // no user-controlled content and only stale regular files inside our locked
+  // directory are eligible for recovery.
+  await assertSafeFile(parent, lockPath);
+  try {
+    await rm(lockPath, { force: false });
+    return true;
+  } catch (error) {
+    if (isMissing(error)) return true;
+    throw error;
+  }
+}
+
 function isSymlinkError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -194,6 +239,55 @@ export class ReviewFileStore {
       imagesDirectory: path.join(reviewDirectory, "images"),
       pdfDirectory: path.join(reviewDirectory, "pdf"),
     };
+  }
+
+  /**
+   * Cross-process lock for one exact owner/review pair. The filesystem is the
+   * shared coordination point between the web process and retention CLI; the
+   * caller must re-read the database only after this lock is held.
+   */
+  async withReviewLock<T>(
+    ownerId: string,
+    reviewId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    assertSafeSegment(ownerId);
+    assertSafeSegment(reviewId);
+    await this.assertSafeRoot(true);
+    const locksDirectory = path.join(this.rootDirectory, REVIEW_LOCKS_DIRECTORY);
+    await ensureRealDirectory(this.rootDirectory, locksDirectory);
+    const filename = `${createHash("sha256").update(`${ownerId}\0${reviewId}`).digest("hex")}.lock`;
+    const lockPath = resolveInside(locksDirectory, filename);
+    const deadline = Date.now() + REVIEW_LOCK_WAIT_MS;
+    let lockFile: Awaited<ReturnType<typeof open>> | null = null;
+
+    while (lockFile === null) {
+      try {
+        lockFile = await open(
+          lockPath,
+          constants.O_WRONLY |
+            constants.O_CREAT |
+            constants.O_EXCL |
+            constants.O_NOFOLLOW,
+          0o600,
+        );
+      } catch (error) {
+        if (isSymlinkError(error)) throw new UnsafeStoragePathError(lockPath);
+        if (!isAlreadyExists(error)) throw error;
+        await assertSafeFile(locksDirectory, lockPath);
+        if (await reclaimStaleReviewLock(locksDirectory, lockPath)) continue;
+        if (Date.now() >= deadline) throw new ReviewFileLockBusyError();
+        await new Promise<void>((resolve) => setTimeout(resolve, REVIEW_LOCK_RETRY_MS));
+      }
+    }
+
+    try {
+      return await operation();
+    } finally {
+      await lockFile.close();
+      await assertSafeFile(locksDirectory, lockPath);
+      await rm(lockPath, { force: true });
+    }
   }
 
   async createReview(ownerId: string, reviewId: string): Promise<ReviewStoragePaths> {

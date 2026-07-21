@@ -201,6 +201,7 @@ describe("RetentionService", () => {
     await createWithImage();
     const unsafeStore = {
       ...store,
+      withReviewLock: store.withReviewLock.bind(store),
       deleteReview: async () => { throw new UnsafeStoragePathError("../outside"); },
     } as unknown as ReviewFileStore;
     now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
@@ -240,7 +241,7 @@ describe("RetentionService", () => {
   it("清理和上传共用同一作文锁，删除完成后上传得到不存在且不会重建目录", async () => {
     await createWithImage();
     now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
-    const lock = new InMemoryReviewLock();
+    const anotherProcessStore = new ReviewFileStore(store.rootDirectory);
     const blockingDelete = deferred<void>();
     const enteredDelete = deferred<void>();
     vi.spyOn(store, "deleteReview").mockImplementationOnce(async () => {
@@ -248,8 +249,8 @@ describe("RetentionService", () => {
       await blockingDelete.promise;
       await ReviewFileStore.prototype.deleteReview.call(store, OWNER, "review-1");
     });
-    const imageService = new ImageService(store, repository, { lock, createId: () => "new-image" });
-    const cleanup = new RetentionService(repository, store, { now: () => new Date(now), lock }).run();
+    const imageService = new ImageService(anotherProcessStore, repository, { createId: () => "new-image" });
+    const cleanup = new RetentionService(repository, store, { now: () => new Date(now), audit }).run();
     await enteredDelete.promise;
     const jpeg = await sharp({ create: { width: 4, height: 4, channels: 3, background: "white" } }).jpeg().toBuffer();
     const upload = imageService.upload(OWNER, "review-1", 0, [{
