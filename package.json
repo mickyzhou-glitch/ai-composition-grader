@@ -7,10 +7,10 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "db:init": "node scripts/init-db.mts",
-    "start": "next start",
+    "start": "next start --hostname 127.0.0.1",
     "lint": "eslint",
     "test": "vitest run",
     "test:e2e": "playwright test"

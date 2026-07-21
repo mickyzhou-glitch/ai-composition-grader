@@ -43,6 +43,21 @@ describe("新建作文批改", () => {
     expect(screen.getByLabelText("目标字数")).toHaveValue(600);
   });
 
+  it("在提交前明确说明图片会发送至教师配置的 AI 服务", async () => {
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+
+    await user.click(screen.getByRole("button", { name: /为自己鼓掌/ }));
+    await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
+    await user.upload(
+      screen.getByLabelText("选择作文图片"),
+      new File(["image"], "composition.jpg", { type: "image/jpeg" }),
+    );
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+
+    expect(screen.getByText("图片保存在本机，点击AI批改后会发送到教师配置的AI服务用于识别/分析，请勿上传未经授权内容。")).toBeInTheDocument();
+  });
+
   it("按调整后的三图顺序上传，并提交旋转和裁剪", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

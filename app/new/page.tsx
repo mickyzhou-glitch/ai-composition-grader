@@ -251,7 +251,7 @@ export default function NewReviewPage() {
             <p className="eyebrow">第三步</p><h2 id="confirm-heading">确认批改内容</h2>
             <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span></div>
             <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°{asCrop(image.crop) ? " · 已裁剪" : ""}</small></li>)}</ol>
-            <p className="privacy-note">图片与模型设置仅在本机处理和保存。提交后仍可调整批注和报告。</p>
+            <p className="privacy-note">图片保存在本机，点击AI批改后会发送到教师配置的AI服务用于识别/分析，请勿上传未经授权内容。</p>
             <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel="正在建立批改…" onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
           </section>
         ) : null}
