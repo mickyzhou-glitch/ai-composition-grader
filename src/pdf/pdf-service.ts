@@ -8,8 +8,16 @@ import type { ReviewStorageKind } from "../storage/review-file-store";
 import { InMemoryReviewLock, type ReviewLock } from "../services/review-lock";
 
 const PDF_TIMEOUT_MS = 60_000;
+const PDF_CLOSE_TIMEOUT_MS = 5_000;
+
+interface PdfRoute {
+  request(): { url(): string };
+  abort(errorCode?: "blockedbyclient"): Promise<void>;
+  continue(): Promise<void>;
+}
 
 interface PdfPage {
+  route(url: "**/*", handler: (route: PdfRoute) => Promise<void>): Promise<unknown>;
   goto(
     url: string,
     options: { waitUntil: "networkidle"; timeout: number },
@@ -70,13 +78,58 @@ interface PdfServiceOptions {
   lock?: ReviewLock;
 }
 
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "localhost", "[::1]"]);
+
+function configurationError(message: string): Error {
+  return new Error(`PDF_INTERNAL_ORIGIN 配置无效：${message}`);
+}
+
+export function resolveInternalPrintOrigin(): string {
+  const configured = process.env.PDF_INTERNAL_ORIGIN;
+  let rawOrigin: string;
+  if (configured !== undefined) {
+    rawOrigin = configured;
+  } else {
+    const port = process.env.PORT || "3000";
+    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65_535) {
+      throw configurationError("PORT 必须是 1 至 65535 的整数");
+    }
+    rawOrigin = `http://127.0.0.1:${port}`;
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawOrigin);
+  } catch {
+    throw configurationError("必须是合法 URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw configurationError("仅支持 http 或 https 协议");
+  }
+  if (!LOOPBACK_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
+    throw configurationError("主机必须严格为 127.0.0.1、localhost 或 [::1]");
+  }
+  if (
+    parsed.username ||
+    parsed.password ||
+    parsed.pathname !== "/" ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw configurationError("必须只包含 origin，不得包含凭据、路径、查询或片段");
+  }
+  return parsed.origin;
+}
+
 export class PdfServiceError extends Error {
   constructor(
     readonly code:
       | "REVIEW_NOT_FOUND"
       | "PDF_CONTENT_INCOMPLETE"
       | "PDF_ANALYSIS_IN_PROGRESS"
-      | "PDF_ENGINE_MISSING",
+      | "PDF_ENGINE_MISSING"
+      | "PDF_UNTRUSTED_NAVIGATION"
+      | "PDF_TIMEOUT",
     message: string,
     readonly status: number,
     readonly details?: unknown,
@@ -105,6 +158,13 @@ function missingBrowserEngine(error: unknown): boolean {
     /executable.*(?:doesn't exist|does not exist|not found)|playwright install|browser.*not found/i.test(
       error.message,
     )
+  );
+}
+
+function browserTimedOut(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "TimeoutError" || /timeout.*exceeded|timed out/i.test(error.message))
   );
 }
 
@@ -161,11 +221,43 @@ function footerTemplate(title: string): string {
   );
 }
 
+function pdfTimeoutError(): PdfServiceError {
+  return new PdfServiceError(
+    "PDF_TIMEOUT",
+    "PDF 生成超时，请稍后重试",
+    504,
+  );
+}
+
+function remainingTime(deadline: number): number {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw pdfTimeoutError();
+  return remaining;
+}
+
+async function closeWithin(
+  close: (() => Promise<void>) | undefined,
+): Promise<void> {
+  if (!close) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(close).catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, PDF_CLOSE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export class PdfService {
   private readonly now: () => Date;
   private readonly timeZone: string;
   private readonly timeoutMs: number;
   private readonly lock: ReviewLock;
+  private readonly internalOrigin: string;
 
   constructor(
     private readonly repository: PdfRepository,
@@ -177,20 +269,19 @@ export class PdfService {
     this.timeZone = options.timeZone ?? "Asia/Shanghai";
     this.timeoutMs = options.timeoutMs ?? PDF_TIMEOUT_MS;
     this.lock = options.lock ?? new InMemoryReviewLock();
+    this.internalOrigin = resolveInternalPrintOrigin();
   }
 
   async getOrCreate(
     reviewId: string,
-    origin: string,
   ): Promise<{ data: Buffer; filename: string; cached: boolean }> {
     return this.lock.runExclusive(reviewId, () =>
-      this.getOrCreateExclusive(reviewId, origin),
+      this.getOrCreateExclusive(reviewId),
     );
   }
 
   private async getOrCreateExclusive(
     reviewId: string,
-    origin: string,
   ): Promise<{ data: Buffer; filename: string; cached: boolean }> {
     const review = this.repository.getById(reviewId);
     if (!review) {
@@ -230,7 +321,7 @@ export class PdfService {
 
     const generatedAt = this.now();
     const filename = `作文批改-${safeTitle(review.config.title)}-${timestamp(generatedAt, this.timeZone)}.pdf`;
-    const data = await this.render(reviewId, review.config.title, origin);
+    const data = await this.render(reviewId, review.config.title);
     await this.fileStore.writeFile(reviewId, "pdf", filename, data);
     try {
       this.repository.markExported(reviewId, review.revision, {
@@ -251,13 +342,7 @@ export class PdfService {
   private async render(
     reviewId: string,
     title: string,
-    origin: string,
   ): Promise<Buffer> {
-    const parsedOrigin = new URL(origin);
-    if (parsedOrigin.protocol !== "http:" && parsedOrigin.protocol !== "https:") {
-      throw new TypeError("PDF origin must use HTTP or HTTPS");
-    }
-
     let browser: PdfBrowser;
     try {
       browser = await this.browserFactory.launch({ headless: true });
@@ -274,40 +359,96 @@ export class PdfService {
     }
 
     let page: PdfPage | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      page = await browser.newPage();
-      const printUrl = new URL(
-        `/print/reviews/${encodeURIComponent(reviewId)}`,
-        parsedOrigin.origin,
-      ).toString();
-      await page.goto(printUrl, {
-        waitUntil: "networkidle",
-        timeout: this.timeoutMs,
+      const deadline = Date.now() + this.timeoutMs;
+      const renderPage = (async () => {
+        page = await browser.newPage();
+        let untrustedUrl: string | undefined;
+        await page.route("**/*", async (route) => {
+          const requested = route.request().url();
+          if (requested.startsWith("data:")) {
+            await route.continue();
+            return;
+          }
+          let requestedOrigin: string | undefined;
+          try {
+            requestedOrigin = new URL(requested).origin;
+          } catch {
+            // An unparsable browser request is never trusted.
+          }
+          if (requestedOrigin === this.internalOrigin) {
+            await route.continue();
+            return;
+          }
+          untrustedUrl ??= requested;
+          await route.abort("blockedbyclient");
+        });
+        const assertTrustedNavigation = () => {
+          if (untrustedUrl) {
+            throw new PdfServiceError(
+              "PDF_UNTRUSTED_NAVIGATION",
+              "打印页尝试访问非内部资源，已终止 PDF 生成",
+              502,
+            );
+          }
+        };
+        const printUrl = new URL(
+          `/print/reviews/${encodeURIComponent(reviewId)}`,
+          this.internalOrigin,
+        ).toString();
+        try {
+          await page.goto(printUrl, {
+            waitUntil: "networkidle",
+            timeout: remainingTime(deadline),
+          });
+          assertTrustedNavigation();
+          await page.waitForSelector('[data-print-ready="true"]', {
+            timeout: remainingTime(deadline),
+          });
+          assertTrustedNavigation();
+          await page.waitForFunction(
+            () =>
+              Array.from(document.images).every(
+                (image) => image.complete && image.naturalWidth > 0,
+              ),
+            undefined,
+            { timeout: remainingTime(deadline) },
+          );
+          assertTrustedNavigation();
+          await page.emulateMedia({ media: "print" });
+          const data = await page.pdf({
+            format: "A4",
+            printBackground: true,
+            preferCSSPageSize: true,
+            tagged: true,
+            displayHeaderFooter: true,
+            headerTemplate: "<div></div>",
+            footerTemplate: footerTemplate(title),
+          });
+          assertTrustedNavigation();
+          return data;
+        } catch (error) {
+          assertTrustedNavigation();
+          throw error;
+        }
+      })();
+      const timedOut = new Promise<never>((_resolve, reject) => {
+        deadlineTimer = setTimeout(() => {
+          void closeWithin(() => browser.close());
+          reject(pdfTimeoutError());
+        }, this.timeoutMs);
       });
-      await page.waitForSelector('[data-print-ready="true"]', {
-        timeout: this.timeoutMs,
-      });
-      await page.waitForFunction(
-        () =>
-          Array.from(document.images).every(
-            (image) => image.complete && image.naturalWidth > 0,
-          ),
-        undefined,
-        { timeout: this.timeoutMs },
-      );
-      await page.emulateMedia({ media: "print" });
-      return await page.pdf({
-        format: "A4",
-        printBackground: true,
-        preferCSSPageSize: true,
-        tagged: true,
-        displayHeaderFooter: true,
-        headerTemplate: "<div></div>",
-        footerTemplate: footerTemplate(title),
-      });
+      try {
+        return await Promise.race([renderPage, timedOut]);
+      } catch (error) {
+        if (browserTimedOut(error)) throw pdfTimeoutError();
+        throw error;
+      }
     } finally {
-      if (page) await page.close().catch(() => undefined);
-      await browser.close().catch(() => undefined);
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      await closeWithin(page ? () => page!.close() : undefined);
+      await closeWithin(() => browser.close());
     }
   }
 }

@@ -270,10 +270,7 @@ describe("ReviewService analysis CAS", () => {
       { lock },
     );
 
-    const downloading = pdfService.getOrCreate(
-      "review-1",
-      "http://localhost:3000",
-    );
+    const downloading = pdfService.getOrCreate("review-1");
     await vi.waitFor(() => expect(fileStore.readFile).toHaveBeenCalledWith(
       "review-1",
       "pdf",
@@ -324,7 +321,7 @@ describe("ReviewService analysis CAS", () => {
     const analyzingRevision = repository.getById("review-1")!.revision;
 
     await expect(
-      pdfService.getOrCreate("review-1", "http://localhost:3000"),
+      pdfService.getOrCreate("review-1"),
     ).rejects.toMatchObject({
       code: "PDF_ANALYSIS_IN_PROGRESS",
       status: 409,

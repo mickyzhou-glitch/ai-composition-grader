@@ -19,7 +19,9 @@ describe("GET /api/reviews/[id]/pdf", () => {
     });
 
     const response = await handler.GET(
-      new Request("https://grader.example/api/reviews/review-1/pdf"),
+      new Request("https://attacker.example/api/reviews/review-1/pdf", {
+        headers: { host: "attacker.example" },
+      }),
       context,
     );
 
@@ -29,7 +31,7 @@ describe("GET /api/reviews/[id]/pdf", () => {
       `attachment; filename="composition-review.pdf"; filename*=UTF-8''${encodeURIComponent("作文批改-为自己喝彩-20260721-1405.pdf")}`,
     );
     expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from("%PDF-test"));
-    expect(getOrCreate).toHaveBeenCalledWith("review-1", "https://grader.example");
+    expect(getOrCreate).toHaveBeenCalledWith("review-1");
   });
 
   it("无报告或图片时返回 422", async () => {

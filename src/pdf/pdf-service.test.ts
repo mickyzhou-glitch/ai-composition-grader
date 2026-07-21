@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ReviewRecord } from "../db/review-repository";
 import {
@@ -74,6 +74,8 @@ function harness(options: {
   current?: ReviewRecord;
   pdfFailure?: Error;
   launchFailure?: Error;
+  pdfNeverResolves?: boolean;
+  timeoutMs?: number;
 } = {}) {
   const current = options.current ?? review();
   const page = {
@@ -81,9 +83,13 @@ function harness(options: {
     waitForSelector: vi.fn().mockResolvedValue({}),
     waitForFunction: vi.fn().mockResolvedValue({}),
     emulateMedia: vi.fn().mockResolvedValue(undefined),
-    pdf: options.pdfFailure
-      ? vi.fn().mockRejectedValue(options.pdfFailure)
-      : vi.fn().mockResolvedValue(Buffer.from("generated-pdf")),
+    route: vi.fn().mockResolvedValue(undefined),
+    pdf: options.pdfNeverResolves
+      ? vi.fn().mockImplementationOnce(() => new Promise<Buffer>(() => undefined))
+        .mockResolvedValue(Buffer.from("generated-pdf"))
+      : options.pdfFailure
+        ? vi.fn().mockRejectedValue(options.pdfFailure)
+        : vi.fn().mockResolvedValue(Buffer.from("generated-pdf")),
     close: vi.fn().mockResolvedValue(undefined),
   };
   const browser = {
@@ -113,29 +119,39 @@ function harness(options: {
   const service = new PdfService(repository, fileStore, browserFactory, {
     now: () => new Date("2026-07-21T06:05:00.000Z"),
     timeZone: "Asia/Shanghai",
+    timeoutMs: options.timeoutMs,
   });
   return { service, repository, fileStore, browserFactory, browser, page };
 }
 
 describe("PdfService", () => {
-  it("用当前 origin 打开打印页，等待内容和图片后按 A4 参数生成并持久化", async () => {
+  beforeEach(() => {
+    vi.stubEnv("PDF_INTERNAL_ORIGIN", "http://127.0.0.1:3000");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("只用内部 origin 打开打印页，等待内容和图片后按 A4 参数生成并持久化", async () => {
     const { service, repository, fileStore, browserFactory, page, browser } = harness();
 
-    const result = await service.getOrCreate("review-1", "http://127.0.0.1:3000");
+    const result = await service.getOrCreate("review-1");
 
     expect(browserFactory.launch).toHaveBeenCalledWith({ headless: true });
+    expect(page.route).toHaveBeenCalledWith("**/*", expect.any(Function));
     expect(page.goto).toHaveBeenCalledWith(
       "http://127.0.0.1:3000/print/reviews/review-1",
-      { waitUntil: "networkidle", timeout: 60_000 },
+      { waitUntil: "networkidle", timeout: expect.any(Number) },
     );
     expect(page.waitForSelector).toHaveBeenCalledWith(
       '[data-print-ready="true"]',
-      { timeout: 60_000 },
+      { timeout: expect.any(Number) },
     );
     expect(page.waitForFunction).toHaveBeenCalledWith(
       expect.any(Function),
       undefined,
-      { timeout: 60_000 },
+      { timeout: expect.any(Number) },
     );
     expect(page.emulateMedia).toHaveBeenCalledWith({ media: "print" });
     expect(page.pdf).toHaveBeenCalledWith({
@@ -180,7 +196,7 @@ describe("PdfService", () => {
     const { service, fileStore, browserFactory, repository } = harness({ current: cached });
     fileStore.readFile.mockResolvedValue(Buffer.from("cached-pdf"));
 
-    const result = await service.getOrCreate("review-1", "http://localhost:3000");
+    const result = await service.getOrCreate("review-1");
 
     expect(result).toMatchObject({ filename: "cached.pdf", cached: true });
     expect(result.data).toEqual(Buffer.from("cached-pdf"));
@@ -198,7 +214,7 @@ describe("PdfService", () => {
     });
     const { service, browserFactory, fileStore } = harness({ current: stale });
 
-    const result = await service.getOrCreate("review-1", "http://localhost:3000");
+    const result = await service.getOrCreate("review-1");
 
     expect(result.cached).toBe(false);
     expect(browserFactory.launch).toHaveBeenCalledOnce();
@@ -210,7 +226,7 @@ describe("PdfService", () => {
       const { service, browserFactory } = harness({ current });
 
       await expect(
-        service.getOrCreate("review-1", "http://localhost:3000"),
+        service.getOrCreate("review-1"),
       ).rejects.toMatchObject({
         code: "PDF_CONTENT_INCOMPLETE",
         status: 422,
@@ -225,7 +241,7 @@ describe("PdfService", () => {
     });
 
     await expect(
-      service.getOrCreate("review-1", "http://localhost:3000"),
+      service.getOrCreate("review-1"),
     ).rejects.toThrow("render failed");
     expect(page.close).toHaveBeenCalledOnce();
     expect(browser.close).toHaveBeenCalledOnce();
@@ -241,7 +257,7 @@ describe("PdfService", () => {
     });
 
     try {
-      await service.getOrCreate("review-1", "http://localhost:3000");
+      await service.getOrCreate("review-1");
       throw new Error("expected PDF engine failure");
     } catch (error) {
       expect(error).toBeInstanceOf(PdfServiceError);
@@ -249,5 +265,85 @@ describe("PdfService", () => {
       expect((error as Error).message).toContain("playwright install chromium");
       expect((error as Error).message).not.toContain("/Users/private");
     }
+  });
+
+  it("PDF_INTERNAL_ORIGIN 未配置时只使用 loopback PORT", async () => {
+    delete process.env.PDF_INTERNAL_ORIGIN;
+    vi.stubEnv("PORT", "4321");
+    const { service, page } = harness();
+
+    await service.getOrCreate("review-1");
+
+    expect(page.goto).toHaveBeenCalledWith(
+      "http://127.0.0.1:4321/print/reviews/review-1",
+      expect.any(Object),
+    );
+  });
+
+  it.each([
+    "",
+    "https://grader.example",
+    "file:///tmp/print",
+    "http://127.0.0.1.attacker.example:3000",
+  ])("拒绝不可信的 PDF_INTERNAL_ORIGIN：%s", (origin) => {
+    vi.stubEnv("PDF_INTERNAL_ORIGIN", origin);
+
+    expect(() => harness()).toThrow(/PDF_INTERNAL_ORIGIN/);
+  });
+
+  it("跨源重定向请求会被中止并返回不可信导航错误", async () => {
+    const { service, page, fileStore, repository } = harness();
+    page.goto.mockImplementation(async () => {
+      const routeHandler = page.route.mock.calls[0]?.[1];
+      const abort = vi.fn().mockResolvedValue(undefined);
+      await routeHandler({
+        request: () => ({ url: () => "https://attacker.example/steal" }),
+        abort,
+        continue: vi.fn().mockResolvedValue(undefined),
+      });
+      expect(abort).toHaveBeenCalledOnce();
+      return null;
+    });
+
+    await expect(service.getOrCreate("review-1")).rejects.toMatchObject({
+      code: "PDF_UNTRUSTED_NAVIGATION",
+    });
+    expect(fileStore.writeFile).not.toHaveBeenCalled();
+    expect(repository.markExported).not.toHaveBeenCalled();
+  });
+
+  it("page.pdf 卡死时总 deadline 返回 504 且释放同一 review 的锁", async () => {
+    const { service, page, browser } = harness({
+      pdfNeverResolves: true,
+      timeoutMs: 20,
+    });
+    const startedAt = Date.now();
+
+    await expect(service.getOrCreate("review-1")).rejects.toMatchObject({
+      code: "PDF_TIMEOUT",
+      status: 504,
+    });
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(browser.close).toHaveBeenCalled();
+
+    await expect(service.getOrCreate("review-1")).resolves.toMatchObject({
+      cached: false,
+      data: Buffer.from("generated-pdf"),
+    });
+    expect(page.pdf).toHaveBeenCalledTimes(2);
+  });
+
+  it("浏览器阶段自己的超时也统一返回 PDF_TIMEOUT", async () => {
+    const { service, page } = harness();
+    const browserTimeout = Object.assign(
+      new Error("page.goto: Timeout 60000ms exceeded"),
+      { name: "TimeoutError" },
+    );
+    page.goto.mockRejectedValue(browserTimeout);
+
+    await expect(service.getOrCreate("review-1")).rejects.toMatchObject({
+      code: "PDF_TIMEOUT",
+      status: 504,
+    });
   });
 });

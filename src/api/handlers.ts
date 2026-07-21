@@ -486,11 +486,10 @@ export function createReviewPdfRouteHandlers(dependencies: {
   pdfService: Pick<PdfService, "getOrCreate">;
 }) {
   return {
-    async GET(request: Request, context: RouteContext) {
+    async GET(_request: Request, context: RouteContext) {
       try {
         const result = await dependencies.pdfService.getOrCreate(
           (await context.params).id,
-          new URL(request.url).origin,
         );
         return new Response(Uint8Array.from(result.data).buffer, {
           status: 200,
