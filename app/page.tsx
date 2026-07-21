@@ -7,6 +7,7 @@ import { AppHeader } from "./components/AppHeader";
 import { ErrorBanner } from "./components/ErrorBanner";
 import { StatusBadge } from "./components/StatusBadge";
 import { apiFetch, errorMessage } from "./lib/api";
+import { downloadReviewPdf } from "./lib/pdf-download";
 import type { ReviewView } from "./lib/types";
 
 function reviewDate(value: string) {
@@ -21,6 +22,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -60,6 +62,20 @@ export default function Home() {
       setError(errorMessage(caught));
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function exportPdf(review: ReviewView) {
+    if (exporting) return;
+    setExporting(review.id);
+    setError("");
+    try {
+      await downloadReviewPdf(review.id);
+      await load();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setExporting(null);
     }
   }
 
@@ -107,7 +123,17 @@ export default function Home() {
                 </div>
                 <div className="card-actions">
                   <Link className="button button--quiet" href={`/reviews/${encodeURIComponent(review.id)}`}>进入复核</Link>
-                  <button className="button button--quiet" type="button" disabled title="导出将在 PDF 任务中提供">重新导出</button>
+                  <button
+                    className="button button--quiet"
+                    type="button"
+                    aria-busy={exporting === review.id}
+                    disabled={exporting !== null}
+                    onClick={() => void exportPdf(review)}
+                  >
+                    {exporting === review.id
+                      ? review.hasPdf ? "正在下载…" : "正在导出…"
+                      : review.hasPdf ? "下载 PDF" : "重新导出"}
+                  </button>
                   <button className="button button--danger-quiet" type="button" disabled={deleting === review.id} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
                     {deleting === review.id ? "删除中…" : "删除"}
                   </button>

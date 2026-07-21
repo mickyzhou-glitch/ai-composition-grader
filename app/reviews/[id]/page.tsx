@@ -11,6 +11,7 @@ import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
 import { ReportEditor } from "../../components/ReportEditor";
 import { StatusBadge } from "../../components/StatusBadge";
 import { ApiError, apiFetch, errorMessage } from "../../lib/api";
+import { downloadReviewPdf } from "../../lib/pdf-download";
 import type { ReviewView } from "../../lib/types";
 
 interface AnalyzeResult { review: ReviewView; pageWarnings: string[] }
@@ -27,7 +28,7 @@ export default function ReviewPage() {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [activePage, setActivePage] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | null>(null);
+  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | null>(null);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -249,6 +250,22 @@ export default function ReviewPage() {
     }
   }
 
+  async function exportPdf() {
+    if (!review || !report || busy || dirty) return;
+    setBusy("export");
+    setError("");
+    setNotice("");
+    try {
+      await downloadReviewPdf(review.id);
+      await loadReview(false);
+      setNotice("PDF 已导出并开始下载。");
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function replacementControl(className = "button button--quiet") {
     return <label className={`${className} file-label`}>
       替换/重拍作文
@@ -276,7 +293,21 @@ export default function ReviewPage() {
       <main className="review-page">
         <header className="review-heading">
           <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
-          <div className="review-actions"><AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={busy !== null} onClick={() => void analyze()}>重新分析</AsyncButton>{review.status !== "needs_better_images" ? replacementControl() : null}{report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null} onClick={() => void save()}>保存复核</AsyncButton> : null}</div>
+          <div className="review-actions">
+            <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={busy !== null} onClick={() => void analyze()}>重新分析</AsyncButton>
+            {review.status !== "needs_better_images" ? replacementControl() : null}
+            {report ? (
+              <AsyncButton
+                className="button button--quiet"
+                busy={busy === "export"}
+                busyLabel="正在生成 PDF…"
+                disabled={dirty || busy !== null}
+                title={dirty ? "请先保存复核修改再导出" : undefined}
+                onClick={() => void exportPdf()}
+              >{review.hasPdf ? "下载 PDF" : "导出 PDF"}</AsyncButton>
+            ) : null}
+            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null} onClick={() => void save()}>保存复核</AsyncButton> : null}
+          </div>
         </header>
         {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}

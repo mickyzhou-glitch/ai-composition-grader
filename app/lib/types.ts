@@ -27,4 +27,6 @@ export interface ReviewView {
   updatedAt: string;
   images: ReviewImageView[];
   annotations: Annotation[];
+  hasPdf: boolean;
+  pdfFilename: string | null;
 }

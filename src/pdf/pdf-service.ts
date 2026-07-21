@@ -179,7 +179,8 @@ export class PdfService {
     if (
       review.pdfFilename &&
       review.pdfPath === `pdf/${review.pdfFilename}` &&
-      review.pdfRevision === review.revision
+      review.pdfRevision === review.revision &&
+      review.exportedAt !== null
     ) {
       try {
         return {

@@ -70,12 +70,16 @@ function reviewDto(review: {
   annotations: unknown;
   images: Array<Parameters<typeof reviewImageDto>[0]>;
   pdfFilename?: string | null;
+  pdfPath?: string | null;
   pdfRevision?: number | null;
+  exportedAt?: unknown;
 }) {
   const hasPdf =
     typeof review.pdfFilename === "string" &&
     review.pdfFilename.length > 0 &&
-    review.pdfRevision === review.revision;
+    review.pdfPath === `pdf/${review.pdfFilename}` &&
+    review.pdfRevision === review.revision &&
+    review.exportedAt != null;
   return {
     id: review.id,
     status: review.status,

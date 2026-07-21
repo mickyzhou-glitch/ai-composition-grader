@@ -381,7 +381,7 @@ describe("review route handlers", () => {
     });
   });
 
-  it("列表和详情 DTO 不泄漏图片内部存储路径", async () => {
+  it("列表和详情 DTO 只暴露 PDF 状态与文件名，不泄漏内部存储路径", async () => {
     const internalImage = {
       id: 3,
       position: 0,
@@ -400,8 +400,12 @@ describe("review route handlers", () => {
       status: "draft" as const,
       config,
       report: null,
-      revision: 0,
+      revision: 4,
       analysisRunId: null,
+      pdfFilename: "作文批改-安全.pdf",
+      pdfPath: "pdf/作文批改-安全.pdf",
+      pdfRevision: 4,
+      exportedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
       images: [internalImage],
@@ -424,6 +428,9 @@ describe("review route handlers", () => {
       expect(serialized).not.toContain("images/internal-original.jpg");
       expect(serialized).not.toContain("images/internal-annotation.jpg");
       expect(serialized).not.toContain("images/internal-ai.jpg");
+      expect(serialized).not.toContain('"pdfPath"');
+      expect(serialized).toContain('"hasPdf":true');
+      expect(serialized).toContain('"pdfFilename":"作文批改-安全.pdf"');
     }
   });
 

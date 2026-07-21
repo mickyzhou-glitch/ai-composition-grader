@@ -23,6 +23,8 @@ const review = {
     scores: { themeIntent: 8, contentSelection: 8, structure: 7, languageExpression: 7, writingConventions: 3, total: 33, level: "二类作文" },
     sampleParagraphs: [{ title: "示范段", text: "示范正文", suggestion: "修改建议" }],
   },
+  hasPdf: false,
+  pdfFilename: null,
 };
 
 function json(data: unknown, status = 200) {
@@ -39,7 +41,23 @@ function deferred<T>() {
 }
 
 describe("复核页", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+  });
+
+  function mockBrowserDownload() {
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: vi.fn(() => "blob:pdf"),
+    });
+    Object.defineProperty(URL, "revokeObjectURL", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    return vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  }
 
   it("保存时 PATCH 完整 report 与 annotations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -91,6 +109,70 @@ describe("复核页", () => {
     expect(screen.getByLabelText("替换/重拍作文图片")).toBeDisabled();
 
     saved.resolve(await json({ ...review, revision: 2 }));
+  });
+
+  it("有未保存修改时禁止导出并提示先保存", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json(review));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    const exportButton = await screen.findByRole("button", { name: "导出 PDF" });
+    expect(exportButton).toBeEnabled();
+    await user.clear(screen.getByLabelText("个性评语"));
+    await user.type(screen.getByLabelText("个性评语"), "未保存修改");
+
+    expect(exportButton).toBeDisabled();
+    expect(exportButton).toHaveAttribute("title", "请先保存复核修改再导出");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("导出期间显示 loading，下载后刷新 exported 状态", async () => {
+    const pdf = deferred<Response>();
+    const exported = {
+      ...review,
+      status: "exported" as const,
+      revision: 2,
+      hasPdf: true,
+      pdfFilename: "作文批改-为自己鼓掌.pdf",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => pdf.promise)
+      .mockImplementationOnce(() => json(exported));
+    const clickDownload = mockBrowserDownload();
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
+    expect(screen.getByRole("button", { name: "正在生成 PDF…" })).toBeDisabled();
+    pdf.resolve(new Response("%PDF", {
+      headers: {
+        "content-type": "application/pdf",
+        "content-disposition": `attachment; filename="composition-review.pdf"; filename*=UTF-8''${encodeURIComponent(exported.pdfFilename)}`,
+      },
+    }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/pdf");
+    expect(clickDownload).toHaveBeenCalledOnce();
+    expect(await screen.findByText("已导出")).toBeInTheDocument();
+  });
+
+  it("导出 API 错误在页面上可见", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({
+        code: "PDF_ENGINE_MISSING",
+        message: "PDF 引擎未安装，请运行 npx playwright install chromium 后重试",
+      }, 503));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "PDF 引擎未安装，请运行 npx playwright install chromium 后重试",
+    );
   });
 
   it("替换图片控件使用 file-label 显示键盘焦点", async () => {
