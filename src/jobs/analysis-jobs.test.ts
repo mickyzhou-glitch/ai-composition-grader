@@ -335,7 +335,7 @@ describe("AnalysisJobService", () => {
         return { ...job, status, leaseExpiresAt: null } as never;
       },
       renewLease: () => null,
-      retry: () => "failed",
+      retry: () => "at_limit",
     };
     const worker = new AnalysisWorker(queue, executor, { renewEveryMs: 60_000 });
 
@@ -367,7 +367,7 @@ describe("AnalysisJobService", () => {
         return {} as never;
       },
       renewLease: () => null,
-      retry: () => "failed",
+      retry: () => "at_limit",
     }, {
       prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
       analyze: async () => ({ readable: false, pageWarnings: ["请重拍"], annotations: [] }),
@@ -421,7 +421,7 @@ describe("AnalysisJobService", () => {
         return {} as never;
       },
       renewLease: () => null,
-      retry: () => "failed",
+      retry: () => "at_limit",
     }, {
       prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
       analyze: async () => { throw Object.assign(new Error("request"), { code: "AI_REQUEST_FAILED" }); },
@@ -432,6 +432,30 @@ describe("AnalysisJobService", () => {
     await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "failed", errorCode: "AI_REQUEST_FAILED" });
     expect(failCalls).toBe(1);
     expect(transitions).toEqual([]);
+  });
+
+  it("图片数量不符合要求时，Worker 安全结束任务且保留未开始分析的草稿", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const transitions: Array<{ status: string; code: string | null | undefined }> = [];
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (_job, stage) => ({ ...claimed, progressStage: stage } as never),
+      transition: (_job, status, options) => {
+        transitions.push({ status, code: options?.errorCode });
+        return {} as never;
+      },
+      renewLease: () => null,
+      retry: () => "at_limit",
+    }, {
+      prepare: async () => { throw Object.assign(new Error("no images"), { code: "IMAGES_REQUIRED" }); },
+      analyze: async () => { throw new Error("unreachable"); },
+      save: async () => { throw new Error("unreachable"); },
+      fail: async () => { throw new Error("unreachable"); },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "failed", errorCode: "IMAGES_REQUIRED" });
+    expect(transitions).toEqual([{ status: "failed", code: "IMAGES_REQUIRED" }]);
   });
 
   it("保存批改结果和任务成功在同一事务中落库，恢复轮询不会重复调用模型", async () => {
@@ -474,6 +498,36 @@ describe("AnalysisJobService", () => {
     expect(repository.getById(ownerA, claimed.id)).toMatchObject({ status: "running" });
   });
 
+  it("终态失败时作文和任务在同一事务中落库，claim 失败会整体回滚", () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const token = reviewRepository.beginAnalysis(ownerA, "review-a", "run-fail", 0);
+
+    reviewRepository.failAnalysisAndFailJob(ownerA, "review-a", token, claimed, "AI_REQUEST_FAILED");
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      status: "failed",
+      analysisRunId: null,
+    });
+    expect(repository.getById(ownerA, claimed.id)).toMatchObject({
+      status: "failed",
+      errorCode: "AI_REQUEST_FAILED",
+    });
+
+    reviewRepository.create(ownerA, { id: "review-rollback-fail", config });
+    service.enqueue(ownerA, "review-rollback-fail");
+    const nextClaim = repository.claimNext()!;
+    const nextToken = reviewRepository.beginAnalysis(ownerA, "review-rollback-fail", "run-fail-rollback", 0);
+    expect(() => reviewRepository.failAnalysisAndFailJob(ownerA, "review-rollback-fail", nextToken, {
+      ...nextClaim,
+      leaseExpiresAt: new Date(nextClaim.leaseExpiresAt.valueOf() - 1),
+    }, "AI_REQUEST_FAILED")).toThrow(AnalysisJobCompletionClaimLostError);
+    expect(reviewRepository.getById(ownerA, "review-rollback-fail")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "run-fail-rollback",
+    });
+    expect(repository.getById(ownerA, nextClaim.id)).toMatchObject({ status: "running" });
+  });
+
   it("耗时模型调用期间 Worker 定期续租并使用最新租约完成任务", async () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext()!;
@@ -488,7 +542,7 @@ describe("AnalysisJobService", () => {
         renewals += 1;
         return { ...claimed, id, leaseExpiresAt: new Date(priorLease.valueOf() + 60_000) };
       },
-      retry: () => "failed",
+      retry: () => "at_limit",
     }, {
       prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
       analyze: async () => {

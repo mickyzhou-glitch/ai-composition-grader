@@ -25,6 +25,18 @@ export interface PreparedReviewAnalysis {
   imageDataUrls: string[];
 }
 
+/** Carries the durable review token when preparation fails after it began. */
+export class ReviewPreparationError extends Error {
+  constructor(
+    readonly token: AnalysisToken,
+    cause: unknown,
+  ) {
+    super("Failed to prepare review analysis");
+    this.name = "ReviewPreparationError";
+    this.cause = cause;
+  }
+}
+
 interface ReviewServiceOptions {
   createId?: () => string;
   createRunId?: () => string;
@@ -197,7 +209,15 @@ export class ReviewService {
     review: ReviewRecord;
     pageWarnings: string[];
   }> {
-    const prepared = await this.prepareAnalysis(ownerId, id);
+    let prepared: PreparedReviewAnalysis;
+    try {
+      prepared = await this.prepareAnalysis(ownerId, id);
+    } catch (error) {
+      if (error instanceof ReviewPreparationError) {
+        await this.failPreparedAnalysis(ownerId, id, error.token);
+      }
+      throw error;
+    }
     let envelope: AiReviewEnvelope;
     try {
       envelope = await this.analyzePrepared(prepared);
@@ -246,8 +266,7 @@ export class ReviewService {
         );
         return { token, config: review.config, imageDataUrls };
       } catch (error) {
-        this.repository.failAnalysis(ownerId, id, token);
-        throw error;
+        throw new ReviewPreparationError(token, error);
       }
     }));
   }
@@ -284,5 +303,17 @@ export class ReviewService {
 
   async failPreparedAnalysis(ownerId: string, id: string, token: AnalysisToken): Promise<boolean> {
     return this.lock.runExclusive(id, async () => this.repository.failAnalysis(ownerId, id, token));
+  }
+
+  async failPreparedAnalysisAndFailJob(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    claim: AnalysisJobCompletionClaim,
+    errorCode: string,
+  ): Promise<void> {
+    return this.lock.runExclusive(id, async () =>
+      this.repository.failAnalysisAndFailJob(ownerId, id, token, claim, errorCode),
+    );
   }
 }

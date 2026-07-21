@@ -35,7 +35,8 @@ export async function runWorker(): Promise<void> {
     analyze: (input) => reviews.analyzePrepared(input),
     save: (ownerId, reviewId, token, envelope, claim) =>
       reviews.savePreparedAnalysisAndCompleteJob(ownerId, reviewId, token, envelope, claim),
-    fail: (ownerId, reviewId, token) => reviews.failPreparedAnalysis(ownerId, reviewId, token),
+    fail: (ownerId, reviewId, token, claim, errorCode) =>
+      reviews.failPreparedAnalysisAndFailJob(ownerId, reviewId, token, claim, errorCode),
   });
   const stop = () => worker.stop();
   process.once("SIGTERM", stop);

@@ -1,5 +1,6 @@
 import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
 import type { AnalysisToken } from "../db/review-repository";
+import { ReviewPreparationError } from "../services/review-service";
 import type { AnalysisJobStatus } from "../db/schema";
 import {
   AnalysisJobLostClaimError,
@@ -19,7 +20,7 @@ export interface AnalysisJobQueue {
     options?: { errorCode?: string | null; message?: string | null },
   ): unknown;
   renewLease(id: string, expectedLeaseExpiresAt: Date): ClaimedAnalysisJobRecord | null;
-  retry(claim: AnalysisJobClaim, errorCode: string): "queued" | "failed";
+  retry(claim: AnalysisJobClaim, errorCode: string): "queued" | "at_limit";
 }
 
 export interface AnalysisExecutionService {
@@ -36,7 +37,13 @@ export interface AnalysisExecutionService {
     envelope: AiReviewEnvelope,
     claim: AnalysisJobClaim,
   ): Promise<unknown>;
-  fail(ownerId: string, reviewId: string, token: AnalysisToken): Promise<unknown>;
+  fail(
+    ownerId: string,
+    reviewId: string,
+    token: AnalysisToken,
+    claim: AnalysisJobClaim,
+    errorCode: string,
+  ): Promise<unknown>;
 }
 
 export type WorkerRunResult =
@@ -158,16 +165,6 @@ export class AnalysisWorker {
         try {
           const state = this.jobs.retry(claim, errorCode);
           if (state === "queued") return { jobId: claim.id, outcome: "retrying", errorCode };
-          // retry() already made the job terminal. Do not transition it a
-          // second time; only release the review's transient analyzing state.
-          if (prepared) {
-            try {
-              await this.execution.fail(claim.ownerId, claim.reviewId, prepared.token);
-            } catch {
-              // The queue's durable terminal state remains authoritative.
-            }
-          }
-          return { jobId: claim.id, outcome: "failed", errorCode };
         } catch (retryError) {
           if (retryError instanceof AnalysisJobLostClaimError) {
             return { jobId: claim.id, outcome: "claim_lost" };
@@ -175,22 +172,31 @@ export class AnalysisWorker {
           throw retryError;
         }
       }
-      // A terminal error must also release the review's transient "analyzing"
-      // state. This is idempotent if preparation already failed it locally.
-      try {
-        if (prepared) {
-          await this.execution.fail(claim.ownerId, claim.reviewId, prepared.token);
+      const failureToken = prepared?.token
+        ?? (error instanceof ReviewPreparationError ? error.token : null);
+      if (!failureToken) {
+        // Validation can fail before a review enters analyzing (for example,
+        // no uploaded images). The claim still must terminate without taking
+        // the worker process down; the draft itself remains unchanged.
+        try {
+          this.jobs.transition(claim, "failed", { errorCode, message: null });
+        } catch (failureError) {
+          if (failureError instanceof AnalysisJobLostClaimError || safeErrorCode(failureError) === "JOB_CLAIM_LOST") {
+            return { jobId: claim.id, outcome: "claim_lost" };
+          }
+          throw failureError;
         }
-      } catch {
-        // Never replace the safe queue result with a raw storage/upstream error.
+        return { jobId: claim.id, outcome: "failed", errorCode };
       }
       try {
-        this.jobs.transition(claim, "failed", { errorCode, message: null });
-      } catch (transitionError) {
-        if (transitionError instanceof AnalysisJobLostClaimError) {
+        await this.execution.fail(claim.ownerId, claim.reviewId, failureToken, claim, errorCode);
+      } catch (failureError) {
+        if (failureError instanceof AnalysisJobLostClaimError || safeErrorCode(failureError) === "JOB_CLAIM_LOST") {
           return { jobId: claim.id, outcome: "claim_lost" };
         }
-        throw transitionError;
+        // The atomic transaction rolled both records back; leave the lease
+        // recoverable rather than claiming a terminal outcome that was not saved.
+        throw failureError;
       }
       return { jobId: claim.id, outcome: "failed", errorCode };
     } finally {

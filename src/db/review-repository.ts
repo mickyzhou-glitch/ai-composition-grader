@@ -748,6 +748,51 @@ export class ReviewRepository {
     return this.requireById(ownerId, id);
   }
 
+  /** Atomically fails a claimed job and releases its review from analyzing. */
+  failAnalysisAndFailJob(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    claim: AnalysisJobCompletionClaim,
+    errorCode: string,
+  ): void {
+    if (!/^[A-Z0-9_]{1,64}$/.test(errorCode)) throw new TypeError("invalid analysis error code");
+    if (!Number.isSafeInteger(claim.attempt) || claim.attempt <= 0 || Number.isNaN(claim.leaseExpiresAt.valueOf())) {
+      throw new TypeError("invalid analysis job completion claim");
+    }
+    const now = this.now();
+    this.database.transaction((transaction) => {
+      const reviewUpdate = transaction.update(reviews).set({
+        status: "failed",
+        updatedAt: now,
+        analysisRunId: null,
+      }).where(and(
+        eq(reviews.id, id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        eq(reviews.revision, token.revision),
+        eq(reviews.analysisRunId, token.runId),
+      )).run();
+      if (reviewUpdate.changes === 0) throw new AnalysisConflictError(id);
+      const jobUpdate = transaction.update(analysisJobs).set({
+        status: "failed",
+        errorCode,
+        message: null,
+        leaseExpiresAt: null,
+        finishedAt: now,
+      }).where(and(
+        eq(analysisJobs.id, claim.id),
+        eq(analysisJobs.ownerId, ownerId),
+        eq(analysisJobs.reviewId, id),
+        eq(analysisJobs.status, "running"),
+        eq(analysisJobs.attempt, claim.attempt),
+        eq(analysisJobs.leaseExpiresAt, claim.leaseExpiresAt),
+        gt(analysisJobs.leaseExpiresAt, now),
+      )).run();
+      if (jobUpdate.changes !== 1) throw new AnalysisJobCompletionClaimLostError(claim.id);
+    });
+  }
+
   failAnalysis(ownerId: string, id: string, token: AnalysisToken): boolean {
     return (
       this.database
