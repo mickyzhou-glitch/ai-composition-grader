@@ -73,6 +73,15 @@ export class DuplicateUsernameError extends Error {
   }
 }
 
+export class TeacherLimitReachedError extends Error {
+  readonly code = "USER_LIMIT_REACHED";
+
+  constructor() {
+    super("Teacher account limit reached");
+    this.name = "TeacherLimitReachedError";
+  }
+}
+
 export class DuplicateSessionTokenError extends Error {
   readonly code = "DUPLICATE_SESSION_TOKEN";
 
@@ -354,6 +363,7 @@ export class AuthRepository {
       if (
         error instanceof AuthStorageError ||
         error instanceof DuplicateUsernameError ||
+        error instanceof TeacherLimitReachedError ||
         error instanceof DuplicateSessionTokenError ||
         error instanceof AuthRecordNotFoundError ||
         error instanceof InvalidSecurityMetadataError
@@ -407,6 +417,50 @@ export class AuthRepository {
       if (isSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE")) {
         throw new DuplicateUsernameError();
       }
+      throw new AuthStorageError();
+    }
+    return this.requireUserById(id);
+  }
+
+  createUserWithTeacherLimit(input: CreateUserInput, maxTeachers = 2): UserRecord {
+    const inputUsername = snapshotOwnDataProperty(input, "username");
+    const passwordHash = snapshotOwnDataProperty(input, "passwordHash");
+    const role = snapshotOwnDataProperty(input, "role");
+    const mustChangePassword = snapshotOwnDataProperty(input, "mustChangePassword", true);
+    if (typeof inputUsername !== "string") throw new TypeError("Username must be a string");
+    if (typeof passwordHash !== "string") throw new TypeError("Password hash must be a string");
+    if (typeof role !== "string") throw new TypeError("Role must be a string");
+    const username = normalizeUsername(inputUsername);
+    assertRole(role);
+    assertPasswordHash(passwordHash);
+    if (mustChangePassword !== undefined) assertBoolean(mustChangePassword, "mustChangePassword");
+    if (!Number.isSafeInteger(maxTeachers) || maxTeachers < 0) throw new TypeError("Teacher limit must be a non-negative integer");
+    const timestamp = snapshotDate(this.now(), "Current time");
+    const id = this.createId();
+    try {
+      this.database.transaction((transaction) => {
+        if (role === "teacher") {
+          const teacherCount = transaction
+            .select({ id: users.id })
+            .from(users)
+            .where(eq(users.role, "teacher"))
+            .all().length;
+          if (teacherCount >= maxTeachers) throw new TeacherLimitReachedError();
+        }
+        transaction.insert(users).values({
+          id,
+          username,
+          passwordHash,
+          role,
+          mustChangePassword: mustChangePassword ?? false,
+          disabledAt: null,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        }).run();
+      });
+    } catch (error) {
+      if (error instanceof TeacherLimitReachedError) throw error;
+      if (isSqliteError(error, "SQLITE_CONSTRAINT_UNIQUE")) throw new DuplicateUsernameError();
       throw new AuthStorageError();
     }
     return this.requireUserById(id);
@@ -758,15 +812,6 @@ export class AuthRepository {
 
     return this.safely(() =>
       this.database.transaction((transaction) => {
-        const inserted = transaction
-          .insert(loginAttempts)
-          .values({
-            normalizedUsername,
-            ipHash,
-            succeeded,
-            attemptedAt,
-          })
-          .run();
         const countFailures = (condition: ReturnType<typeof eq>): number => {
           const attempts = transaction
             .select({ succeeded: loginAttempts.succeeded })
@@ -781,6 +826,22 @@ export class AuthRepository {
           }
           return failures;
         };
+        const previousUsernameFailures = countFailures(
+          eq(loginAttempts.normalizedUsername, normalizedUsername),
+        );
+        const previousIpFailures = countFailures(eq(loginAttempts.ipHash, ipHash));
+        const lockedBeforeAttempt =
+          previousUsernameFailures >= LOGIN_FAILURE_LIMIT || previousIpFailures >= LOGIN_FAILURE_LIMIT;
+        const effectiveSucceeded = succeeded && !lockedBeforeAttempt;
+        const inserted = transaction
+          .insert(loginAttempts)
+          .values({
+            normalizedUsername,
+            ipHash,
+            succeeded: effectiveSucceeded,
+            attemptedAt,
+          })
+          .run();
         const usernameFailures = countFailures(
           eq(loginAttempts.normalizedUsername, normalizedUsername),
         );
@@ -791,7 +852,7 @@ export class AuthRepository {
             id: Number(inserted.lastInsertRowid),
             normalizedUsername,
             ipHash,
-            succeeded,
+            succeeded: effectiveSucceeded,
             attemptedAt,
           },
           status: {
@@ -800,6 +861,7 @@ export class AuthRepository {
             usernameLocked: usernameFailures >= LOGIN_FAILURE_LIMIT,
             ipLocked: ipFailures >= LOGIN_FAILURE_LIMIT,
           },
+          lockedBeforeAttempt,
         };
       }),
     );

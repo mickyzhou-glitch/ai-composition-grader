@@ -66,6 +66,7 @@ export interface LoginFailureStatus {
 export interface RecordedLoginAttemptStatus {
   attempt: LoginAttemptRecord;
   status: LoginFailureStatus;
+  lockedBeforeAttempt: boolean;
 }
 
 export interface SecurityEventInput {

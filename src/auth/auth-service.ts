@@ -1,9 +1,11 @@
+import { Buffer } from "node:buffer";
 import { randomBytes } from "node:crypto";
 
 import {
   AuthRecordNotFoundError,
   AuthRepository,
   DuplicateUsernameError,
+  TeacherLimitReachedError,
 } from "./auth-repository";
 import {
   DUMMY_ARGON2ID_HASH,
@@ -96,21 +98,40 @@ export class AuthService {
     options: AuthServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
-    this.createSessionToken = options.randomSessionToken ?? generateSessionToken;
-    this.createInitialPassword =
-      options.randomInitialPassword ?? (() => randomBytes(24).toString("base64url"));
+    this.createSessionToken = () => {
+      const token = (options.randomSessionToken ?? generateSessionToken)();
+      if (typeof token !== "string" || !/^[A-Za-z0-9_-]+$/u.test(token)) {
+        throw new AuthServiceError("AUTH_STORAGE_ERROR", "Authentication operation failed");
+      }
+      const decoded = Buffer.from(token, "base64url");
+      if (decoded.length !== 32 || decoded.toString("base64url") !== token) {
+        throw new AuthServiceError("AUTH_STORAGE_ERROR", "Authentication operation failed");
+      }
+      return token;
+    };
+    this.createInitialPassword = () => {
+      const password = (options.randomInitialPassword ?? (() => randomBytes(24).toString("base64url")))();
+      if (typeof password !== "string" || !/^[A-Za-z0-9_-]+$/u.test(password)) {
+        throw new AuthServiceError("AUTH_STORAGE_ERROR", "Authentication operation failed");
+      }
+      const decoded = Buffer.from(password, "base64url");
+      if (decoded.length < 20 || decoded.toString("base64url") !== password) {
+        throw new AuthServiceError("AUTH_STORAGE_ERROR", "Authentication operation failed");
+      }
+      return password;
+    };
     this.hash = options.hashPassword ?? defaultHashPassword;
     this.verify = options.verifyPassword ?? defaultVerifyPassword;
     this.refreshIntervalMs = options.sessionRefreshIntervalMs ?? DEFAULT_REFRESH_INTERVAL_MS;
     this.sessionLifetimeMs = options.sessionLifetimeMs ?? DEFAULT_SESSION_LIFETIME_MS;
   }
 
-  private normalizeForLogin(username: unknown): string {
-    if (typeof username !== "string") return "invalid.user";
+  private normalizeForLogin(username: unknown): string | null {
+    if (typeof username !== "string") return null;
     try {
       return normalizeUsername(username);
     } catch {
-      return "invalid.user";
+      return null;
     }
   }
 
@@ -133,43 +154,21 @@ export class AuthService {
   }
 
   private findUserById(userId: string): UserRecord | null {
-    try {
-      return this.repository.findUserById(userId);
-    } catch {
-      return null;
-    }
+    return this.repository.findUserById(userId);
   }
 
   private allUsers(): UserRecord[] {
-    try {
-      return this.repository.listUsers();
-    } catch {
-      return [];
-    }
+    return this.repository.listUsers();
   }
 
   async login(input: LoginInput): Promise<{ rawToken: string; user: AuthenticatedUser; session: SessionRecord }> {
     const username = this.normalizeForLogin(input?.username);
-    const password = typeof input?.password === "string" && input.password.length > 0 ? input.password : "invalid-password";
-    const ipHash = typeof input?.ipHash === "string" ? input.ipHash : "0".repeat(64);
-    let status;
-    try {
-      status = this.repository.getLoginFailureStatus({ username, ipHash });
-    } catch {
-      status = { usernameFailures: 0, ipFailures: 0, usernameLocked: false, ipLocked: false };
+    if (username === null || typeof input?.password !== "string" || input.password.length === 0 || typeof input?.ipHash !== "string" || !/^[a-f0-9]{64}$/u.test(input.ipHash)) {
+      throw new AuthServiceError("INVALID_CREDENTIALS", "Invalid username or password");
     }
-    if (status.usernameLocked || status.ipLocked) {
-      this.recordEvent(null, "login_locked", { reason: "rate_limit", retryAfterMs: LOCK_RETRY_MS });
-      throw new AuthServiceError("LOGIN_RATE_LIMITED", "Login temporarily unavailable", LOCK_RETRY_MS);
-    }
-
-    const user = (() => {
-      try {
-        return this.repository.findUserByUsername(username);
-      } catch {
-        return null;
-      }
-    })();
+    const password = input.password;
+    const ipHash = input.ipHash;
+    const user = this.repository.findUserByUsername(username);
     const usable = user !== null && user.disabledAt === null && user.passwordHash !== "!bootstrap-required";
     let valid = false;
     try {
@@ -182,6 +181,10 @@ export class AuthService {
       ipHash,
       succeeded: usable && valid,
     });
+    if (recorded.lockedBeforeAttempt) {
+      this.recordEvent(user?.id ?? null, "login_locked", { reason: "rate_limit", retryAfterMs: LOCK_RETRY_MS });
+      throw new AuthServiceError("LOGIN_RATE_LIMITED", "Login temporarily unavailable", LOCK_RETRY_MS);
+    }
     if (!usable || !valid) {
       const retry = recorded.status.usernameLocked || recorded.status.ipLocked ? LOCK_RETRY_MS : undefined;
       this.recordEvent(user?.id ?? null, retry ? "login_locked" : "login_failed", {
@@ -203,11 +206,7 @@ export class AuthService {
 
   authenticateSession(rawToken: string): SessionRecord | null {
     if (typeof rawToken !== "string" || rawToken.length === 0) return null;
-    try {
-      return this.repository.findValidSessionByTokenHash(hashSessionToken(rawToken));
-    } catch {
-      return null;
-    }
+    return this.repository.findValidSessionByTokenHash(hashSessionToken(rawToken));
   }
 
   refreshSessionIfNeeded(sessionId: string, lastSeenAt: Date): SessionRecord | null {
@@ -216,8 +215,9 @@ export class AuthService {
     if (now.getTime() - seen.getTime() < this.refreshIntervalMs) return null;
     try {
       return this.repository.refreshSession(sessionId);
-    } catch {
-      return null;
+    } catch (error) {
+      if (error instanceof AuthRecordNotFoundError) return null;
+      throw error;
     }
   }
 
@@ -244,23 +244,20 @@ export class AuthService {
 
   async createInvitedUser(input: { username: string; password: string; role: UserRole; mustChangePassword?: boolean }): Promise<AuthenticatedUser> {
     if (input.role !== "admin" && input.role !== "teacher") throw new AuthServiceError("INVALID_PASSWORD", "Invalid account role");
-    if (input.role === "teacher" && this.allUsers().filter((user) => user.role === "teacher").length >= 2) {
-      throw new AuthServiceError("USER_LIMIT_REACHED", "Teacher account limit reached");
-    }
     const passwordHash = await this.hash(input.password);
     try {
-      const user = this.repository.createUser({ username: input.username, passwordHash, role: input.role, mustChangePassword: input.mustChangePassword ?? true });
+      const user = this.repository.createUserWithTeacherLimit({ username: input.username, passwordHash, role: input.role, mustChangePassword: input.mustChangePassword ?? true });
       this.recordEvent(user.id, "user_created", { reason: "invited_user" });
       return asSafeUser(user);
     } catch (error) {
       if (error instanceof DuplicateUsernameError) throw new AuthServiceError("USER_ALREADY_EXISTS", "Username is already in use");
+      if (error instanceof TeacherLimitReachedError) throw new AuthServiceError("USER_LIMIT_REACHED", "Teacher account limit reached");
       throw error;
     }
   }
 
   async resetPassword(username: string): Promise<string> {
-    let user: UserRecord | null;
-    try { user = this.repository.findUserByUsername(username); } catch { user = null; }
+    const user = this.repository.findUserByUsername(username);
     if (!user) throw new AuthServiceError("AUTH_NOT_FOUND", "Account was not found");
     const temporaryPassword = this.createInitialPassword();
     const passwordHash = await this.hash(temporaryPassword);
@@ -302,11 +299,7 @@ export class AuthService {
   }
 
   findUserByUsername(username: string): AuthenticatedUser | null {
-    try {
-      const user = this.repository.findUserByUsername(username);
-      return user ? asSafeUser(user) : null;
-    } catch {
-      return null;
-    }
+    const user = this.repository.findUserByUsername(username);
+    return user ? asSafeUser(user) : null;
   }
 }

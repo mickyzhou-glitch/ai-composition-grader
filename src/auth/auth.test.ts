@@ -502,12 +502,9 @@ describe("AuthRepository", () => {
       ipHash,
       succeeded: true,
     });
-    expect(reset.status).toEqual({
-      usernameFailures: 0,
-      ipFailures: 0,
-      usernameLocked: false,
-      ipLocked: false,
-    });
+    expect(reset.lockedBeforeAttempt).toBe(true);
+    expect(reset.attempt.succeeded).toBe(false);
+    expect(reset.status.usernameLocked).toBe(true);
   });
 
   it("rejects accessor-backed login failure queries before validated values change", () => {
@@ -952,7 +949,7 @@ describe("AuthService", () => {
     });
     const service = new AuthService(repository, {
       now: () => new Date("2026-07-21T02:00:00.000Z"),
-      randomSessionToken: () => "raw-session-token",
+      randomSessionToken: () => generateSessionToken(),
     });
     await service.createInvitedUser({
       username: "teacher.service",
@@ -964,11 +961,11 @@ describe("AuthService", () => {
       password: "correct horse",
       ipHash: hashSourceIp("127.0.0.1", "test-secret"),
     });
-    expect(result.rawToken).toBe("raw-session-token");
+    expect(result.rawToken).toMatch(/^[A-Za-z0-9_-]+$/);
     expect(result.user).not.toHaveProperty("passwordHash");
     expect(
       opened.sqlite.prepare("SELECT token_hash FROM sessions").get(),
-    ).toEqual({ token_hash: hashSessionToken("raw-session-token") });
+    ).toEqual({ token_hash: hashSessionToken(result.rawToken) });
     opened.close();
   });
 
@@ -998,6 +995,41 @@ describe("AuthService", () => {
     await expect(
       service.createInvitedUser({ username: "admin.two", password: "admin password", role: "admin" }),
     ).resolves.toMatchObject({ role: "admin" });
+    opened.close();
+  });
+
+  it("rejects a correct password after the username is already locked", async () => {
+    const opened = openAppDatabase(":memory:");
+    const repository = new AuthRepository(opened.db);
+    const service = new AuthService(repository);
+    await service.createInvitedUser({ username: "locked.user", password: "correct password", role: "admin" });
+    const ipHash = hashSourceIp("127.0.0.1", "lock-test");
+    for (let index = 0; index < 5; index += 1) {
+      await expect(service.login({ username: "locked.user", password: "wrong", ipHash })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    }
+    await expect(service.login({ username: "locked.user", password: "correct password", ipHash })).rejects.toMatchObject({ code: "LOGIN_RATE_LIMITED" });
+    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM sessions").get()).toEqual({ count: 0 });
+    opened.close();
+  });
+
+  it("atomically limits concurrent teacher invitations to two", async () => {
+    const opened = openAppDatabase(":memory:");
+    const service = new AuthService(new AuthRepository(opened.db));
+    const results = await Promise.allSettled([
+      service.createInvitedUser({ username: "parallel.one", password: "password one", role: "teacher" }),
+      service.createInvitedUser({ username: "parallel.two", password: "password two", role: "teacher" }),
+      service.createInvitedUser({ username: "parallel.three", password: "password three", role: "teacher" }),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    expect(results.filter((result) => result.status === "rejected" && result.reason?.code === "USER_LIMIT_REACHED")).toHaveLength(1);
+    opened.close();
+  });
+
+  it.each(["", "not-a-hash", "A".repeat(64), null])("rejects malformed ipHash safely: %j", async (ipHash) => {
+    const opened = openAppDatabase(":memory:");
+    const service = new AuthService(new AuthRepository(opened.db));
+    await expect(service.login({ username: "missing.user", password: "wrong", ipHash: ipHash as string })).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM login_attempts").get()).toEqual({ count: 0 });
     opened.close();
   });
 });
