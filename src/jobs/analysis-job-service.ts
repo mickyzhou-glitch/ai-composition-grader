@@ -15,6 +15,13 @@ export type AnalysisJobView = {
 };
 
 function toView(job: AnalysisJobRecord): AnalysisJobView {
+  const failedMessage = job.errorCode === "AI_SETTINGS_INCOMPLETE"
+    ? "请联系管理员检查 AI 服务设置后再试"
+    : job.errorCode === "AI_INVALID_RESPONSE"
+      ? "AI 返回格式异常，请稍后重新分析"
+      : job.errorCode === "AI_REQUEST_FAILED"
+        ? "AI 服务暂时不可用，请稍后重新分析"
+        : "分析暂未完成，请稍后重试";
   return {
     id: job.id,
     reviewId: job.reviewId,
@@ -24,7 +31,7 @@ function toView(job: AnalysisJobRecord): AnalysisJobView {
     // retain diagnostic text while handling upstream failures. Only fixed,
     // teacher-safe terminal copy can cross this boundary.
     message: job.status === "failed"
-      ? "分析暂未完成，请稍后重试"
+      ? failedMessage
       : job.status === "canceled"
         ? "作文已删除或已到期，分析已取消"
         : null,

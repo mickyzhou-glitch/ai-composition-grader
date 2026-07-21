@@ -14,6 +14,11 @@ import {
   AnalysisJobUnavailableReviewError,
 } from "./analysis-job-repository";
 import { AnalysisJobService } from "./analysis-job-service";
+import {
+  AnalysisWorker,
+  type AnalysisExecutionService,
+  type AnalysisJobQueue,
+} from "./analysis-worker";
 
 const ownerA = "teacher-a";
 const ownerB = "teacher-b";
@@ -27,11 +32,43 @@ const config = {
   templateType: "custom" as const,
 };
 
+const readyEnvelope = {
+  readable: true as const,
+  pageWarnings: [],
+  report: {
+    themeFit: "fits" as const,
+    themeReason: "切题。",
+    personalizedComment: "继续努力。",
+    painPoints: [],
+    commonIssues: [],
+    revisionSuggestions: [],
+    scores: {
+      themeIntent: 9,
+      contentSelection: 9,
+      structure: 7,
+      languageExpression: 7,
+      writingConventions: 4,
+      total: 36,
+      level: "优秀作文" as const,
+    },
+    sampleParagraphs: [{ title: "示范", text: "我为自己鼓掌。", suggestion: "补充细节。" }],
+  },
+  annotations: [],
+};
+
 function addTeacher(sqlite: Database.Database, id: string): void {
   sqlite.prepare(
     `INSERT INTO users (id, username, password_hash, role, must_change_password, created_at, updated_at)
      VALUES (?, ?, '!test', 'teacher', 0, 1, 1)`,
   ).run(id, id);
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
 
 describe("AnalysisJobService", () => {
@@ -256,5 +293,115 @@ describe("AnalysisJobService", () => {
 
     expect(first?.id).toBe("job-1");
     expect(second).toBeNull();
+  });
+
+  it("Worker 单并发按阶段保存成功结果后才结束任务", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext();
+    expect(claimed).not.toBeNull();
+    const started = deferred<void>();
+    const release = deferred<void>();
+    const calls: string[] = [];
+    const executor: AnalysisExecutionService = {
+      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
+      analyze: async () => {
+        calls.push("analyze");
+        started.resolve();
+        await release.promise;
+        return readyEnvelope;
+      },
+      save: async () => calls.push("save"),
+      fail: async () => calls.push("fail"),
+    };
+    const queue: AnalysisJobQueue = {
+      claimNext: (() => {
+        let next = claimed;
+        return () => {
+          const result = next;
+          next = null;
+          return result;
+        };
+      })(),
+      updateProgress: (job, stage) => {
+        calls.push(stage);
+        return { ...claimed!, progressStage: stage } as never;
+      },
+      transition: (job, status) => {
+        calls.push(status);
+        return { ...job, status, leaseExpiresAt: null } as never;
+      },
+      renewLease: () => null,
+      retry: () => "failed",
+    };
+    const worker = new AnalysisWorker(queue, executor, { renewEveryMs: 60_000 });
+
+    const first = worker.runOnce();
+    await started.promise;
+    expect(await worker.runOnce()).toBeNull();
+    expect(calls).not.toContain("succeeded");
+    release.resolve();
+    await first;
+
+    expect(calls).toEqual([
+      "generating_review",
+      "analyze",
+      "validating_result",
+      "saving_result",
+      "save",
+      "succeeded",
+    ]);
+  });
+
+  it("图片不可辨认时 Worker 保存 needs_better_images 并正常结束任务", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const transitions: string[] = [];
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (_job, stage) => ({ ...claimed, progressStage: stage } as never),
+      transition: (_job, status) => {
+        transitions.push(status);
+        return {} as never;
+      },
+      renewLease: () => null,
+      retry: () => "failed",
+    }, {
+      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
+      analyze: async () => ({ readable: false, pageWarnings: ["请重拍"], annotations: [] }),
+      save: async (_ownerId, _reviewId, _token, envelope) => {
+        expect(envelope.readable).toBe(false);
+      },
+      fail: async () => { throw new Error("unreachable"); },
+    });
+
+    await worker.runOnce();
+
+    expect(transitions).toEqual(["succeeded"]);
+  });
+
+  it("模型错误只按尝试上限重试，并使用安全错误码", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const retries: string[] = [];
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (_job, stage) => ({ ...claimed, progressStage: stage } as never),
+      transition: () => ({} as never),
+      renewLease: () => null,
+      retry: (_job, code) => {
+        retries.push(code);
+        return "queued";
+      },
+    }, {
+      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
+      analyze: async () => { throw Object.assign(new Error("upstream response secret"), { code: "AI_REQUEST_FAILED" }); },
+      save: async () => { throw new Error("unreachable"); },
+      fail: async () => { throw new Error("unreachable"); },
+    });
+
+    const result = await worker.runOnce();
+
+    expect(result).toMatchObject({ outcome: "retrying", errorCode: "AI_REQUEST_FAILED" });
+    expect(retries).toEqual(["AI_REQUEST_FAILED"]);
   });
 });

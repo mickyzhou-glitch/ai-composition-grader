@@ -5,6 +5,7 @@ import type {
   ReviewRecord,
   ReviewRepository,
   TeacherReviewEdits,
+  AnalysisToken,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
@@ -15,6 +16,12 @@ export interface AiReviewer {
     config: AssignmentConfig;
     imageDataUrls: string[];
   }): Promise<AiReviewEnvelope>;
+}
+
+export interface PreparedReviewAnalysis {
+  token: AnalysisToken;
+  config: AssignmentConfig;
+  imageDataUrls: string[];
 }
 
 interface ReviewServiceOptions {
@@ -189,8 +196,27 @@ export class ReviewService {
     review: ReviewRecord;
     pageWarnings: string[];
   }> {
+    const prepared = await this.prepareAnalysis(ownerId, id);
+    let envelope: AiReviewEnvelope;
+    try {
+      envelope = await this.analyzePrepared(prepared);
+    } catch (error) {
+      await this.failPreparedAnalysis(ownerId, id, prepared.token);
+      throw error;
+    }
+    try {
+      const review = await this.savePreparedAnalysis(ownerId, id, prepared.token, envelope);
+      return { review, pageWarnings: envelope.pageWarnings };
+    } catch (error) {
+      await this.failPreparedAnalysis(ownerId, id, prepared.token);
+      throw error;
+    }
+  }
+
+  /** Prepares local data under the review lock; no network model call happens here. */
+  async prepareAnalysis(ownerId: string, id: string): Promise<PreparedReviewAnalysis> {
     await this.recovery;
-    const prepared = await this.lock.runExclusive(id, () => this.fileStore.withReviewLock(ownerId, id, async () => {
+    return this.lock.runExclusive(id, () => this.fileStore.withReviewLock(ownerId, id, async () => {
       const review = this.get(ownerId, id);
       await this.fileStore.migrateLegacyReview(ownerId, id);
       if (review.images.length < 1 || review.images.length > 3) {
@@ -217,36 +243,33 @@ export class ReviewService {
             return `data:image/jpeg;base64,${data.toString("base64")}`;
           }),
         );
-        return { review, token, imageDataUrls };
+        return { token, config: review.config, imageDataUrls };
       } catch (error) {
         this.repository.failAnalysis(ownerId, id, token);
         throw error;
       }
     }));
+  }
 
-    let envelope: AiReviewEnvelope;
-    try {
-      envelope = await this.aiReviewer.analyze({
-        config: prepared.review.config,
-        imageDataUrls: prepared.imageDataUrls,
-      });
-    } catch (error) {
-      await this.lock.runExclusive(id, async () => {
-        this.repository.failAnalysis(ownerId, id, prepared.token);
-      });
-      throw error;
-    }
+  async analyzePrepared(
+    prepared: Pick<PreparedReviewAnalysis, "config" | "imageDataUrls">,
+  ): Promise<AiReviewEnvelope> {
+    return this.aiReviewer.analyze({
+      config: prepared.config,
+      imageDataUrls: prepared.imageDataUrls,
+    });
+  }
 
-    try {
-      const saved = await this.lock.runExclusive(id, async () =>
-        this.repository.saveAnalysis(ownerId, id, prepared.token, envelope),
-      );
-      return { review: saved, pageWarnings: envelope.pageWarnings };
-    } catch (error) {
-      await this.lock.runExclusive(id, async () => {
-        this.repository.failAnalysis(ownerId, id, prepared.token);
-      });
-      throw error;
-    }
+  async savePreparedAnalysis(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    envelope: AiReviewEnvelope,
+  ): Promise<ReviewRecord> {
+    return this.lock.runExclusive(id, async () => this.repository.saveAnalysis(ownerId, id, token, envelope));
+  }
+
+  async failPreparedAnalysis(ownerId: string, id: string, token: AnalysisToken): Promise<boolean> {
+    return this.lock.runExclusive(id, async () => this.repository.failAnalysis(ownerId, id, token));
   }
 }

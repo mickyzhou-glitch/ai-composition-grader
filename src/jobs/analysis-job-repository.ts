@@ -401,6 +401,34 @@ export class AnalysisJobRepository {
     return updated as ClaimedAnalysisJobRecord;
   }
 
+  /** Releases a failed claim for one later attempt, or finishes it at the configured cap. */
+  retry(claim: AnalysisJobClaim, errorCode: string): "queued" | "failed" {
+    const normalizedClaim = this.assertClaim(claim);
+    if (!/^[A-Z0-9_]{1,64}$/.test(errorCode)) throw new TypeError("errorCode must be safe");
+    const now = assertDate(this.now(), "now");
+    const current = this.getInternal(normalizedClaim.id);
+    if (!current) throw new AnalysisJobNotFoundError(normalizedClaim.id);
+    if (current.status !== "running") throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    const terminal = current.attempt >= this.maxAttempts;
+    const update = this.database.update(analysisJobs).set(terminal ? {
+      status: "failed",
+      errorCode,
+      message: null,
+      leaseExpiresAt: null,
+      finishedAt: now,
+    } : {
+      status: "queued",
+      availableAt: now,
+      progressStage: "queued",
+      errorCode,
+      message: null,
+      leaseExpiresAt: null,
+      finishedAt: null,
+    }).where(this.runningClaimCondition(normalizedClaim, now)).run();
+    if (update.changes !== 1) throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    return terminal ? "failed" : "queued";
+  }
+
   /** Cancels active work for any review that is deleting or past its retention deadline. */
   cancelUnavailable(): number {
     const now = assertDate(this.now(), "now");
