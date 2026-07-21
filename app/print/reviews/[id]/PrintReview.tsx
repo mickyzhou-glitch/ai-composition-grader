@@ -3,6 +3,10 @@ import type { ReviewRecord } from "@/src/db/review-repository";
 
 import styles from "./print.module.css";
 
+function safeImageUrl(reviewId: string, imageId: number): string {
+  return `/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${imageId}&variant=annotation`;
+}
+
 const themeLabels = {
   fits: "切题",
   partial: "部分切题",
@@ -16,10 +20,6 @@ const scoreRows = [
   ["languageExpression", "语言表达", 8],
   ["writingConventions", "书写规范", 4],
 ] as const;
-
-function safeImageUrl(reviewId: string, imageId: number): string {
-  return `/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${imageId}&variant=annotation`;
-}
 
 function orderedAnnotations(annotations: Annotation[]) {
   return [...annotations]
@@ -52,7 +52,7 @@ function ListSection({
   );
 }
 
-export function PrintReview({ review }: { review: ReviewRecord }) {
+export function PrintReview({ review, imageSources }: { review: ReviewRecord; imageSources?: string[] }) {
   if (!review.report || review.images.length === 0) {
     throw new TypeError("print review requires report and images");
   }
@@ -113,7 +113,7 @@ export function PrintReview({ review }: { review: ReviewRecord }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   alt={`第 ${imageIndex + 1} 页原作文`}
-                  src={safeImageUrl(review.id, image.id)}
+                  src={imageSources?.[imageIndex] ?? safeImageUrl(review.id, image.id)}
                 />
                 <svg
                   aria-hidden="true"

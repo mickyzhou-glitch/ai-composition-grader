@@ -13,7 +13,11 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 
-export const DEFAULT_REVIEWS_DIRECTORY = path.resolve(
+export const DEFAULT_USERS_DIRECTORY = path.resolve(
+  process.cwd(),
+  ".data/users",
+);
+export const DEFAULT_LEGACY_REVIEWS_DIRECTORY = path.resolve(
   process.cwd(),
   ".data/reviews",
 );
@@ -32,6 +36,7 @@ export interface StagedReviewDelete {
 }
 
 interface CleanupQueueEntry {
+  ownerId: string;
   reviewId: string;
   kind: ReviewStorageKind;
   filename: string;
@@ -39,7 +44,7 @@ interface CleanupQueueEntry {
 
 const CLEANUP_QUEUE_FILENAME = ".cleanup-queue.json";
 const STAGED_DELETE_PATTERN =
-  /^(.*)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  /^(.*)--(.*)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class UnsafeStoragePathError extends Error {
   constructor(segment: string) {
@@ -169,14 +174,21 @@ function isSymlinkError(error: unknown): boolean {
 
 export class ReviewFileStore {
   readonly rootDirectory: string;
+  readonly legacyRootDirectory: string;
   private cleanupOperationQueue: Promise<void> = Promise.resolve();
 
-  constructor(rootDirectory = DEFAULT_REVIEWS_DIRECTORY) {
+  constructor(
+    rootDirectory = DEFAULT_USERS_DIRECTORY,
+    legacyRootDirectory = DEFAULT_LEGACY_REVIEWS_DIRECTORY,
+  ) {
     this.rootDirectory = path.resolve(rootDirectory);
+    this.legacyRootDirectory = path.resolve(legacyRootDirectory);
   }
 
-  getReviewPaths(reviewId: string): ReviewStoragePaths {
-    const reviewDirectory = resolveInside(this.rootDirectory, reviewId);
+  getReviewPaths(ownerId: string, reviewId: string): ReviewStoragePaths {
+    const ownerDirectory = resolveInside(this.rootDirectory, ownerId);
+    const reviewsDirectory = path.join(ownerDirectory, "reviews");
+    const reviewDirectory = resolveInside(reviewsDirectory, reviewId);
     return {
       reviewDirectory,
       imagesDirectory: path.join(reviewDirectory, "images"),
@@ -184,10 +196,14 @@ export class ReviewFileStore {
     };
   }
 
-  async createReview(reviewId: string): Promise<ReviewStoragePaths> {
-    const paths = this.getReviewPaths(reviewId);
+  async createReview(ownerId: string, reviewId: string): Promise<ReviewStoragePaths> {
+    const paths = this.getReviewPaths(ownerId, reviewId);
     await this.assertSafeRoot(true);
-    await ensureRealDirectory(this.rootDirectory, paths.reviewDirectory);
+    const ownerDirectory = path.dirname(path.dirname(paths.reviewDirectory));
+    const reviewsDirectory = path.dirname(paths.reviewDirectory);
+    await ensureRealDirectory(this.rootDirectory, ownerDirectory);
+    await ensureRealDirectory(ownerDirectory, reviewsDirectory);
+    await ensureRealDirectory(reviewsDirectory, paths.reviewDirectory);
     await Promise.all([
       ensureRealDirectory(paths.reviewDirectory, paths.imagesDirectory),
       ensureRealDirectory(paths.reviewDirectory, paths.pdfDirectory),
@@ -195,14 +211,56 @@ export class ReviewFileStore {
     return paths;
   }
 
+  /**
+   * Move a legacy review directory only after the caller has checked the
+   * database owner. The destination wins when both copies exist, making the
+   * operation idempotent and preventing a stale legacy tree from overwriting
+   * newer tenant-scoped files.
+   */
+  async migrateLegacyReview(ownerId: string, reviewId: string): Promise<void> {
+    assertSafeSegment(ownerId);
+    assertSafeSegment(reviewId);
+    await this.assertSafeRoot(true);
+    const legacyRoot = this.legacyRootDirectory;
+    await ensureRealDirectory(path.dirname(legacyRoot), legacyRoot).catch((error) => {
+      if (!isMissing(error)) throw error;
+    });
+    const legacyReview = resolveInside(legacyRoot, reviewId);
+    let legacyExists = false;
+    try {
+      legacyExists = await assertRealDirectory(legacyRoot, legacyReview);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (!legacyExists) return;
+
+    const destination = this.getReviewPaths(ownerId, reviewId).reviewDirectory;
+    const ownerDirectory = path.dirname(path.dirname(destination));
+    const reviewsDirectory = path.dirname(destination);
+    await ensureRealDirectory(this.rootDirectory, ownerDirectory);
+    await ensureRealDirectory(ownerDirectory, reviewsDirectory);
+    let destinationExists = false;
+    try {
+      destinationExists = await assertRealDirectory(reviewsDirectory, destination);
+    } catch (error) {
+      if (!isMissing(error)) throw error;
+    }
+    if (destinationExists) {
+      await rm(legacyReview, { recursive: true, force: true });
+      return;
+    }
+    await rename(legacyReview, destination);
+  }
+
   async writeFile(
+    ownerId: string,
     reviewId: string,
     kind: ReviewStorageKind,
     filename: string,
     data: string | Uint8Array,
   ): Promise<string> {
     assertSafeSegment(filename);
-    const paths = await this.createReview(reviewId);
+    const paths = await this.createReview(ownerId, reviewId);
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
     const destination = resolveInside(directory, filename);
@@ -242,12 +300,13 @@ export class ReviewFileStore {
   }
 
   async readFile(
+    ownerId: string,
     reviewId: string,
     kind: ReviewStorageKind,
     filename: string,
   ): Promise<Buffer> {
     assertSafeSegment(filename);
-    const paths = this.getReviewPaths(reviewId);
+    const paths = this.getReviewPaths(ownerId, reviewId);
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
     await this.assertSafeReviewPaths(paths, kind);
@@ -268,12 +327,13 @@ export class ReviewFileStore {
   }
 
   async deleteFile(
+    ownerId: string,
     reviewId: string,
     kind: ReviewStorageKind,
     filename: string,
   ): Promise<void> {
     assertSafeSegment(filename);
-    const paths = this.getReviewPaths(reviewId);
+    const paths = this.getReviewPaths(ownerId, reviewId);
     const directory =
       kind === "images" ? paths.imagesDirectory : paths.pdfDirectory;
     if (!(await this.assertSafeReviewPaths(paths, kind))) return;
@@ -282,25 +342,21 @@ export class ReviewFileStore {
     await rm(target, { force: true });
   }
 
-  async queueImageCleanup(
-    reviewId: string,
-    filenames: string[],
-  ): Promise<void> {
-    await this.queueFileCleanup(reviewId, "images", filenames);
+  async queueImageCleanup(ownerId: string, reviewId: string, filenames: string[]): Promise<void> {
+    await this.queueFileCleanup(ownerId, reviewId, "images", filenames);
   }
 
-  async queuePdfCleanup(
-    reviewId: string,
-    filenames: string[],
-  ): Promise<void> {
-    await this.queueFileCleanup(reviewId, "pdf", filenames);
+  async queuePdfCleanup(ownerId: string, reviewId: string, filenames: string[]): Promise<void> {
+    await this.queueFileCleanup(ownerId, reviewId, "pdf", filenames);
   }
 
   private async queueFileCleanup(
+    ownerId: string,
     reviewId: string,
     kind: ReviewStorageKind,
     filenames: string[],
   ): Promise<void> {
+    assertSafeSegment(ownerId);
     assertSafeSegment(reviewId);
     filenames.forEach(assertSafeSegment);
     try {
@@ -309,26 +365,28 @@ export class ReviewFileStore {
         const unique = new Map(
           [
             ...existing,
-            ...filenames.map((filename) => ({ reviewId, kind, filename })),
+            ...filenames.map((filename) => ({ ownerId, reviewId, kind, filename })),
           ].map((entry) => [
-            `${entry.reviewId}\0${entry.kind}\0${entry.filename}`,
+            `${entry.ownerId}\0${entry.reviewId}\0${entry.kind}\0${entry.filename}`,
             entry,
           ]),
         );
         const queued = [...unique.values()];
         await this.writeCleanupQueue(queued);
-        await this.retryFileCleanupExclusive(reviewId, queued);
+        await this.retryFileCleanupExclusive(ownerId, reviewId, queued);
       });
     } catch {
       // Old versions are unreferenced after the DB switch; cleanup is best-effort.
     }
   }
 
-  async retryImageCleanup(reviewId: string): Promise<void> {
+  async retryImageCleanup(ownerId: string, reviewId: string): Promise<void> {
+    assertSafeSegment(ownerId);
     assertSafeSegment(reviewId);
     try {
       await this.enqueueCleanup(async () => {
         await this.retryFileCleanupExclusive(
+          ownerId,
           reviewId,
           await this.readCleanupQueue(),
         );
@@ -338,14 +396,14 @@ export class ReviewFileStore {
     }
   }
 
-  async deleteReview(reviewId: string): Promise<void> {
-    const paths = this.getReviewPaths(reviewId);
+  async deleteReview(ownerId: string, reviewId: string): Promise<void> {
+    const paths = this.getReviewPaths(ownerId, reviewId);
     if (!(await this.assertSafeReviewPaths(paths))) return;
     await rm(paths.reviewDirectory, { recursive: true, force: true });
   }
 
-  async stageDelete(reviewId: string): Promise<StagedReviewDelete> {
-    const paths = this.getReviewPaths(reviewId);
+  async stageDelete(ownerId: string, reviewId: string): Promise<StagedReviewDelete> {
+    const paths = this.getReviewPaths(ownerId, reviewId);
     if (!(await this.assertSafeReviewPaths(paths))) {
       return { commit: async () => {}, rollback: async () => {} };
     }
@@ -353,7 +411,7 @@ export class ReviewFileStore {
     await ensureRealDirectory(this.rootDirectory, trashDirectory);
     const stagedDirectory = resolveInside(
       trashDirectory,
-      `${reviewId}-${randomUUID()}`,
+      `${ownerId}--${reviewId}-${randomUUID()}`,
     );
     await rename(paths.reviewDirectory, stagedDirectory);
     let state: "staged" | "committed" | "rolled_back" = "staged";
@@ -381,7 +439,7 @@ export class ReviewFileStore {
   }
 
   async recoverStagedDeletes(
-    reviewExists: (reviewId: string) => boolean | Promise<boolean>,
+    reviewExists: (ownerId: string, reviewId: string) => boolean | Promise<boolean>,
   ): Promise<void> {
     if (!(await this.assertSafeRoot(false))) return;
     const trashDirectory = resolveInside(this.rootDirectory, ".trash");
@@ -390,17 +448,19 @@ export class ReviewFileStore {
     const entries = await readdir(trashDirectory, { withFileTypes: true });
     for (const entry of entries) {
       const match = entry.name.match(STAGED_DELETE_PATTERN);
-      const reviewId = match?.[1];
-      if (!reviewId || !entry.isDirectory()) continue;
+      const ownerId = match?.[1];
+      const reviewId = match?.[2];
+      if (!ownerId || !reviewId || !entry.isDirectory()) continue;
+      assertSafeSegment(ownerId);
       assertSafeSegment(reviewId);
       const stagedDirectory = resolveInside(trashDirectory, entry.name);
       await assertRealDirectory(trashDirectory, stagedDirectory);
-      if (!(await reviewExists(reviewId))) {
+      if (!(await reviewExists(ownerId, reviewId))) {
         await rm(stagedDirectory, { recursive: true, force: true });
         continue;
       }
 
-      const reviewDirectory = this.getReviewPaths(reviewId).reviewDirectory;
+      const reviewDirectory = this.getReviewPaths(ownerId, reviewId).reviewDirectory;
       try {
         await lstat(reviewDirectory);
         continue;
@@ -418,17 +478,18 @@ export class ReviewFileStore {
   }
 
   private async retryFileCleanupExclusive(
+    ownerId: string,
     reviewId: string,
     queued: CleanupQueueEntry[],
   ): Promise<void> {
     const remaining: CleanupQueueEntry[] = [];
     for (const entry of queued) {
-      if (entry.reviewId !== reviewId) {
+      if (entry.ownerId !== ownerId || entry.reviewId !== reviewId) {
         remaining.push(entry);
         continue;
       }
       try {
-        await this.deleteFile(entry.reviewId, entry.kind, entry.filename);
+        await this.deleteFile(entry.ownerId, entry.reviewId, entry.kind, entry.filename);
       } catch {
         remaining.push(entry);
       }
@@ -456,6 +517,8 @@ export class ReviewFileStore {
       if (
         typeof entry !== "object" ||
         entry === null ||
+        !("ownerId" in entry) ||
+        typeof entry.ownerId !== "string" ||
         !("reviewId" in entry) ||
         typeof entry.reviewId !== "string" ||
         !("filename" in entry) ||
@@ -463,13 +526,14 @@ export class ReviewFileStore {
       ) {
         throw new TypeError("cleanup queue is invalid");
       }
+      assertSafeSegment(entry.ownerId);
       assertSafeSegment(entry.reviewId);
       assertSafeSegment(entry.filename);
       const kind =
         "kind" in entry && (entry.kind === "images" || entry.kind === "pdf")
           ? entry.kind
           : "images";
-      return { reviewId: entry.reviewId, kind, filename: entry.filename };
+      return { ownerId: entry.ownerId, reviewId: entry.reviewId, kind, filename: entry.filename };
     });
   }
 
@@ -527,7 +591,15 @@ export class ReviewFileStore {
     kind?: ReviewStorageKind,
   ): Promise<boolean> {
     if (!(await this.assertSafeRoot(false))) return false;
-    if (!(await assertRealDirectory(this.rootDirectory, paths.reviewDirectory))) {
+    const ownerDirectory = path.dirname(path.dirname(paths.reviewDirectory));
+    const reviewsDirectory = path.dirname(paths.reviewDirectory);
+    if (!(await assertRealDirectory(this.rootDirectory, ownerDirectory))) {
+      return false;
+    }
+    if (!(await assertRealDirectory(ownerDirectory, reviewsDirectory))) {
+      return false;
+    }
+    if (!(await assertRealDirectory(reviewsDirectory, paths.reviewDirectory))) {
       return false;
     }
     if (kind) {

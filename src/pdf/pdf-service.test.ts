@@ -130,6 +130,7 @@ function harness(options: {
 describe("PdfService", () => {
   beforeEach(() => {
     vi.stubEnv("PDF_INTERNAL_ORIGIN", "http://127.0.0.1:3000");
+    vi.stubEnv("PDF_PRINT_TOKEN_SECRET", "test-print-token-secret-012345678901234567890123");
   });
 
   afterEach(() => {
@@ -173,6 +174,7 @@ describe("PdfService", () => {
     expect(result.data).toEqual(Buffer.from("generated-pdf"));
     expect(result.filename).toBe("作文批改-为-自己-鼓掌-20260721-1405.pdf");
     expect(fileStore.writeFile).toHaveBeenCalledWith(
+      OWNER_ID,
       "review-1",
       "pdf",
       result.filename,
@@ -221,7 +223,7 @@ describe("PdfService", () => {
 
     expect(result.cached).toBe(false);
     expect(browserFactory.launch).toHaveBeenCalledOnce();
-    expect(fileStore.queuePdfCleanup).toHaveBeenCalledWith("review-1", ["stale.pdf"]);
+    expect(fileStore.queuePdfCleanup).toHaveBeenCalledWith(OWNER_ID, "review-1", ["stale.pdf"]);
   });
 
   it("无报告或无图片时返回 422 业务错误且不启动浏览器", async () => {

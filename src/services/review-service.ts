@@ -56,7 +56,7 @@ export class ReviewService {
     this.createRunId = options.createRunId ?? randomUUID;
     this.lock = options.lock ?? new InMemoryReviewLock();
     this.recovery = this.fileStore.recoverStagedDeletes(
-      (id) => this.repository.exists(id),
+      (_ownerId, id) => this.repository.exists(id),
     );
   }
 
@@ -80,6 +80,7 @@ export class ReviewService {
     contentType: string;
   }> {
     const review = this.get(ownerId, id);
+    await this.fileStore.migrateLegacyReview(ownerId, id);
     const image = review.images.find((candidate) => candidate.id === imageId);
     if (!image) {
       throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
@@ -104,6 +105,7 @@ export class ReviewService {
     try {
       return {
         data: await this.fileStore.readFile(
+          ownerId,
           id,
           "images",
           storedPath.slice("images/".length),
@@ -126,11 +128,11 @@ export class ReviewService {
   async create(ownerId: string, config: AssignmentConfig): Promise<ReviewRecord> {
     await this.recovery;
     const id = this.createId();
-    await this.fileStore.createReview(id);
+    await this.fileStore.createReview(ownerId, id);
     try {
       return this.repository.create(ownerId, { id, config });
     } catch (error) {
-      await this.fileStore.deleteReview(id);
+      await this.fileStore.deleteReview(ownerId, id);
       throw error;
     }
   }
@@ -138,9 +140,10 @@ export class ReviewService {
   async update(ownerId: string, id: string, input: TeacherReviewEdits): Promise<ReviewRecord> {
     return this.lock.runExclusive(id, async () => {
       const current = this.get(ownerId, id);
+      await this.fileStore.migrateLegacyReview(ownerId, id);
       const updated = this.repository.updateTeacherEdits(ownerId, id, input);
       if (current.pdfFilename) {
-        await this.fileStore.queuePdfCleanup(id, [current.pdfFilename]);
+        await this.fileStore.queuePdfCleanup(ownerId, id, [current.pdfFilename]);
       }
       return updated;
     });
@@ -150,7 +153,8 @@ export class ReviewService {
     await this.recovery;
     await this.lock.runExclusive(id, async () => {
       this.get(ownerId, id);
-      const staged = await this.fileStore.stageDelete(id);
+      await this.fileStore.migrateLegacyReview(ownerId, id);
+      const staged = await this.fileStore.stageDelete(ownerId, id);
       try {
         this.repository.delete(ownerId, id);
       } catch (error) {
@@ -172,6 +176,7 @@ export class ReviewService {
     await this.recovery;
     const prepared = await this.lock.runExclusive(id, async () => {
       const review = this.get(ownerId, id);
+      await this.fileStore.migrateLegacyReview(ownerId, id);
       if (review.images.length < 1 || review.images.length > 3) {
         throw new ReviewServiceError(
           "IMAGES_REQUIRED",
@@ -186,13 +191,13 @@ export class ReviewService {
         review.revision,
       );
       if (review.pdfFilename) {
-        await this.fileStore.queuePdfCleanup(id, [review.pdfFilename]);
+        await this.fileStore.queuePdfCleanup(ownerId, id, [review.pdfFilename]);
       }
       try {
         const imageDataUrls = await Promise.all(
           review.images.map(async (image) => {
             const filename = image.aiPath.replace(/^images\//, "");
-            const data = await this.fileStore.readFile(id, "images", filename);
+            const data = await this.fileStore.readFile(ownerId, id, "images", filename);
             return `data:image/jpeg;base64,${data.toString("base64")}`;
           }),
         );

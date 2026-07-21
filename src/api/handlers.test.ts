@@ -326,7 +326,7 @@ describe("review route handlers", () => {
       annotations: [{ category: "sentence" }],
     });
 
-    const reviewDirectory = fileStore.getReviewPaths("review-1").reviewDirectory;
+    const reviewDirectory = fileStore.getReviewPaths(OWNER_ID, "review-1").reviewDirectory;
     await expect(stat(reviewDirectory)).resolves.toMatchObject({});
 
     const deleted = await item.DELETE(new Request("http://localhost"), {
@@ -535,7 +535,7 @@ describe("review route handlers", () => {
       { params: Promise.resolve({ id: "review-1" }) },
     )).status).toBe(200);
     const before = repository.getById(OWNER_ID, "review-1");
-    const imageDirectory = fileStore.getReviewPaths("review-1").imagesDirectory;
+    const imageDirectory = fileStore.getReviewPaths(OWNER_ID, "review-1").imagesDirectory;
     const filesBefore = (await readdir(imageDirectory)).sort();
 
     repository.updateTeacherEdits(OWNER_ID, "review-1", {

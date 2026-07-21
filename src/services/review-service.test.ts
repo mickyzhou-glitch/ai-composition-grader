@@ -79,9 +79,9 @@ describe("ReviewService analysis CAS", () => {
     temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "grader-cas-"));
     fileStore = new ReviewFileStore(path.join(temporaryDirectory, "reviews"));
     repository.create(OWNER_ID, { id: "review-1", config });
-    await fileStore.writeFile("review-1", "images", "page-original.jpg", "original");
-    await fileStore.writeFile("review-1", "images", "page-annotation.jpg", "annotation");
-    await fileStore.writeFile("review-1", "images", "page-ai.jpg", "ai");
+    await fileStore.writeFile(OWNER_ID, "review-1", "images", "page-original.jpg", "original");
+    await fileStore.writeFile(OWNER_ID, "review-1", "images", "page-annotation.jpg", "annotation");
+    await fileStore.writeFile(OWNER_ID, "review-1", "images", "page-ai.jpg", "ai");
     image = {
       position: 0,
       originalName: "page.jpg",
@@ -238,7 +238,7 @@ describe("ReviewService analysis CAS", () => {
       status: "ready_for_review",
       pdfFilename: null,
     });
-    expect(cleanup).toHaveBeenCalledWith("review-1", ["old.pdf"]);
+    expect(cleanup).toHaveBeenCalledWith(OWNER_ID, "review-1", ["old.pdf"]);
     await cleanup.mock.results[0]?.value;
   });
 
@@ -259,10 +259,10 @@ describe("ReviewService analysis CAS", () => {
     const cachedRead = deferred<Buffer>();
     const originalRead = fileStore.readFile.bind(fileStore);
     vi.spyOn(fileStore, "readFile").mockImplementation(
-      (id, kind, filename) =>
+      (ownerId, id, kind, filename) =>
         kind === "pdf" && filename === "cached.pdf"
           ? cachedRead.promise
-          : originalRead(id, kind, filename),
+          : originalRead(ownerId, id, kind, filename),
     );
     const browserFactory = { launch: vi.fn() };
     const pdfService = new PdfService(
@@ -274,6 +274,7 @@ describe("ReviewService analysis CAS", () => {
 
     const downloading = pdfService.getOrCreate(OWNER_ID, "review-1");
     await vi.waitFor(() => expect(fileStore.readFile).toHaveBeenCalledWith(
+      OWNER_ID,
       "review-1",
       "pdf",
       "cached.pdf",
@@ -352,12 +353,12 @@ describe("ReviewService analysis CAS", () => {
 
     expect(repository.getById(OWNER_ID, "review-1")).not.toBeNull();
     await expect(
-      fileStore.readFile("review-1", "images", "page-ai.jpg"),
+      fileStore.readFile(OWNER_ID, "review-1", "images", "page-ai.jpg"),
     ).resolves.toEqual(Buffer.from("ai"));
   });
 
   it("首次异步操作等待启动恢复后再读取仍存在于 DB 的 review 文件", async () => {
-    await fileStore.stageDelete("review-1");
+    await fileStore.stageDelete(OWNER_ID, "review-1");
     const analyze = vi.fn(async () => readyEnvelope);
     const service = serviceFor(analyze);
 
@@ -370,8 +371,8 @@ describe("ReviewService analysis CAS", () => {
 
   it("DB 删除成功后 trash 清理失败仍返回成功并留给下一次启动恢复", async () => {
     const stageDelete = fileStore.stageDelete.bind(fileStore);
-    vi.spyOn(fileStore, "stageDelete").mockImplementation(async (reviewId) => {
-      const staged = await stageDelete(reviewId);
+    vi.spyOn(fileStore, "stageDelete").mockImplementation(async (ownerId, reviewId) => {
+      const staged = await stageDelete(ownerId, reviewId);
       return {
         rollback: staged.rollback,
         commit: async () => {

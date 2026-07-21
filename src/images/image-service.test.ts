@@ -191,7 +191,7 @@ describe("ImageService", () => {
       ]),
     ).rejects.toMatchObject({ code: "INVALID_IMAGE" });
 
-    const imagesDirectory = store.getReviewPaths("review-1").imagesDirectory;
+    const imagesDirectory = store.getReviewPaths(OWNER_ID, "review-1").imagesDirectory;
     await expect(readdir(imagesDirectory)).rejects.toMatchObject({ code: "ENOENT" });
     expect(repository.images).toEqual([]);
   });
@@ -213,10 +213,10 @@ describe("ImageService", () => {
     expect(repository.images).toEqual([old]);
     for (const storedPath of oldFiles) {
       await expect(
-        stat(path.join(store.rootDirectory, "review-1", storedPath)),
+        stat(path.join(store.rootDirectory, OWNER_ID, "reviews", "review-1", storedPath)),
       ).resolves.toMatchObject({});
     }
-    expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
+    expect(await readdir(store.getReviewPaths(OWNER_ID, "review-1").imagesDirectory)).toHaveLength(3);
   });
 
   it("重传成功后数据库切换到新版本并清理全部旧文件", async () => {
@@ -236,10 +236,10 @@ describe("ImageService", () => {
     expect(repository.images[0].originalName).toBe("new.jpg");
     for (const storedPath of oldPaths) {
       await expect(
-        stat(path.join(store.rootDirectory, "review-1", storedPath)),
+        stat(path.join(store.rootDirectory, OWNER_ID, "reviews", "review-1", storedPath)),
       ).rejects.toMatchObject({ code: "ENOENT" });
     }
-    expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
+    expect(await readdir(store.getReviewPaths(OWNER_ID, "review-1").imagesDirectory)).toHaveLength(3);
   });
 
   it("旧文件清理失败不回滚 DB 切换，并持久排队到同 review 下次操作重试", async () => {
@@ -273,6 +273,7 @@ describe("ImageService", () => {
     expect(queued).toEqual(
       expect.arrayContaining(
         oldFilenames.map((filename) => ({
+          ownerId: OWNER_ID,
           reviewId: "review-1",
           kind: "images",
           filename,
@@ -289,7 +290,7 @@ describe("ImageService", () => {
 
     for (const filename of oldFilenames) {
       await expect(
-        stat(path.join(store.getReviewPaths("review-1").imagesDirectory, filename)),
+        stat(path.join(store.getReviewPaths(OWNER_ID, "review-1").imagesDirectory, filename)),
       ).rejects.toMatchObject({ code: "ENOENT" });
     }
     await expect(
@@ -339,9 +340,9 @@ describe("ImageService", () => {
 
     const saved = repository.images[0];
     const annotation = await sharp(
-      await readFile(path.join(store.rootDirectory, "review-1", saved.annotationPath)),
+      await readFile(path.join(store.rootDirectory, OWNER_ID, "reviews", "review-1", saved.annotationPath)),
     ).metadata();
-    const aiPath = path.join(store.rootDirectory, "review-1", saved.aiPath);
+    const aiPath = path.join(store.rootDirectory, OWNER_ID, "reviews", "review-1", saved.aiPath);
     const ai = sharp(await readFile(aiPath));
     const aiMetadata = await ai.metadata();
     const { data, info } = await ai.raw().toBuffer({ resolveWithObject: true });
@@ -438,7 +439,7 @@ describe("ImageService", () => {
       { originalName: "new.jpg", mimeType: "image/jpeg", data: await jpeg() },
     ]);
 
-    expect(cleanup).toHaveBeenCalledWith("review-1", ["old.pdf"]);
+    expect(cleanup).toHaveBeenCalledWith(OWNER_ID, "review-1", ["old.pdf"]);
   });
 
   it("PATCH 仅调整顺序时保留已有旋转和裁剪", async () => {
@@ -471,6 +472,7 @@ describe("ImageService", () => {
     ]);
     const old = repository.images[0];
     const oldAnnotation = await store.readFile(
+      OWNER_ID,
       "review-1",
       "images",
       path.basename(old.annotationPath),
@@ -484,8 +486,8 @@ describe("ImageService", () => {
     ).rejects.toThrow("database failed");
 
     await expect(
-      store.readFile("review-1", "images", path.basename(old.annotationPath)),
+      store.readFile(OWNER_ID, "review-1", "images", path.basename(old.annotationPath)),
     ).resolves.toEqual(oldAnnotation);
-    expect(await readdir(store.getReviewPaths("review-1").imagesDirectory)).toHaveLength(3);
+    expect(await readdir(store.getReviewPaths(OWNER_ID, "review-1").imagesDirectory)).toHaveLength(3);
   });
 });

@@ -16,8 +16,8 @@ async function fixture() {
   const root = await mkdtemp(path.join(os.tmpdir(), "grader-files-route-"));
   roots.push(root);
   const store = new ReviewFileStore(root);
-  await store.writeFile("review-1", "images", "safe.jpg", new Uint8Array([1, 2, 3]));
-  await store.writeFile("review-1", "images", "marked.jpg", new Uint8Array([4, 5, 6]));
+  await store.writeFile("local-admin", "review-1", "images", "safe.jpg", new Uint8Array([1, 2, 3]));
+  await store.writeFile("local-admin", "review-1", "images", "marked.jpg", new Uint8Array([4, 5, 6]));
   const record = {
     id: "review-1",
     images: [{ id: 7, originalPath: "images/safe.jpg", annotationPath: "images/marked.jpg", aiPath: "images/ai.jpg" }],

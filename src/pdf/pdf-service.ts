@@ -6,6 +6,7 @@ import type {
 } from "../db/review-repository";
 import type { ReviewStorageKind } from "../storage/review-file-store";
 import { InMemoryReviewLock, type ReviewLock } from "../services/review-lock";
+import { createPrintToken, PRINT_TOKEN_HEADER } from "./print-token";
 
 const PDF_TIMEOUT_MS = 60_000;
 const PDF_CLOSE_TIMEOUT_MS = 5_000;
@@ -42,7 +43,7 @@ interface PdfPage {
 }
 
 interface PdfBrowser {
-  newPage(): Promise<PdfPage>;
+  newPage(options?: { extraHTTPHeaders?: Record<string, string> }): Promise<PdfPage>;
   close(): Promise<void>;
 }
 
@@ -61,15 +62,17 @@ interface PdfRepository {
 }
 
 interface PdfFileStore {
-  readFile(reviewId: string, kind: ReviewStorageKind, filename: string): Promise<Buffer>;
+  readFile(ownerId: string, reviewId: string, kind: ReviewStorageKind, filename: string): Promise<Buffer>;
   writeFile(
+    ownerId: string,
     reviewId: string,
     kind: ReviewStorageKind,
     filename: string,
     data: Uint8Array,
   ): Promise<string>;
-  deleteFile(reviewId: string, kind: ReviewStorageKind, filename: string): Promise<void>;
-  queuePdfCleanup(reviewId: string, filenames: string[]): Promise<void>;
+  deleteFile(ownerId: string, reviewId: string, kind: ReviewStorageKind, filename: string): Promise<void>;
+  queuePdfCleanup(ownerId: string, reviewId: string, filenames: string[]): Promise<void>;
+  migrateLegacyReview?(ownerId: string, reviewId: string): Promise<void>;
 }
 
 interface PdfServiceOptions {
@@ -91,7 +94,7 @@ export function resolveInternalPrintOrigin(): string {
   if (configured !== undefined) {
     rawOrigin = configured;
   } else {
-    const port = process.env.PORT || "3000";
+    const port = process.env.PORT || "3001";
     if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65_535) {
       throw configurationError("PORT 必须是 1 至 65535 的整数");
     }
@@ -304,6 +307,7 @@ export class PdfService {
         422,
       );
     }
+    await this.fileStore.migrateLegacyReview?.(ownerId, reviewId);
 
     if (
       review.pdfFilename &&
@@ -313,7 +317,7 @@ export class PdfService {
     ) {
       try {
         return {
-          data: await this.fileStore.readFile(reviewId, "pdf", review.pdfFilename),
+          data: await this.fileStore.readFile(ownerId, reviewId, "pdf", review.pdfFilename),
           filename: review.pdfFilename,
           cached: true,
         };
@@ -324,8 +328,8 @@ export class PdfService {
 
     const generatedAt = this.now();
     const filename = `作文批改-${safeTitle(review.config.title)}-${timestamp(generatedAt, this.timeZone)}.pdf`;
-    const data = await this.render(reviewId, review.config.title);
-    await this.fileStore.writeFile(reviewId, "pdf", filename, data);
+    const data = await this.render(ownerId, reviewId, review.config.title);
+    await this.fileStore.writeFile(ownerId, reviewId, "pdf", filename, data);
     try {
       this.repository.markExported(ownerId, reviewId, review.revision, {
         pdfFilename: filename,
@@ -333,16 +337,17 @@ export class PdfService {
         exportedAt: generatedAt,
       });
     } catch (error) {
-      await this.fileStore.deleteFile(reviewId, "pdf", filename).catch(() => undefined);
+      await this.fileStore.deleteFile(ownerId, reviewId, "pdf", filename).catch(() => undefined);
       throw error;
     }
     if (review.pdfFilename && review.pdfFilename !== filename) {
-      await this.fileStore.queuePdfCleanup(reviewId, [review.pdfFilename]);
+      await this.fileStore.queuePdfCleanup(ownerId, reviewId, [review.pdfFilename]);
     }
     return { data, filename, cached: false };
   }
 
   private async render(
+    ownerId: string,
     reviewId: string,
     title: string,
   ): Promise<Buffer> {
@@ -366,7 +371,10 @@ export class PdfService {
     try {
       const deadline = Date.now() + this.timeoutMs;
       const renderPage = (async () => {
-        page = await browser.newPage();
+        const printToken = createPrintToken({ ownerId, reviewId });
+        page = await browser.newPage({
+          extraHTTPHeaders: { [PRINT_TOKEN_HEADER]: printToken },
+        });
         let untrustedUrl: string | undefined;
         await page.route("**/*", async (route) => {
           const requested = route.request().url();

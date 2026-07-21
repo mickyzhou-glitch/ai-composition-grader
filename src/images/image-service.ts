@@ -263,11 +263,12 @@ export class ImageService {
     expectedRevision: number,
     files: UploadedImage[],
   ) {
-    await this.fileStore.retryImageCleanup(reviewId);
     const review = this.repository.getById(ownerId, reviewId);
     if (!review) {
       throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     }
+    await this.fileStore.migrateLegacyReview(ownerId, reviewId);
+    await this.fileStore.retryImageCleanup(ownerId, reviewId);
     if (review.revision !== expectedRevision) {
       throw new RevisionConflictError(reviewId);
     }
@@ -326,9 +327,10 @@ export class ImageService {
   }
 
   private async updateExclusive(ownerId: string, reviewId: string, input: UpdateImagesInput) {
-    await this.fileStore.retryImageCleanup(reviewId);
     const review = this.repository.getById(ownerId, reviewId);
     if (!review) throw new ImageServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+    await this.fileStore.migrateLegacyReview(ownerId, reviewId);
+    await this.fileStore.retryImageCleanup(ownerId, reviewId);
     const parsed = this.parseUpdate(input);
     if (review.revision !== parsed.expectedRevision) {
       throw new RevisionConflictError(reviewId);
@@ -369,6 +371,7 @@ export class ImageService {
     for (const change of [...changes].sort((a, b) => a.position - b.position)) {
       const current = currentById.get(change.id) as ReviewImage;
       const original = await this.fileStore.readFile(
+        ownerId,
         reviewId,
         "images",
         storedFilename(current.originalPath),
@@ -432,6 +435,7 @@ export class ImageService {
       for (const image of prepared) {
         for (const file of image.files) {
           await this.fileStore.writeFile(
+            ownerId,
             reviewId,
             "images",
             file.filename,
@@ -449,19 +453,20 @@ export class ImageService {
     } catch (error) {
       await Promise.allSettled(
         written.map((filename) =>
-          this.fileStore.deleteFile(reviewId, "images", filename),
+          this.fileStore.deleteFile(ownerId, reviewId, "images", filename),
         ),
       );
       throw error;
     }
-    await this.queueStoredImageCleanup(reviewId, previous);
+    await this.queueStoredImageCleanup(ownerId, reviewId, previous);
     if (previousPdfFilename) {
-      await this.fileStore.queuePdfCleanup(reviewId, [previousPdfFilename]);
+      await this.fileStore.queuePdfCleanup(ownerId, reviewId, [previousPdfFilename]);
     }
     return saved;
   }
 
   private async queueStoredImageCleanup(
+    ownerId: string,
     reviewId: string,
     images: ReviewImage[],
   ): Promise<void> {
@@ -472,7 +477,7 @@ export class ImageService {
         storedFilename(image.aiPath),
       ]),
     );
-    await this.fileStore.queueImageCleanup(reviewId, [...filenames]);
+    await this.fileStore.queueImageCleanup(ownerId, reviewId, [...filenames]);
   }
 
   private parseUpdate(input: UpdateImagesInput): UpdateImagesInput {
