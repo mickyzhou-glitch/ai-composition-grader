@@ -134,13 +134,15 @@ export class ReviewService {
     }
   }
 
-  update(id: string, input: TeacherReviewEdits): ReviewRecord {
-    const current = this.get(id);
-    const updated = this.repository.updateTeacherEdits(id, input);
-    if (current.pdfFilename) {
-      void this.fileStore.queuePdfCleanup(id, [current.pdfFilename]);
-    }
-    return updated;
+  async update(id: string, input: TeacherReviewEdits): Promise<ReviewRecord> {
+    return this.lock.runExclusive(id, async () => {
+      const current = this.get(id);
+      const updated = this.repository.updateTeacherEdits(id, input);
+      if (current.pdfFilename) {
+        await this.fileStore.queuePdfCleanup(id, [current.pdfFilename]);
+      }
+      return updated;
+    });
   }
 
   async delete(id: string): Promise<void> {
@@ -173,40 +175,60 @@ export class ReviewService {
     pageWarnings: string[];
   }> {
     await this.recovery;
-    const review = this.get(id);
-    if (review.images.length < 1 || review.images.length > 3) {
-      throw new ReviewServiceError(
-        "IMAGES_REQUIRED",
-        "请先上传 1 至 3 张作文图片",
-        422,
+    const prepared = await this.lock.runExclusive(id, async () => {
+      const review = this.get(id);
+      if (review.images.length < 1 || review.images.length > 3) {
+        throw new ReviewServiceError(
+          "IMAGES_REQUIRED",
+          "请先上传 1 至 3 张作文图片",
+          422,
+        );
+      }
+      const token = this.repository.beginAnalysis(
+        id,
+        this.createRunId(),
+        review.revision,
       );
-    }
-    const token = this.repository.beginAnalysis(
-      id,
-      this.createRunId(),
-      review.revision,
-    );
-    if (review.pdfFilename) {
-      void this.fileStore.queuePdfCleanup(id, [review.pdfFilename]);
-    }
+      if (review.pdfFilename) {
+        await this.fileStore.queuePdfCleanup(id, [review.pdfFilename]);
+      }
+      try {
+        const imageDataUrls = await Promise.all(
+          review.images.map(async (image) => {
+            const filename = image.aiPath.replace(/^images\//, "");
+            const data = await this.fileStore.readFile(id, "images", filename);
+            return `data:image/jpeg;base64,${data.toString("base64")}`;
+          }),
+        );
+        return { review, token, imageDataUrls };
+      } catch (error) {
+        this.repository.failAnalysis(id, token);
+        throw error;
+      }
+    });
+
+    let envelope: AiReviewEnvelope;
     try {
-      const imageDataUrls = await Promise.all(
-        review.images.map(async (image) => {
-          const filename = image.aiPath.replace(/^images\//, "");
-          const data = await this.fileStore.readFile(id, "images", filename);
-          return `data:image/jpeg;base64,${data.toString("base64")}`;
-        }),
-      );
-      const envelope = await this.aiReviewer.analyze({
-        config: review.config,
-        imageDataUrls,
+      envelope = await this.aiReviewer.analyze({
+        config: prepared.review.config,
+        imageDataUrls: prepared.imageDataUrls,
       });
-      return {
-        review: this.repository.saveAnalysis(id, token, envelope),
-        pageWarnings: envelope.pageWarnings,
-      };
     } catch (error) {
-      this.repository.failAnalysis(id, token);
+      await this.lock.runExclusive(id, async () => {
+        this.repository.failAnalysis(id, prepared.token);
+      });
+      throw error;
+    }
+
+    try {
+      const saved = await this.lock.runExclusive(id, async () =>
+        this.repository.saveAnalysis(id, prepared.token, envelope),
+      );
+      return { review: saved, pageWarnings: envelope.pageWarnings };
+    } catch (error) {
+      await this.lock.runExclusive(id, async () => {
+        this.repository.failAnalysis(id, prepared.token);
+      });
       throw error;
     }
   }

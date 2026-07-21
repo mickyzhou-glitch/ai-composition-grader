@@ -24,7 +24,7 @@
 .document h1, .document h2, .document h3, .document p { margin-top: 0; }
 .document h1, .document h2, .document h3 { break-after: avoid-page; }
 
-.runningHeader, .runningFooter {
+.runningHeader {
   display: none;
   position: fixed;
   right: 0;
@@ -33,8 +33,6 @@
   font-size: 8pt;
 }
 .runningHeader { top: -8mm; justify-content: space-between; border-bottom: .2mm solid var(--line); }
-.runningFooter { bottom: -8mm; justify-content: space-between; border-top: .2mm solid var(--line); }
-.pageNumber::before { content: "第 " counter(page) " 页"; }
 
 .sheet { min-height: 273mm; break-after: page; }
 .summary { display: grid; align-content: center; padding: 8mm; }
@@ -95,7 +93,7 @@
 .sampleSuggestion b { margin-right: 1mm; }
 
 @media print {
-  .runningHeader, .runningFooter { display: flex; }
+  .runningHeader { display: flex; }
   .sheet, .card, .sampleParagraph, .annotationNotes li { break-inside: avoid; }
   .sampleSuggestion { break-inside: avoid; }
 }

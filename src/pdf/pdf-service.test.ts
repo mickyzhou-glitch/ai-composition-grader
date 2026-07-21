@@ -143,7 +143,14 @@ describe("PdfService", () => {
       printBackground: true,
       preferCSSPageSize: true,
       tagged: true,
+      displayHeaderFooter: true,
+      headerTemplate: "<div></div>",
+      footerTemplate: expect.stringContaining(
+        '<span class="pageNumber"></span>/<span class="totalPages"></span>',
+      ),
     });
+    const pdfOptions = page.pdf.mock.calls[0][0];
+    expect(pdfOptions.footerTemplate).toContain("为/自己");
     expect(result.data).toEqual(Buffer.from("generated-pdf"));
     expect(result.filename).toBe("作文批改-为-自己-鼓掌-20260721-1405.pdf");
     expect(fileStore.writeFile).toHaveBeenCalledWith(

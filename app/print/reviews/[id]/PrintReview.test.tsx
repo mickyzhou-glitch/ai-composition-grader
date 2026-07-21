@@ -102,6 +102,7 @@ describe("A4 打印稿", () => {
       "sample-paragraphs",
     ]);
     expect(container.querySelectorAll('[data-page-kind="annotation"]')).toHaveLength(2);
+    expect(container.querySelector("footer")).toBeNull();
     expect(screen.getByLabelText("总分 35 分")).toHaveTextContent("35/ 40");
     expect(screen.getByText("细节真实，情感自然。")).toBeInTheDocument();
   });

@@ -66,11 +66,6 @@ export function PrintReview({ review }: { review: ReviewRecord }) {
         <span>作文批改报告</span>
         <b>{review.config.title}</b>
       </header>
-      <footer className={styles.runningFooter} aria-hidden="true">
-        <span>作文批改助手</span>
-        <span className={styles.pageNumber} />
-      </footer>
-
       <section
         className={`${styles.sheet} ${styles.summary}`}
         data-page-kind="summary"

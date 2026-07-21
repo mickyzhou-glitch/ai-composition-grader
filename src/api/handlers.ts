@@ -339,7 +339,7 @@ export function createReviewRouteHandlers(dependencies: {
     async PATCH(request: Request, context: RouteContext) {
       try {
         const input = updateReviewSchema.parse(await readJson(request));
-        return ok(reviewDto(dependencies.reviewService.update((await context.params).id, input)));
+        return ok(reviewDto(await dependencies.reviewService.update((await context.params).id, input)));
       } catch (error) {
         return failure(error);
       }

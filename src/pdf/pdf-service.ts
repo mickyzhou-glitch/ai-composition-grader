@@ -26,6 +26,9 @@ interface PdfPage {
     printBackground: true;
     preferCSSPageSize: true;
     tagged: true;
+    displayHeaderFooter: true;
+    headerTemplate: string;
+    footerTemplate: string;
   }): Promise<Buffer>;
   close(): Promise<void>;
 }
@@ -72,6 +75,7 @@ export class PdfServiceError extends Error {
     readonly code:
       | "REVIEW_NOT_FOUND"
       | "PDF_CONTENT_INCOMPLETE"
+      | "PDF_ANALYSIS_IN_PROGRESS"
       | "PDF_ENGINE_MISSING",
     message: string,
     readonly status: number,
@@ -133,6 +137,30 @@ function timestamp(date: Date, timeZone: string): string {
   return `${parts.year}${parts.month}${parts.day}-${parts.hour}${parts.minute}`;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function footerTemplate(title: string): string {
+  return (
+    "<style>" +
+    ".pdf-footer{box-sizing:border-box;width:100%;padding:0 12mm;" +
+    "display:flex;align-items:center;justify-content:space-between;" +
+    "color:#756a60;font:8px/1.4 -apple-system,BlinkMacSystemFont," +
+    "'PingFang SC','Microsoft YaHei',sans-serif;}" +
+    ".pdf-footer__pages{white-space:nowrap;}" +
+    "</style>" +
+    `<div class="pdf-footer"><span>作文批改报告 · ${escapeHtml(title)}</span>` +
+    '<span class="pdf-footer__pages">第 <span class="pageNumber"></span>/<span class="totalPages"></span> 页</span></div>'
+  );
+}
+
 export class PdfService {
   private readonly now: () => Date;
   private readonly timeZone: string;
@@ -168,6 +196,13 @@ export class PdfService {
     if (!review) {
       throw new PdfServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     }
+    if (review.status === "analyzing") {
+      throw new PdfServiceError(
+        "PDF_ANALYSIS_IN_PROGRESS",
+        "AI 分析进行中，请等待分析完成后再导出",
+        409,
+      );
+    }
     if (!review.report || review.images.length === 0) {
       throw new PdfServiceError(
         "PDF_CONTENT_INCOMPLETE",
@@ -195,7 +230,7 @@ export class PdfService {
 
     const generatedAt = this.now();
     const filename = `作文批改-${safeTitle(review.config.title)}-${timestamp(generatedAt, this.timeZone)}.pdf`;
-    const data = await this.render(reviewId, origin);
+    const data = await this.render(reviewId, review.config.title, origin);
     await this.fileStore.writeFile(reviewId, "pdf", filename, data);
     try {
       this.repository.markExported(reviewId, review.revision, {
@@ -213,7 +248,11 @@ export class PdfService {
     return { data, filename, cached: false };
   }
 
-  private async render(reviewId: string, origin: string): Promise<Buffer> {
+  private async render(
+    reviewId: string,
+    title: string,
+    origin: string,
+  ): Promise<Buffer> {
     const parsedOrigin = new URL(origin);
     if (parsedOrigin.protocol !== "http:" && parsedOrigin.protocol !== "https:") {
       throw new TypeError("PDF origin must use HTTP or HTTPS");
@@ -262,6 +301,9 @@ export class PdfService {
         printBackground: true,
         preferCSSPageSize: true,
         tagged: true,
+        displayHeaderFooter: true,
+        headerTemplate: "<div></div>",
+        footerTemplate: footerTemplate(title),
       });
     } finally {
       if (page) await page.close().catch(() => undefined);

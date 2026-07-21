@@ -13,6 +13,8 @@ import { initializeSchema } from "../db/init";
 import { ReviewRepository, type ReviewImageInput } from "../db/review-repository";
 import * as schema from "../db/schema";
 import { ReviewFileStore } from "../storage/review-file-store";
+import { PdfService } from "../pdf/pdf-service";
+import { InMemoryReviewLock } from "./review-lock";
 import { ReviewService } from "./review-service";
 
 const config: AssignmentConfig = {
@@ -113,7 +115,10 @@ describe("ReviewService analysis CAS", () => {
 
     const pending = service.analyze("review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    service.update("review-1", { expectedRevision: 1, config: { ...config, title: "新题目" } });
+    await service.update("review-1", {
+      expectedRevision: 1,
+      config: { ...config, title: "新题目" },
+    });
     ai.resolve(readyEnvelope);
 
     await expect(pending).rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
@@ -150,7 +155,7 @@ describe("ReviewService analysis CAS", () => {
 
     const pending = service.analyze("review-1");
     await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
-    const edited = service.update("review-1", { ...edits, expectedRevision: 1 });
+    const edited = await service.update("review-1", { ...edits, expectedRevision: 1 });
     ai.resolve(readyEnvelope);
 
     expect(edited).toMatchObject({
@@ -222,7 +227,7 @@ describe("ReviewService analysis CAS", () => {
     });
     const cleanup = vi.spyOn(fileStore, "queuePdfCleanup");
 
-    const saved = service.update("review-1", {
+    const saved = await service.update("review-1", {
       expectedRevision: exported.revision,
       report: { ...readyEnvelope.report, personalizedComment: "教师新总评" },
     });
@@ -233,6 +238,107 @@ describe("ReviewService analysis CAS", () => {
     });
     expect(cleanup).toHaveBeenCalledWith("review-1", ["old.pdf"]);
     await cleanup.mock.results[0]?.value;
+  });
+
+  it("缓存 PDF 读取期间教师编辑等待同一把锁，读取结束后缓存失效", async () => {
+    const lock = new InMemoryReviewLock();
+    const service = new ReviewService(
+      repository,
+      fileStore,
+      { analyze: async () => readyEnvelope },
+      { lock },
+    );
+    const ready = repository.updateReport("review-1", readyEnvelope.report);
+    const exported = repository.markExported("review-1", ready.revision, {
+      pdfFilename: "cached.pdf",
+      pdfPath: "pdf/cached.pdf",
+      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+    });
+    const cachedRead = deferred<Buffer>();
+    const originalRead = fileStore.readFile.bind(fileStore);
+    vi.spyOn(fileStore, "readFile").mockImplementation(
+      (id, kind, filename) =>
+        kind === "pdf" && filename === "cached.pdf"
+          ? cachedRead.promise
+          : originalRead(id, kind, filename),
+    );
+    const browserFactory = { launch: vi.fn() };
+    const pdfService = new PdfService(
+      repository,
+      fileStore,
+      browserFactory as never,
+      { lock },
+    );
+
+    const downloading = pdfService.getOrCreate(
+      "review-1",
+      "http://localhost:3000",
+    );
+    await vi.waitFor(() => expect(fileStore.readFile).toHaveBeenCalledWith(
+      "review-1",
+      "pdf",
+      "cached.pdf",
+    ));
+    let editSettled = false;
+    const editing = service.update("review-1", {
+      expectedRevision: exported.revision,
+      report: {
+        ...readyEnvelope.report,
+        personalizedComment: "缓存读取后的教师修改",
+      },
+    }).then((value) => {
+      editSettled = true;
+      return value;
+    });
+    await Promise.resolve();
+
+    expect(editSettled).toBe(false);
+    expect(repository.getById("review-1")).toMatchObject({
+      status: "exported",
+      pdfFilename: "cached.pdf",
+    });
+    cachedRead.resolve(Buffer.from("cached"));
+    await expect(downloading).resolves.toMatchObject({ cached: true });
+    await expect(editing).resolves.toMatchObject({
+      status: "ready_for_review",
+      pdfFilename: null,
+    });
+    expect(browserFactory.launch).not.toHaveBeenCalled();
+  });
+
+  it("分析中拒绝导出且不改变 revision，AI 结果仍可提交", async () => {
+    const lock = new InMemoryReviewLock();
+    const ai = deferred<AiReviewEnvelope>();
+    const analyze = vi.fn(() => ai.promise);
+    const service = new ReviewService(repository, fileStore, { analyze }, { lock });
+    const browserFactory = { launch: vi.fn() };
+    const pdfService = new PdfService(
+      repository,
+      fileStore,
+      browserFactory as never,
+      { lock },
+    );
+
+    const pendingAnalysis = service.analyze("review-1");
+    await vi.waitFor(() => expect(analyze).toHaveBeenCalledOnce());
+    const analyzingRevision = repository.getById("review-1")!.revision;
+
+    await expect(
+      pdfService.getOrCreate("review-1", "http://localhost:3000"),
+    ).rejects.toMatchObject({
+      code: "PDF_ANALYSIS_IN_PROGRESS",
+      status: 409,
+    });
+    expect(repository.getById("review-1")).toMatchObject({
+      status: "analyzing",
+      revision: analyzingRevision,
+    });
+    expect(browserFactory.launch).not.toHaveBeenCalled();
+
+    ai.resolve(readyEnvelope);
+    await expect(pendingAnalysis).resolves.toMatchObject({
+      review: { status: "ready_for_review", report: readyEnvelope.report },
+    });
   });
 
   it("DELETE 的数据库步骤失败时恢复已暂存的 review 目录", async () => {
