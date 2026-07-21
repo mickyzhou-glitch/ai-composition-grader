@@ -50,6 +50,7 @@ export type WorkerRunResult =
   | { jobId: string; outcome: "succeeded" }
   | { jobId: string; outcome: "retrying"; errorCode: string }
   | { jobId: string; outcome: "failed"; errorCode: string }
+  | { jobId: string; outcome: "canceled"; errorCode: "ANALYSIS_CONFLICT" | "REVISION_CONFLICT" }
   | { jobId: string; outcome: "claim_lost" };
 
 export interface AnalysisWorkerOptions {
@@ -67,6 +68,7 @@ function safeErrorCode(error: unknown): string {
       if (code === "AI_REQUEST_FAILED") return code;
       if (code === "IMAGES_REQUIRED") return code;
       if (code === "JOB_CLAIM_LOST") return code;
+      if (code === "ANALYSIS_CONFLICT" || code === "REVISION_CONFLICT") return code;
       if (code === "REVIEW_NOT_FOUND" || code === "NOT_FOUND") return "REVIEW_UNAVAILABLE";
     }
   }
@@ -160,6 +162,17 @@ export class AnalysisWorker {
       const errorCode = safeErrorCode(error);
       if (errorCode === "JOB_CLAIM_LOST") {
         return { jobId: claim.id, outcome: "claim_lost" };
+      }
+      if (errorCode === "ANALYSIS_CONFLICT" || errorCode === "REVISION_CONFLICT") {
+        try {
+          this.jobs.transition(claim, "canceled", { errorCode, message: null });
+          return { jobId: claim.id, outcome: "canceled", errorCode };
+        } catch (cancelError) {
+          if (cancelError instanceof AnalysisJobLostClaimError || safeErrorCode(cancelError) === "JOB_CLAIM_LOST") {
+            return { jobId: claim.id, outcome: "claim_lost" };
+          }
+          throw cancelError;
+        }
       }
       if (isRetryable(errorCode)) {
         try {

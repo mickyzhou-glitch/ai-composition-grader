@@ -44,7 +44,16 @@ export async function runWorker(): Promise<void> {
   try {
     while (!worker.isStopping()) {
       const startedAt = Date.now();
-      const result = await worker.runOnce();
+      let result;
+      try {
+        result = await worker.runOnce();
+      } catch {
+        // A malformed single job must not kill an otherwise healthy queue.
+        // Startup is outside this loop and remains a hard failure.
+        writeSafeLog({ event: "analysis_job", jobId: "unknown", outcome: "worker_step_failed", errorCode: "WORKER_STEP_FAILED", durationMs: Date.now() - startedAt });
+        if (!worker.isStopping()) await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
       if (!result) {
         if (!worker.isStopping()) await sleep(POLL_INTERVAL_MS);
         continue;

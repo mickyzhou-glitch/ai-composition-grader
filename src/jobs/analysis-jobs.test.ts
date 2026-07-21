@@ -458,6 +458,42 @@ describe("AnalysisJobService", () => {
     expect(transitions).toEqual([{ status: "failed", code: "IMAGES_REQUIRED" }]);
   });
 
+  it("教师编辑导致保存冲突时取消旧任务，保留编辑并继续处理下一项", async () => {
+    service.enqueue(ownerA, "review-a");
+    service.enqueue(ownerB, "review-b");
+    let firstSave = true;
+    const worker = new AnalysisWorker(repository, {
+      prepare: async (ownerId, reviewId) => {
+        const review = reviewRepository.getById(ownerId, reviewId)!;
+        return {
+          token: reviewRepository.beginAnalysis(ownerId, reviewId, `run-${reviewId}`, review.revision),
+          config: review.config,
+          imageDataUrls: ["data:image/jpeg;base64,QQ=="],
+        };
+      },
+      analyze: async () => readyEnvelope,
+      save: async (ownerId, reviewId, token, envelope, claim) => {
+        if (firstSave) {
+          firstSave = false;
+          reviewRepository.updateConfig(ownerId, reviewId, { ...config, title: "教师刚修改的题目" });
+          throw Object.assign(new Error("stale"), { code: "ANALYSIS_CONFLICT" });
+        }
+        reviewRepository.saveAnalysisAndCompleteJob(ownerId, reviewId, token, envelope, claim);
+      },
+      fail: async () => { throw new Error("不应触发失败保存"); },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "canceled", errorCode: "ANALYSIS_CONFLICT" });
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      config: { title: "教师刚修改的题目" },
+      status: "draft",
+    });
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "canceled" });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "succeeded" });
+    expect(repository.getById(ownerB, "job-2")).toMatchObject({ status: "succeeded" });
+  });
+
   it("保存批改结果和任务成功在同一事务中落库，恢复轮询不会重复调用模型", async () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext()!;
