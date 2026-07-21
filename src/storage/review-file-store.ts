@@ -10,6 +10,7 @@ import {
   realpath,
   rename,
   rm,
+  utimes,
 } from "node:fs/promises";
 import path from "node:path";
 
@@ -49,6 +50,7 @@ const REVIEW_LOCK_RETRY_MS = 25;
 // PDF rendering has a 60 second upper bound. Five minutes leaves a wide
 // margin for normal work while making a lock left by a crashed process recover.
 const REVIEW_LOCK_STALE_MS = 5 * 60 * 1000;
+const REVIEW_LOCK_HEARTBEAT_MS = 30 * 1000;
 const STAGED_DELETE_PATTERN =
   /^(.*)--(.*)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -208,6 +210,13 @@ async function reclaimStaleReviewLock(
   }
 }
 
+function sameFileIdentity(
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number },
+): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
 function isSymlinkError(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -281,12 +290,62 @@ export class ReviewFileStore {
       }
     }
 
+    const ownerNonce = randomUUID();
+    await lockFile.writeFile(ownerNonce, { encoding: "utf8" });
+    await lockFile.sync();
+    const lockIdentity = await lockFile.stat();
+    const heartbeat = setInterval(() => {
+      void this.refreshReviewLockHeartbeat(lockPath, lockIdentity);
+    }, REVIEW_LOCK_HEARTBEAT_MS);
+
     try {
       return await operation();
     } finally {
+      clearInterval(heartbeat);
       await lockFile.close();
-      await assertSafeFile(locksDirectory, lockPath);
-      await rm(lockPath, { force: true });
+      await this.releaseOwnedReviewLock(
+        locksDirectory,
+        lockPath,
+        lockIdentity,
+        ownerNonce,
+      );
+    }
+  }
+
+  private async refreshReviewLockHeartbeat(
+    lockPath: string,
+    identity: { dev: number; ino: number },
+  ): Promise<void> {
+    try {
+      const current = await lstat(lockPath);
+      if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) {
+        return;
+      }
+      const now = new Date();
+      await utimes(lockPath, now, now);
+    } catch {
+      // The operation will still safely re-check the database before writing;
+      // a lost heartbeat only makes a later stale recovery possible.
+    }
+  }
+
+  private async releaseOwnedReviewLock(
+    parent: string,
+    lockPath: string,
+    identity: { dev: number; ino: number },
+    ownerNonce: string,
+  ): Promise<void> {
+    try {
+      const current = await lstat(lockPath);
+      if (!current.isFile() || current.isSymbolicLink() || !sameFileIdentity(current, identity)) {
+        return;
+      }
+      await assertSafeFile(parent, lockPath);
+      const contents = await readFile(lockPath, "utf8");
+      if (contents !== ownerNonce) return;
+      await rm(lockPath, { force: false });
+    } catch (error) {
+      if (!isMissing(error)) throw error;
     }
   }
 

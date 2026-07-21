@@ -107,6 +107,38 @@ describe("ReviewFileStore", () => {
     await expect(stat(staleLock)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("旧持有者在 stale 回收后结束时不会删除新持有者的锁", async () => {
+    await store.createReview(OWNER, REVIEW);
+    const anotherProcessStore = new ReviewFileStore(store.rootDirectory);
+    const locksDirectory = path.join(store.rootDirectory, ".review-locks");
+    const lockName = `${createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex")}.lock`;
+    const lockPath = path.join(locksDirectory, lockName);
+    const firstEntered = deferred<void>();
+    const firstRelease = deferred<void>();
+    const secondEntered = deferred<void>();
+    const secondRelease = deferred<void>();
+    const first = store.withReviewLock(OWNER, REVIEW, async () => {
+      firstEntered.resolve();
+      await firstRelease.promise;
+    });
+    await firstEntered.promise;
+    const staleAt = new Date(Date.now() - 6 * 60 * 1000);
+    await utimes(lockPath, staleAt, staleAt);
+    const second = anotherProcessStore.withReviewLock(OWNER, REVIEW, async () => {
+      secondEntered.resolve();
+      await secondRelease.promise;
+    });
+    await secondEntered.promise;
+
+    firstRelease.resolve();
+    await first;
+    expect((await stat(lockPath)).isFile()).toBe(true);
+
+    secondRelease.resolve();
+    await second;
+    await expect(stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("清理队列带 owner 且不触及其他文件", async () => {
     await store.writeFile(OWNER, REVIEW, "pdf", "old.pdf", "old-pdf");
     await store.writeFile(OWNER, REVIEW, "pdf", "keep.pdf", "keep-pdf");
