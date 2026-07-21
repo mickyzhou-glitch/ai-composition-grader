@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -266,35 +266,30 @@ describe("复核页", () => {
     expect(screen.getByLabelText("个性评语")).toHaveValue("服务端最新内容");
   });
 
-  it("分析中轮询不会覆盖脏的本地草稿", async () => {
-    const analyzing = { ...review, status: "analyzing" as const };
-    const fetchMock = vi
-      .spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => json(analyzing))
-      .mockImplementationOnce(() => json({
-        ...review,
-        report: { ...review.report, personalizedComment: "服务端轮询内容" },
-      }));
-    const intervals: Array<() => void> = [];
-    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
-      if (delay === 1500) intervals.push(callback as () => void);
-      return (intervals.length || 1) as never;
-    });
-    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+  it("提交分析后立即显示任务进度并锁定复核操作", async () => {
+    const queuedJob = {
+      id: "job-1", reviewId: "review-1", status: "queued", progressStage: "queued",
+      message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json(queuedJob));
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "本地轮询草稿");
-    intervals.at(-1)?.();
+    await user.click(await screen.findByRole("button", { name: "重新分析" }));
 
-    await Promise.resolve();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByLabelText("个性评语")).toHaveValue("本地轮询草稿");
+    expect(await screen.findByText("AI 分析：排队中")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新分析" })).toBeDisabled();
+    expect(screen.getByLabelText("替换/重拍作文图片")).toBeDisabled();
   });
 
-  it("轮询发出后开始编辑时废弃在途响应", async () => {
-    const pending = deferred<Response>();
+  it("刷新后按后台任务状态轮询，并在完成时刷新批改结果", async () => {
+    const runningJob = {
+      id: "job-1", reviewId: "review-1", status: "running", progressStage: "generating_review",
+      message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    const doneJob = { ...runningJob, status: "succeeded", progressStage: "saving_result", finishedAt: new Date().toISOString() };
     const intervals: Array<() => void> = [];
     vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
       if (delay === 1500) intervals.push(callback as () => void);
@@ -303,110 +298,19 @@ describe("复核页", () => {
     vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
-      .mockImplementationOnce(() => pending.promise);
-    const user = userEvent.setup();
+      .mockImplementationOnce(() => json({ job: runningJob }))
+      .mockImplementationOnce(() => json({ job: doneJob }))
+      .mockImplementationOnce(() => json({ ...review, revision: 2 }));
     render(<ReviewPage />);
 
-    await screen.findByLabelText("个性评语");
+    expect(await screen.findByText("AI 分析：生成批改")).toBeInTheDocument();
     await waitFor(() => expect(intervals).toHaveLength(1));
     intervals[0]();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-    await user.clear(screen.getByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "请求发出后的本地草稿");
-    await act(async () => {
-      pending.resolve(await json({
-        ...review,
-        report: { ...review.report, personalizedComment: "迟到的服务端内容" },
-      }));
-    });
-
-    expect(screen.getByLabelText("个性评语")).toHaveValue("请求发出后的本地草稿");
-  });
-
-  it("较旧轮询响应晚到时不会覆盖最新响应", async () => {
-    const older = deferred<Response>();
-    const latest = deferred<Response>();
-    let olderSignal: AbortSignal | undefined;
-    const intervals: Array<() => void> = [];
-    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
-      if (delay === 1500) intervals.push(callback as () => void);
-      return (intervals.length || 1) as never;
-    });
-    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
-      .mockImplementationOnce((_input, init) => {
-        olderSignal = (init as RequestInit | undefined)?.signal as AbortSignal | undefined;
-        return older.promise;
-      })
-      .mockImplementationOnce(() => latest.promise);
-    render(<ReviewPage />);
-
-    await screen.findByLabelText("个性评语");
-    await waitFor(() => expect(intervals).toHaveLength(1));
-    intervals[0]();
-    intervals[0]();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(olderSignal?.aborted).toBe(true);
-
-    latest.resolve(await json({
-      ...review,
-      report: { ...review.report, personalizedComment: "最新轮询结果" },
-    }));
-    await waitFor(() => expect(screen.getByLabelText("个性评语")).toHaveValue("最新轮询结果"));
-
-    older.resolve(await json({
-      ...review,
-      report: { ...review.report, personalizedComment: "过期轮询结果" },
-    }));
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(screen.getByLabelText("个性评语")).toHaveValue("最新轮询结果");
-  });
-
-  it("替换图片会废弃在途轮询，防止旧图片回写", async () => {
-    const pendingPoll = deferred<Response>();
-    const intervals: Array<() => void> = [];
-    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
-      if (delay === 1500) intervals.push(callback as () => void);
-      return (intervals.length || 1) as never;
-    });
-    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
-    const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
-      .mockImplementationOnce(() => pendingPoll.promise)
-      .mockImplementationOnce(() => json({
-        images: [{ ...review.images[0], id: 8, originalName: "替换.jpg" }],
-        revision: 9,
-      }));
-    const user = userEvent.setup();
-    render(<ReviewPage />);
-
-    await screen.findByAltText("第 1 页作文");
-    await waitFor(() => expect(intervals).toHaveLength(1));
-    intervals[0]();
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    await user.upload(
-      screen.getByLabelText("替换/重拍作文图片"),
-      new File(["image"], "替换.jpg", { type: "image/jpeg" }),
-    );
-    await waitFor(() => expect(screen.getByAltText("第 1 页作文")).toHaveAttribute(
-      "src",
-      "/api/reviews/review-1/files?imageId=8&variant=annotation",
-    ));
-    const uploadBody = (fetchMock.mock.calls[2][1] as RequestInit).body as FormData;
-    expect(uploadBody.get("expectedRevision")).toBe("1");
-
-    await act(async () => {
-      pendingPoll.resolve(await json(review));
-    });
-
-    expect(screen.getByAltText("第 1 页作文")).toHaveAttribute(
-      "src",
-      "/api/reviews/review-1/files?imageId=8&variant=annotation",
-    );
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/analyze/status");
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1/analyze/status");
+    expect(fetchMock.mock.calls[3][0]).toBe("/api/reviews/review-1");
   });
 
   it("卸载时中止未完成请求且不触发状态更新警告", async () => {

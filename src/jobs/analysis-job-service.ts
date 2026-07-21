@@ -51,4 +51,9 @@ export class AnalysisJobService {
   get(ownerId: string, jobId: string): AnalysisJobView {
     return toView(this.repository.requireById(ownerId, jobId));
   }
+
+  getForReview(ownerId: string, reviewId: string): AnalysisJobView | null {
+    const job = this.repository.findLatestByReview(ownerId, reviewId);
+    return job ? toView(job) : null;
+  }
 }

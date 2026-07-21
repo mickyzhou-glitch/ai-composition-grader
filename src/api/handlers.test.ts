@@ -646,7 +646,7 @@ describe("review route handlers", () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
-  it("analyze 保存 report/annotations 并管理成功和不可辨认状态", async () => {
+  it("analyze 仅创建后台任务，不在 HTTP 请求中调用模型", async () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     await imageService.upload(OWNER_ID, "review-1", repository.getById(OWNER_ID, "review-1")?.revision ?? 0, [
       {
@@ -657,57 +657,59 @@ describe("review route handlers", () => {
         }).jpeg().toBuffer(),
       },
     ]);
-    const handlers = createAnalyzeRouteHandlers({ reviewService, ownerId: OWNER_ID });
-
-    const ready = await handlers.POST(new Request("http://localhost"), {
-      params: Promise.resolve({ id: "review-1" }),
-    });
-    expect(ready.status).toBe(200);
-    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
-      status: "ready_for_review",
-      report,
-    });
-    expect(analyze.mock.calls[0][0].imageDataUrls[0]).toMatch(/^data:image\/jpeg;base64,/);
-
-    aiResult = {
-      readable: false,
-      pageWarnings: ["第 1 页模糊，请重拍。"],
-      annotations: [],
+    const queuedJob = {
+      id: "job-1",
+      reviewId: "review-1",
+      status: "queued" as const,
+      progressStage: "queued" as const,
+      message: null,
+      createdAt: new Date().toISOString(),
+      finishedAt: null,
     };
-    await handlers.POST(new Request("http://localhost"), {
+    const analysisJobService = {
+      enqueue: vi.fn(() => queuedJob),
+      getForReview: vi.fn(() => queuedJob),
+    };
+    const handlers = createAnalyzeRouteHandlers({
+      reviewService,
+      analysisJobService: analysisJobService as never,
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
-    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
-      status: "needs_better_images",
-      report: null,
-      annotations: [],
+    expect(response.status).toBe(202);
+    expect(await json(response)).toMatchObject({
+      data: { id: "job-1", status: "queued", progressStage: "queued" },
+    });
+    expect(analysisJobService.enqueue).toHaveBeenCalledWith(OWNER_ID, "review-1");
+    expect(analyze).not.toHaveBeenCalled();
+
+    const status = await handlers.GET_STATUS(new Request("http://localhost"), {
+      params: Promise.resolve({ id: "review-1" }),
+    });
+    expect(status.status).toBe(200);
+    expect(await json(status)).toMatchObject({
+      data: { job: { id: "job-1", status: "queued" } },
     });
   });
 
-  it("AI 失败后将状态落为 failed 并返回 502", async () => {
+  it("analyze 在没有图片时拒绝创建后台任务", async () => {
     repository.create(OWNER_ID, { id: "review-1", config });
-    await imageService.upload(OWNER_ID, "review-1", repository.getById(OWNER_ID, "review-1")?.revision ?? 0, [
-      {
-        originalName: "page.jpg",
-        mimeType: "image/jpeg",
-        data: await sharp({
-          create: { width: 10, height: 10, channels: 3, background: "white" },
-        }).jpeg().toBuffer(),
-      },
-    ]);
-    analyze.mockRejectedValueOnce(
-      Object.assign(new Error("bad provider"), {
-        code: "AI_REQUEST_FAILED",
-        status: 502,
-      }),
-    );
-    const handlers = createAnalyzeRouteHandlers({ reviewService, ownerId: OWNER_ID });
+    const analysisJobService = { enqueue: vi.fn(), getForReview: vi.fn(() => null) };
+    const handlers = createAnalyzeRouteHandlers({
+      reviewService,
+      analysisJobService: analysisJobService as never,
+      ownerId: OWNER_ID,
+    });
 
     const response = await handlers.POST(new Request("http://localhost"), {
       params: Promise.resolve({ id: "review-1" }),
     });
 
-    expect(response.status).toBe(502);
-    expect(repository.getById(OWNER_ID, "review-1")?.status).toBe("failed");
+    expect(response.status).toBe(422);
+    expect(await json(response)).toMatchObject({ error: { code: "IMAGES_REQUIRED" } });
+    expect(analysisJobService.enqueue).not.toHaveBeenCalled();
   });
 });

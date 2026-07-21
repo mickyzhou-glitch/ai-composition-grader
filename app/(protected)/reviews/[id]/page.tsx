@@ -14,7 +14,23 @@ import { ApiError, apiFetch, errorMessage } from "../../../lib/api";
 import { downloadReviewPdf } from "../../../lib/pdf-download";
 import type { ReviewView } from "../../../lib/types";
 
-interface AnalyzeResult { review: ReviewView; pageWarnings: string[] }
+interface AnalysisJobView {
+  id: string;
+  reviewId: string;
+  status: "queued" | "running" | "succeeded" | "failed" | "canceled";
+  progressStage: "queued" | "reading_images" | "generating_review" | "validating_result" | "saving_result";
+  message: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+const stageLabels: Record<AnalysisJobView["progressStage"], string> = {
+  queued: "排队中",
+  reading_images: "读取作文",
+  generating_review: "生成批改",
+  validating_result: "校验结果",
+  saving_result: "保存结果",
+};
 
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
@@ -26,6 +42,7 @@ export default function ReviewPage() {
   const [review, setReview] = useState<ReviewView | null>(null);
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [analysisJob, setAnalysisJob] = useState<AnalysisJobView | null>(null);
   const [activePage, setActivePage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | null>(null);
@@ -48,6 +65,14 @@ export default function ReviewPage() {
     setAnnotations(loaded.annotations ?? []);
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
   }, []);
+
+  const loadJob = useCallback(async () => {
+    const result = await apiFetch<{ job: AnalysisJobView | null }>(
+      `/api/reviews/${encodeURIComponent(reviewId)}/analyze/status`,
+    );
+    setAnalysisJob(result.job);
+    return result.job;
+  }, [reviewId]);
 
   const loadReview = useCallback(async (showLoading = true) => {
     const token = requestTokenRef.current + 1;
@@ -108,7 +133,13 @@ export default function ReviewPage() {
       signal: controller.signal,
     })
       .then((loaded) => {
-        if (isLatest()) applyReview(loaded);
+        if (isLatest()) {
+          applyReview(loaded);
+          // The worker marks the review as analyzing as soon as it claims the
+          // durable job. On a browser refresh this restores progress polling
+          // without adding an extra request for ordinary completed drafts.
+          if (loaded.status === "analyzing") void loadJob().catch(() => undefined);
+        }
       })
       .catch((caught) => {
         if (!isLatest() || isAbortError(caught)) return;
@@ -122,13 +153,19 @@ export default function ReviewPage() {
       mountedRef.current = false;
       invalidateLoad();
     };
-  }, [applyReview, invalidateLoad, reviewId]);
+  }, [applyReview, invalidateLoad, loadJob, reviewId]);
 
   useEffect(() => {
-    if (review?.status !== "analyzing" || busy !== null) return;
-    const timer = window.setInterval(() => { void refresh(false); }, 1500);
+    if (!analysisJob || (analysisJob.status !== "queued" && analysisJob.status !== "running")) return;
+    const timer = window.setInterval(() => {
+      void loadJob().then((job) => {
+        if (job?.status === "succeeded" || job?.status === "failed" || job?.status === "canceled") {
+          void refresh(false, true);
+        }
+      }).catch(() => setNotice("任务状态暂时无法刷新，正在尝试重新连接。"));
+    }, 1500);
     return () => window.clearInterval(timer);
-  }, [busy, refresh, review?.status]);
+  }, [analysisJob, loadJob, refresh]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -155,6 +192,7 @@ export default function ReviewPage() {
   );
 
   function changeAnnotations(next: Annotation[]) {
+    if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     invalidateLoad();
     setAnnotations(next);
     setDirty(true);
@@ -162,6 +200,7 @@ export default function ReviewPage() {
   }
 
   function changeReport(next: EvaluationReport) {
+    if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     invalidateLoad();
     setReport(next);
     setDirty(true);
@@ -169,7 +208,7 @@ export default function ReviewPage() {
   }
 
   async function save() {
-    if (!report || !review || busy) return;
+    if (!report || !review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     setBusy("save");
     setError("");
     try {
@@ -198,10 +237,10 @@ export default function ReviewPage() {
     setError("");
     setNotice("");
     try {
-      const result = await apiFetch<AnalyzeResult>(`/api/reviews/${encodeURIComponent(reviewId)}/analyze`, { method: "POST" });
-      applyReview(result.review);
+      const job = await apiFetch<AnalysisJobView>(`/api/reviews/${encodeURIComponent(reviewId)}/analyze`, { method: "POST" });
+      setAnalysisJob(job);
       setDirty(false);
-      setNotice(result.pageWarnings.length ? `分析完成：${result.pageWarnings.join("；")}` : "AI 分析完成，请开始复核。 ");
+      setNotice(`AI 分析已提交：${stageLabels[job.progressStage]}`);
     } catch (caught) {
       setError(caught instanceof ApiError && caught.status === 409 ? "分析结果与当前内容冲突，请刷新后重试。" : errorMessage(caught));
     } finally {
@@ -210,7 +249,7 @@ export default function ReviewPage() {
   }
 
   async function replaceImages(files: File[]) {
-    if (!review || busy) return;
+    if (!review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     if (files.length < 1 || files.length > 3) {
       setError("请选择 1 至 3 张作文图片");
       return;
@@ -266,6 +305,8 @@ export default function ReviewPage() {
     }
   }
 
+  const analysisActive = analysisJob?.status === "queued" || analysisJob?.status === "running";
+
   function replacementControl(className = "button button--quiet") {
     return <label className={`${className} file-label`}>
       替换/重拍作文
@@ -275,7 +316,7 @@ export default function ReviewPage() {
         type="file"
         accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
         multiple
-        disabled={busy !== null}
+        disabled={busy !== null || analysisActive}
         onChange={(event) => {
           void replaceImages(Array.from(event.target.files ?? []));
           event.currentTarget.value = "";
@@ -294,23 +335,24 @@ export default function ReviewPage() {
         <header className="review-heading">
           <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
           <div className="review-actions">
-            <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={busy !== null} onClick={() => void analyze()}>重新分析</AsyncButton>
+            <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>重新分析</AsyncButton>
             {review.status !== "needs_better_images" ? replacementControl() : null}
             {report ? (
               <AsyncButton
                 className="button button--quiet"
                 busy={busy === "export"}
                 busyLabel="正在生成 PDF…"
-                disabled={dirty || busy !== null}
+                disabled={dirty || busy !== null || analysisActive}
                 title={dirty ? "请先保存复核修改再导出" : undefined}
                 onClick={() => void exportPdf()}
               >{review.hasPdf ? "下载 PDF" : "导出 PDF"}</AsyncButton>
             ) : null}
-            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null} onClick={() => void save()}>保存复核</AsyncButton> : null}
+            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
           </div>
         </header>
         {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
+        {analysisJob ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
 
         <section className="review-grid" aria-label="作文复核工作区">
@@ -319,7 +361,7 @@ export default function ReviewPage() {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 3 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={review.images.length === 0 || busy !== null} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor report={report} onChange={changeReport} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
         </section>
       </main>

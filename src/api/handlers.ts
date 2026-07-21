@@ -17,6 +17,7 @@ import {
 } from "../settings/settings-service";
 import type { ReviewService } from "../services/review-service";
 import { reviewImageVariants, type ReviewImageVariant } from "../services/review-service";
+import type { AnalysisJobService } from "../jobs/analysis-job-service";
 
 const MAX_MULTIPART_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -431,13 +432,27 @@ export function createReviewImagesRouteHandlers(
 
 export function createAnalyzeRouteHandlers(dependencies: {
   reviewService: ReviewService;
+  analysisJobService: AnalysisJobService;
   ownerId: string;
 }) {
   return {
     async POST(_request: Request, context: RouteContext) {
       try {
-        const result = await dependencies.reviewService.analyze(dependencies.ownerId, (await context.params).id);
-        return ok({ ...result, review: reviewDto(result.review) });
+        const id = (await context.params).id;
+        const review = dependencies.reviewService.get(dependencies.ownerId, id);
+        if (review.images.length < 1 || review.images.length > 3) {
+          throw routeError("IMAGES_REQUIRED", "请先上传 1 至 3 张作文图片", 422);
+        }
+        return ok(dependencies.analysisJobService.enqueue(dependencies.ownerId, id), 202);
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async GET_STATUS(_request: Request, context: RouteContext) {
+      try {
+        const id = (await context.params).id;
+        dependencies.reviewService.get(dependencies.ownerId, id);
+        return ok({ job: dependencies.analysisJobService.getForReview(dependencies.ownerId, id) });
       } catch (error) {
         return failure(error);
       }

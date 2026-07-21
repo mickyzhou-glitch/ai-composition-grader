@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, eq, gt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
 import {
@@ -240,6 +240,16 @@ export class AnalysisJobRepository {
     const result = this.getById(ownerId, id);
     if (!result) throw new AnalysisJobNotFoundError(id);
     return result;
+  }
+
+  findLatestByReview(ownerId: string, reviewId: string): AnalysisJobRecord | null {
+    assertId(ownerId, "ownerId");
+    assertId(reviewId, "reviewId");
+    const row = this.database.select().from(analysisJobs).where(and(
+      eq(analysisJobs.ownerId, ownerId),
+      eq(analysisJobs.reviewId, reviewId),
+    )).orderBy(desc(analysisJobs.createdAt), desc(analysisJobs.id)).get();
+    return row ? toRecord(row) : null;
   }
 
   /** Reclaims expired leases then atomically claims one available queued job. */
