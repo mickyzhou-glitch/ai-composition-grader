@@ -138,6 +138,26 @@ describe("ReviewFileStore", () => {
     expect((await stat(lockPath)).isDirectory()).toBe(true);
   });
 
+  it("mkdir 后崩溃且缺少 owner 标记的 stale 目录会超时返回忙碌，而非无限循环", async () => {
+    await store.createReview(OWNER, REVIEW);
+    const anotherProcessStore = new ReviewFileStore(
+      store.rootDirectory,
+      undefined,
+      { lockWaitMs: 50, lockRetryMs: 5 },
+    );
+    const locksDirectory = path.join(store.rootDirectory, ".review-locks");
+    await mkdir(locksDirectory);
+    const lockName = createHash("sha256").update(`${OWNER}\0${REVIEW}`).digest("hex");
+    const incompleteLock = path.join(locksDirectory, lockName);
+    await mkdir(incompleteLock);
+    const staleAt = new Date(Date.now() - 6 * 60 * 1000);
+    await utimes(incompleteLock, staleAt, staleAt);
+
+    await expect(anotherProcessStore.withReviewLock(OWNER, REVIEW, async () => undefined))
+      .rejects.toMatchObject({ code: "REVIEW_LOCK_BUSY" });
+    expect((await stat(incompleteLock)).isDirectory()).toBe(true);
+  });
+
   it("两个 reclaimer 同时处理死锁时，只有一个能原子接管固定租约目录", async () => {
     await store.createReview(OWNER, REVIEW);
     const locksDirectory = path.join(store.rootDirectory, ".review-locks");

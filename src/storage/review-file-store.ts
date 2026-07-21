@@ -213,7 +213,12 @@ async function reclaimStaleReviewLock(
     await assertSafeFile(lockDirectory, ownerFile);
     owner = parseReviewLockOwner(await readFile(ownerFile, "utf8"));
   } catch (error) {
-    if (isMissing(error)) return true;
+    if (isMissing(error)) {
+      // A competing reclaimer may have renamed the directory. If it is still
+      // present, however, this is a crash between mkdir and owner.json and must
+      // remain safely busy rather than spinning forever on EEXIST.
+      return !(await assertRealDirectory(parent, lockDirectory));
+    }
     throw error;
   }
   if (!owner || !isDefinitelyDeadProcess(owner.pid)) return false;
