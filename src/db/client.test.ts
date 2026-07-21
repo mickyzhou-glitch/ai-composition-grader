@@ -51,6 +51,114 @@ function createLegacyDatabase() {
   return sqlite;
 }
 
+function createCurrentVersionDatabase() {
+  const sqlite = new Database(":memory:");
+  sqlite.pragma("foreign_keys = ON");
+  sqlite.exec(`
+    CREATE TABLE settings (
+      id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+      base_url TEXT NOT NULL,
+      model TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+    CREATE TABLE reviews (
+      id TEXT PRIMARY KEY NOT NULL,
+      status TEXT NOT NULL CHECK (
+        status IN (
+          'draft',
+          'analyzing',
+          'needs_better_images',
+          'ready_for_review',
+          'exported',
+          'failed'
+        )
+      ),
+      config TEXT NOT NULL,
+      report TEXT,
+      revision INTEGER NOT NULL DEFAULT 0,
+      analysis_run_id TEXT,
+      pdf_filename TEXT,
+      pdf_path TEXT,
+      pdf_revision INTEGER,
+      exported_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE TABLE review_images (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      page_index INTEGER NOT NULL CHECK (page_index >= 0),
+      path TEXT NOT NULL,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      original_name TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      original_path TEXT NOT NULL,
+      annotation_path TEXT NOT NULL,
+      ai_path TEXT NOT NULL,
+      width INTEGER NOT NULL CHECK (width > 0),
+      height INTEGER NOT NULL CHECK (height > 0),
+      rotation INTEGER NOT NULL CHECK (rotation IN (0, 90, 180, 270)),
+      crop TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX review_images_review_id_idx ON review_images(review_id);
+    CREATE TABLE annotations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL CHECK (position >= 0),
+      page_index INTEGER NOT NULL CHECK (page_index >= 0),
+      x REAL NOT NULL CHECK (x >= 0 AND x <= 1),
+      y REAL NOT NULL CHECK (y >= 0 AND y <= 1),
+      category TEXT NOT NULL CHECK (
+        category IN ('typo', 'punctuation', 'sentence', 'expression', 'structure', 'highlight')
+      ),
+      anchor_text TEXT NOT NULL,
+      comment TEXT NOT NULL,
+      is_highlight INTEGER NOT NULL CHECK (is_highlight IN (0, 1)),
+      UNIQUE(review_id, position)
+    );
+    CREATE INDEX annotations_review_id_idx ON annotations(review_id);
+
+    INSERT INTO settings(id, base_url, model, updated_at)
+      VALUES (1, 'https://example.invalid/v1', 'legacy-model', 9);
+    INSERT INTO reviews (
+      id, status, config, report, revision, analysis_run_id,
+      pdf_filename, pdf_path, pdf_revision, exported_at, created_at, updated_at
+    ) VALUES (
+      'current-review', 'ready_for_review', '{"title":"当前作文"}',
+      '{"summary":"保留批改结果"}', 7, 'run-current',
+      'current.pdf', 'pdf/current.pdf', 7, 8, 1, 8
+    );
+    INSERT INTO review_images (
+      review_id, page_index, path, position, original_name, mime_type,
+      original_path, annotation_path, ai_path, width, height, rotation, crop, created_at
+    ) VALUES (
+      'current-review', 0, 'images/annotation.jpg', 0, '第一页.jpg', 'image/jpeg',
+      'images/original.jpg', 'images/annotation.jpg', 'images/ai.jpg',
+      1200, 1600, 90, '{"x":0.1,"y":0.2,"width":0.8,"height":0.7}', 2
+    );
+    INSERT INTO annotations (
+      review_id, position, page_index, x, y, category,
+      anchor_text, comment, is_highlight
+    ) VALUES (
+      'current-review', 0, 0, 0.25, 0.5, 'sentence',
+      '原文锚点', '保留批注', 0
+    );
+  `);
+  return sqlite;
+}
+
+function schemaSnapshot(sqlite: Database.Database) {
+  return sqlite
+    .prepare(`
+      SELECT type, name, tbl_name, sql
+      FROM sqlite_master
+      WHERE name NOT LIKE 'sqlite_%'
+      ORDER BY type, name
+    `)
+    .all();
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -173,6 +281,47 @@ describe("openAppDatabase", () => {
           .all()
           .map((row) => (row as { name: string }).name),
       ).toEqual(["user_id", "created_at"]);
+      const queryPlan = sqlite
+        .prepare(`
+          EXPLAIN QUERY PLAN
+          SELECT * FROM security_events
+          WHERE user_id = ?
+          ORDER BY created_at
+        `)
+        .all("local-admin") as Array<{ detail: string }>;
+      const queryPlanDetails = queryPlan.map(({ detail }) => detail).join("\n");
+      expect(queryPlanDetails).toMatch(
+        /USING INDEX security_events_user_created_at_idx/,
+      );
+      expect(queryPlanDetails).not.toMatch(/TEMP B-TREE/);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("sessions 的 token_hash 只有一个唯一索引", () => {
+    const sqlite = new Database(":memory:");
+
+    try {
+      initializeSchema(sqlite);
+
+      const tokenHashUniqueIndexes = (
+        sqlite.prepare("PRAGMA index_list(sessions)").all() as Array<{
+          name: string;
+          unique: 0 | 1;
+        }>
+      ).filter(({ name, unique }) => {
+        if (unique !== 1) return false;
+        const columns = sqlite
+          .prepare(`PRAGMA index_info(${name})`)
+          .all()
+          .map((row) => (row as { name: string }).name);
+        return columns.length === 1 && columns[0] === "token_hash";
+      });
+
+      expect(tokenHashUniqueIndexes.map(({ name }) => name)).toEqual([
+        "sessions_token_hash_unique_idx",
+      ]);
     } finally {
       sqlite.close();
     }
@@ -228,6 +377,76 @@ describe("openAppDatabase", () => {
         { id: "legacy-2", owner_id: "local-admin" },
       ]);
       expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("迁移当前完整数据库时保留作文、图片、批注、约束和级联删除", () => {
+    const sqlite = createCurrentVersionDatabase();
+    const expectedReview = sqlite.prepare("SELECT * FROM reviews").get();
+    const expectedImage = sqlite.prepare("SELECT * FROM review_images").get();
+    const expectedAnnotation = sqlite.prepare("SELECT * FROM annotations").get();
+
+    try {
+      initializeSchema(sqlite);
+
+      expect(
+        sqlite
+          .prepare(`
+            SELECT id, status, config, report, revision, analysis_run_id,
+              pdf_filename, pdf_path, pdf_revision, exported_at, created_at, updated_at
+            FROM reviews
+          `)
+          .get(),
+      ).toEqual(expectedReview);
+      expect(sqlite.prepare("SELECT * FROM review_images").get()).toEqual(expectedImage);
+      expect(sqlite.prepare("SELECT * FROM annotations").get()).toEqual(expectedAnnotation);
+      expect(
+        sqlite.prepare("SELECT owner_id FROM reviews WHERE id = 'current-review'").get(),
+      ).toEqual({ owner_id: "local-admin" });
+      expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(
+        sqlite
+          .prepare("PRAGMA index_info(review_images_review_id_idx)")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(["review_id"]);
+      expect(
+        sqlite
+          .prepare("PRAGMA index_info(annotations_review_id_idx)")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(["review_id"]);
+
+      expect(() =>
+        sqlite.exec(`
+          INSERT INTO annotations (
+            review_id, position, page_index, x, y, category,
+            anchor_text, comment, is_highlight
+          ) VALUES (
+            'current-review', 0, 0, 0.5, 0.5, 'typo', 'duplicate', 'duplicate', 0
+          );
+        `),
+      ).toThrow(/UNIQUE/);
+      expect(() =>
+        sqlite.prepare("UPDATE reviews SET status = 'invalid' WHERE id = ?").run(
+          "current-review",
+        ),
+      ).toThrow(/CHECK/);
+      expect(() =>
+        sqlite.prepare("UPDATE review_images SET width = 0 WHERE review_id = ?").run(
+          "current-review",
+        ),
+      ).toThrow(/CHECK/);
+
+      sqlite.prepare("DELETE FROM reviews WHERE id = ?").run("current-review");
+      expect(sqlite.prepare("SELECT count(*) AS count FROM review_images").get()).toEqual({
+        count: 0,
+      });
+      expect(sqlite.prepare("SELECT count(*) AS count FROM annotations").get()).toEqual({
+        count: 0,
+      });
     } finally {
       sqlite.close();
     }
@@ -318,28 +537,41 @@ describe("openAppDatabase", () => {
   });
 
   it("迁移中途失败时回滚已创建的表、新列和数据更新", () => {
-    const sqlite = createLegacyDatabase();
-    const originalReviewColumns = tableColumns(sqlite, "reviews");
-    const originalImageColumns = tableColumns(sqlite, "review_images");
+    const sqlite = createCurrentVersionDatabase();
+    sqlite
+      .prepare("UPDATE review_images SET original_path = '' WHERE review_id = ?")
+      .run("current-review");
     sqlite.exec(`
-      CREATE TRIGGER reject_legacy_image_update
+      CREATE TRIGGER reject_current_image_update
       BEFORE UPDATE ON review_images
       BEGIN
         SELECT RAISE(ABORT, 'forced migration failure');
       END;
     `);
+    const originalSchema = schemaSnapshot(sqlite);
+    const originalReviews = sqlite.prepare("SELECT * FROM reviews").all();
+    const originalImages = sqlite.prepare("SELECT * FROM review_images").all();
+    const originalAnnotations = sqlite.prepare("SELECT * FROM annotations").all();
+    const originalImageForeignKeys = sqlite.prepare("PRAGMA foreign_key_list(review_images)").all();
+    const originalAnnotationForeignKeys = sqlite.prepare("PRAGMA foreign_key_list(annotations)").all();
 
     try {
       expect(() => initializeSchema(sqlite)).toThrow(/forced migration failure/);
 
-      expect(tableColumns(sqlite, "reviews")).toEqual(originalReviewColumns);
-      expect(tableColumns(sqlite, "review_images")).toEqual(originalImageColumns);
+      expect(schemaSnapshot(sqlite)).toEqual(originalSchema);
+      expect(sqlite.prepare("SELECT * FROM reviews").all()).toEqual(originalReviews);
+      expect(sqlite.prepare("SELECT * FROM review_images").all()).toEqual(originalImages);
+      expect(sqlite.prepare("SELECT * FROM annotations").all()).toEqual(originalAnnotations);
+      expect(sqlite.prepare("PRAGMA foreign_key_list(review_images)").all()).toEqual(
+        originalImageForeignKeys,
+      );
+      expect(sqlite.prepare("PRAGMA foreign_key_list(annotations)").all()).toEqual(
+        originalAnnotationForeignKeys,
+      );
+      expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       expect(
         sqlite.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'users'").get(),
       ).toBeUndefined();
-      expect(sqlite.prepare("SELECT path FROM review_images WHERE id = 1").get()).toEqual({
-        path: "images/legacy.jpg",
-      });
     } finally {
       sqlite.close();
     }
