@@ -7,6 +7,7 @@ import type {
   TeacherReviewEdits,
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
+import type { RetentionService } from "../retention/retention-service";
 import { InMemoryReviewLock, type ReviewLock } from "./review-lock";
 
 export interface AiReviewer {
@@ -20,6 +21,7 @@ interface ReviewServiceOptions {
   createId?: () => string;
   createRunId?: () => string;
   lock?: ReviewLock;
+  retention?: Pick<RetentionService, "delete">;
 }
 
 export class ReviewServiceError extends Error {
@@ -45,6 +47,7 @@ export class ReviewService {
   private readonly createRunId: () => string;
   private readonly lock: ReviewLock;
   private readonly recovery: Promise<void>;
+  private readonly retention?: Pick<RetentionService, "delete">;
 
   constructor(
     private readonly repository: ReviewRepository,
@@ -55,6 +58,7 @@ export class ReviewService {
     this.createId = options.createId ?? randomUUID;
     this.createRunId = options.createRunId ?? randomUUID;
     this.lock = options.lock ?? new InMemoryReviewLock();
+    this.retention = options.retention;
     this.recovery = this.fileStore.recoverStagedDeletes(
       (_ownerId, id) => this.repository.exists(id),
     );
@@ -151,6 +155,10 @@ export class ReviewService {
 
   async delete(ownerId: string, id: string): Promise<void> {
     await this.recovery;
+    if (this.retention) {
+      await this.retention.delete(ownerId, id);
+      return;
+    }
     await this.lock.runExclusive(id, async () => {
       this.get(ownerId, id);
       await this.fileStore.migrateLegacyReview(ownerId, id);

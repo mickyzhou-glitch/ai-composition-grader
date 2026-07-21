@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
 import { ZodError } from "zod";
 
 import {
@@ -11,10 +11,12 @@ import {
   type EvaluationReport,
   type NormalizedCrop,
   type ReviewStatus,
+  EMPTY_DRAFT_RETENTION_MS,
+  reviewExpiryAt,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import type { AppDatabase } from "./client";
-import { annotations, reviewImages, reviews } from "./schema";
+import { analysisJobs, annotations, reviewImages, reviews } from "./schema";
 
 export interface ReviewImageInput {
   position: number;
@@ -47,10 +49,21 @@ export interface ReviewRecord {
   pdfPath: string | null;
   pdfRevision: number | null;
   exportedAt: Date | null;
+  expiresAt?: Date | null;
+  deletingAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   images: ReviewImage[];
   annotations: Annotation[];
+}
+
+export interface RetentionCandidate {
+  id: string;
+  ownerId: string;
+  createdAt: Date;
+  expiresAt: Date | null;
+  deletingAt: Date | null;
+  imageCount: number;
 }
 
 export interface CreateReviewInput {
@@ -186,6 +199,8 @@ export class ReviewRepository {
         pdfPath: null,
         pdfRevision: null,
         exportedAt: null,
+        expiresAt: images.length > 0 ? reviewExpiryAt(now) : null,
+        deletingAt: null,
         createdAt: now,
         updatedAt: now,
       }).run();
@@ -223,6 +238,8 @@ export class ReviewRepository {
         pdfPath: reviews.pdfPath,
         pdfRevision: reviews.pdfRevision,
         exportedAt: reviews.exportedAt,
+        expiresAt: reviews.expiresAt,
+        deletingAt: reviews.deletingAt,
         createdAt: reviews.createdAt,
         updatedAt: reviews.updatedAt,
       })
@@ -506,19 +523,23 @@ export class ReviewRepository {
     const images = input.map(validateImage);
     const now = this.now();
     this.database.transaction((transaction) => {
+      const updateValues: Record<string, unknown> = {
+        updatedAt: now,
+        status: "draft",
+        report: null,
+        revision: sql`${reviews.revision} + 1`,
+        analysisRunId: null,
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
+      };
+      if (images.length > 0) {
+        updateValues.expiresAt = sql`coalesce(${reviews.expiresAt}, ${reviewExpiryAt(now).valueOf()})`;
+      }
       const update = transaction
         .update(reviews)
-        .set({
-          updatedAt: now,
-          status: "draft",
-          report: null,
-          revision: sql`${reviews.revision} + 1`,
-          analysisRunId: null,
-          pdfFilename: null,
-          pdfPath: null,
-          pdfRevision: null,
-          exportedAt: null,
-        })
+        .set(updateValues)
         .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt), eq(reviews.revision, expectedRevision)))
         .run();
       if (update.changes === 0) {
@@ -725,6 +746,121 @@ export class ReviewRepository {
 
   deleteReview(ownerId: string, id: string): boolean {
     return this.delete(ownerId, id);
+  }
+
+  /** 列出到期作文、24 小时未上传图片的草稿以及上次运行已标记的作文。 */
+  listRetentionCandidates(now = this.now()): RetentionCandidate[] {
+    if (Number.isNaN(now.valueOf())) throw new TypeError("now must be a valid date");
+    const emptyDraftBefore = new Date(now.valueOf() - EMPTY_DRAFT_RETENTION_MS);
+    return this.database
+      .select({
+        id: reviews.id,
+        ownerId: reviews.ownerId,
+        createdAt: reviews.createdAt,
+        expiresAt: reviews.expiresAt,
+        deletingAt: reviews.deletingAt,
+        imageCount: sql<number>`(
+          SELECT count(*) FROM review_images
+          WHERE review_images.review_id = ${reviews.id}
+        )`,
+      })
+      .from(reviews)
+      .where(
+        or(
+          isNotNull(reviews.deletingAt),
+          lte(reviews.expiresAt, now),
+          and(
+            isNull(reviews.expiresAt),
+            lt(reviews.createdAt, emptyDraftBefore),
+            sql`NOT EXISTS (
+              SELECT 1 FROM review_images
+              WHERE review_images.review_id = ${reviews.id}
+            )`,
+          ),
+        ),
+      )
+      .orderBy(reviews.createdAt)
+      .all()
+      .map((candidate) => ({
+        ...candidate,
+        imageCount: Number(candidate.imageCount),
+      }));
+  }
+
+  /** 原子地把一个候选作文置于删除中；已置于删除中的作文可重复认领。 */
+  markDeleting(
+    ownerId: string,
+    id: string,
+    now = this.now(),
+    options: { force?: boolean } = {},
+  ): boolean {
+    if (Number.isNaN(now.valueOf())) throw new TypeError("now must be a valid date");
+    const emptyDraftBefore = new Date(now.valueOf() - EMPTY_DRAFT_RETENTION_MS);
+    return this.database
+      .update(reviews)
+      .set({ deletingAt: sql`coalesce(${reviews.deletingAt}, ${now.valueOf()})`, updatedAt: now })
+      .where(
+        and(
+          eq(reviews.id, id),
+          eq(reviews.ownerId, ownerId),
+          options.force
+            ? sql`1 = 1`
+            : or(
+                isNotNull(reviews.deletingAt),
+                lte(reviews.expiresAt, now),
+                and(
+                  isNull(reviews.expiresAt),
+                  lt(reviews.createdAt, emptyDraftBefore),
+                  sql`NOT EXISTS (
+                    SELECT 1 FROM review_images
+                    WHERE review_images.review_id = ${reviews.id}
+                  )`,
+                ),
+              ),
+        ),
+      )
+      .run().changes > 0;
+  }
+
+  /** 取消该作文尚未完成的持久化分析任务。 */
+  cancelActiveAnalysis(ownerId: string, id: string, now = this.now()): number {
+    return this.database
+      .update(analysisJobs)
+      .set({
+        status: "canceled",
+        errorCode: "REVIEW_DELETED",
+        message: null,
+        leaseExpiresAt: null,
+        finishedAt: now,
+      })
+      .where(
+        and(
+          eq(analysisJobs.ownerId, ownerId),
+          eq(analysisJobs.reviewId, id),
+          sql`${analysisJobs.status} IN ('queued', 'running')`,
+        ),
+      )
+      .run().changes;
+  }
+
+  /** 文件清理成功后的最后数据库收尾，所有从属表在同一事务中删除。 */
+  finalizeDeletion(ownerId: string, id: string): boolean {
+    return this.database.transaction((transaction) => {
+      const deleting = transaction
+        .select({ id: reviews.id })
+        .from(reviews)
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNotNull(reviews.deletingAt)))
+        .get();
+      if (!deleting) return false;
+      transaction.delete(annotations).where(eq(annotations.reviewId, id)).run();
+      transaction.delete(reviewImages).where(eq(reviewImages.reviewId, id)).run();
+      transaction.delete(analysisJobs).where(
+        and(eq(analysisJobs.reviewId, id), eq(analysisJobs.ownerId, ownerId)),
+      ).run();
+      return transaction.delete(reviews)
+        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNotNull(reviews.deletingAt)))
+        .run().changes > 0;
+    });
   }
 
   /** Internal cleanup probe; never exposed to request handlers. */

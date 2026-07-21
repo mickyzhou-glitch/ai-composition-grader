@@ -11,6 +11,7 @@ import { InMemoryReviewLock } from "../services/review-lock";
 import { ReviewFileStore } from "../storage/review-file-store";
 import { AuthRepository } from "../auth/auth-repository";
 import { AuthService } from "../auth/auth-service";
+import { RetentionService } from "../retention/retention-service";
 
 export interface ApplicationServices {
   authService: AuthService;
@@ -18,6 +19,7 @@ export interface ApplicationServices {
   reviewService: ReviewService;
   imageService: ImageService;
   pdfService: PdfService;
+  retentionService: RetentionService;
 }
 
 function createApplicationServices(): ApplicationServices {
@@ -29,6 +31,7 @@ function createApplicationServices(): ApplicationServices {
   const reviewRepository = new ReviewRepository(database.db);
   const fileStore = new ReviewFileStore();
   const reviewLock = new InMemoryReviewLock();
+  const retentionService = new RetentionService(reviewRepository, fileStore);
   const aiReviewer = new OpenAIReviewAdapter(settingsService);
   return {
     authService: new AuthService(new AuthRepository(database.db)),
@@ -41,7 +44,9 @@ function createApplicationServices(): ApplicationServices {
     }),
     reviewService: new ReviewService(reviewRepository, fileStore, aiReviewer, {
       lock: reviewLock,
+      retention: retentionService,
     }),
+    retentionService,
   };
 }
 
