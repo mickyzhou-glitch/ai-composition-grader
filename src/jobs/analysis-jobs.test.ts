@@ -8,8 +8,10 @@ import { initializeSchema } from "../db/init";
 import { ReviewRepository } from "../db/review-repository";
 import * as schema from "../db/schema";
 import {
+  AnalysisJobLostClaimError,
   AnalysisJobNotFoundError,
   AnalysisJobRepository,
+  AnalysisJobUnavailableReviewError,
 } from "./analysis-job-repository";
 import { AnalysisJobService } from "./analysis-job-service";
 
@@ -134,9 +136,9 @@ describe("AnalysisJobService", () => {
     const job = repository.claimNext();
     expect(job).not.toBeNull();
 
-    expect(() => repository.transition(job!.id, "queued")).toThrow(/非法/);
-    repository.transition(job!.id, "succeeded");
-    expect(() => repository.transition(job!.id, "failed")).toThrow(/非法/);
+    expect(() => repository.transition(job!, "queued")).toThrow(/非法/);
+    repository.transition(job!, "succeeded");
+    expect(() => repository.transition(job!, "failed")).toThrow(/非法/);
   });
 
   it("删除中或到期的作文会取消活动任务", () => {
@@ -166,7 +168,7 @@ describe("AnalysisJobService", () => {
   it("对页面公开的任务视图不泄露租约、尝试或内部错误", () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext();
-    repository.transition(claimed!.id, "failed", { errorCode: "UPSTREAM_500", message: "请稍后重试" });
+    repository.transition(claimed!, "failed", { errorCode: "UPSTREAM_500", message: "请稍后重试" });
 
     const view = service.get(ownerA, claimed!.id);
 
@@ -182,5 +184,77 @@ describe("AnalysisJobService", () => {
     expect(view).not.toHaveProperty("attempt");
     expect(view).not.toHaveProperty("leaseExpiresAt");
     expect(view).not.toHaveProperty("errorCode");
+  });
+
+  it("尝试为删除中的作文重复排队时，会提交取消状态再返回不可用错误", () => {
+    service.enqueue(ownerA, "review-a");
+    sqlite.prepare("UPDATE reviews SET deleting_at = ? WHERE id = ?").run(now.valueOf(), "review-a");
+
+    expect(() => service.enqueue(ownerA, "review-a")).toThrow(AnalysisJobUnavailableReviewError);
+    try {
+      service.enqueue(ownerA, "review-a");
+    } catch (error) {
+      expect(error).toMatchObject({ code: "REVIEW_UNAVAILABLE" });
+    }
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({
+      status: "canceled",
+      errorCode: "REVIEW_UNAVAILABLE",
+    });
+  });
+
+  it("领取前自动取消删除或到期作文的活动任务", () => {
+    service.enqueue(ownerA, "review-a");
+    sqlite.prepare("UPDATE reviews SET deleting_at = ? WHERE id = ?").run(now.valueOf(), "review-a");
+
+    expect(repository.claimNext()).toBeNull();
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "canceled" });
+  });
+
+  it("租约过期并被第二个 Worker 重领后，第一个 Worker 不能更新进度或完成任务", () => {
+    service.enqueue(ownerA, "review-a");
+    const workerOne = repository.claimNext();
+    expect(workerOne).not.toBeNull();
+    now = new Date(now.valueOf() + 60_001);
+    const workerTwo = repository.claimNext();
+    expect(workerTwo).toMatchObject({ id: workerOne?.id, attempt: 2 });
+
+    expect(() => repository.updateProgress(workerOne!, "generating_review")).toThrow(
+      AnalysisJobLostClaimError,
+    );
+    expect(() => repository.transition(workerOne!, "succeeded")).toThrow(
+      AnalysisJobLostClaimError,
+    );
+    expect(repository.updateProgress(workerTwo!, "generating_review")).toMatchObject({
+      progressStage: "generating_review",
+    });
+    expect(repository.transition(workerTwo!, "succeeded")).toMatchObject({ status: "succeeded" });
+  });
+
+  it("进度只能从读取图片依次推进，不能倒退、重复或跳过", () => {
+    service.enqueue(ownerA, "review-a");
+    const job = repository.claimNext();
+    expect(job).not.toBeNull();
+
+    expect(() => repository.updateProgress(job!, "reading_images")).toThrow(/非法/);
+    expect(() => repository.updateProgress(job!, "validating_result")).toThrow(/非法/);
+    const generating = repository.updateProgress(job!, "generating_review");
+    expect(() => repository.updateProgress(generating, "reading_images")).toThrow(/非法/);
+    expect(repository.updateProgress(generating, "validating_result")).toMatchObject({
+      progressStage: "validating_result",
+    });
+  });
+
+  it("两个任务仓储共享数据库时，第二个领取者不会取得同一任务", () => {
+    service.enqueue(ownerA, "review-a");
+    const secondRepository = new AnalysisJobRepository(
+      drizzle(sqlite, { schema }),
+      { now: () => now, maxAttempts: 2, leaseMs: 60_000 },
+    );
+
+    const first = repository.claimNext();
+    const second = secondRepository.claimNext();
+
+    expect(first?.id).toBe("job-1");
+    expect(second).toBeNull();
   });
 });

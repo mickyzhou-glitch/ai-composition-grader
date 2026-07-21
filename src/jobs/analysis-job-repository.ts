@@ -28,6 +28,11 @@ export interface AnalysisJobRecord {
   finishedAt: Date | null;
 }
 
+export interface ClaimedAnalysisJobRecord extends AnalysisJobRecord {
+  status: "running";
+  leaseExpiresAt: Date;
+}
+
 export interface AnalysisJobRepositoryOptions {
   now?: () => Date;
   createId?: () => string;
@@ -38,6 +43,13 @@ export interface AnalysisJobRepositoryOptions {
 export interface TransitionOptions {
   errorCode?: string | null;
   message?: string | null;
+}
+
+/** A worker's opaque compare-and-swap proof that it still owns a running job. */
+export interface AnalysisJobClaim {
+  id: string;
+  attempt: number;
+  leaseExpiresAt: Date;
 }
 
 export class AnalysisJobNotFoundError extends Error {
@@ -68,6 +80,15 @@ export class AnalysisJobUnavailableReviewError extends Error {
   }
 }
 
+export class AnalysisJobLostClaimError extends Error {
+  readonly code = "JOB_CLAIM_LOST";
+
+  constructor(id: string) {
+    super(`Analysis job claim was lost: ${id}`);
+    this.name = "AnalysisJobLostClaimError";
+  }
+}
+
 function assertId(value: string, name: string): void {
   if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(value)) {
     throw new TypeError(`${name} must be a safe identifier`);
@@ -88,6 +109,13 @@ function assertPositiveInteger(value: number, name: string): number {
 function activeStatusCondition() {
   return sql`${analysisJobs.status} IN ('queued', 'running')`;
 }
+
+const progressStages: readonly Exclude<AnalysisProgressStage, "queued">[] = [
+  "reading_images",
+  "generating_review",
+  "validating_result",
+  "saving_result",
+];
 
 function toRecord(row: typeof analysisJobs.$inferSelect): AnalysisJobRecord {
   return {
@@ -133,7 +161,7 @@ export class AnalysisJobRepository {
     assertId(reviewId, "reviewId");
     const now = assertDate(this.now(), "now");
 
-    return this.database.transaction((transaction) => {
+    const outcome = this.database.transaction((transaction): AnalysisJobRecord | "unavailable" => {
       const review = transaction
         .select({ id: reviews.id, deletingAt: reviews.deletingAt, expiresAt: reviews.expiresAt })
         .from(reviews)
@@ -157,7 +185,9 @@ export class AnalysisJobRepository {
             activeStatusCondition(),
           ))
           .run();
-        throw new AnalysisJobUnavailableReviewError(reviewId);
+        // Returning a sentinel commits the cancellation. Throwing inside the
+        // transaction would silently roll that safety write back.
+        return "unavailable";
       }
 
       const existing = this.findActive(transaction, ownerId, reviewId);
@@ -193,6 +223,8 @@ export class AnalysisJobRepository {
       }
       return this.requireByIdInTransaction(transaction, ownerId, id);
     });
+    if (outcome === "unavailable") throw new AnalysisJobUnavailableReviewError(reviewId);
+    return outcome;
   }
 
   getById(ownerId: string, id: string): AnalysisJobRecord | null {
@@ -211,10 +243,24 @@ export class AnalysisJobRepository {
   }
 
   /** Reclaims expired leases then atomically claims one available queued job. */
-  claimNext(): AnalysisJobRecord | null {
+  claimNext(): ClaimedAnalysisJobRecord | null {
     const now = assertDate(this.now(), "now");
     const leaseExpiresAt = new Date(now.valueOf() + this.leaseMs);
     return this.database.transaction((transaction) => {
+      // This has to happen in the same transaction as selection. Retention can
+      // mark a review unavailable between polling cycles, and a worker must not
+      // claim it in that gap.
+      transaction.update(analysisJobs).set({
+        status: "canceled",
+        errorCode: "REVIEW_UNAVAILABLE",
+        message: null,
+        leaseExpiresAt: null,
+        finishedAt: now,
+      }).where(and(
+        activeStatusCondition(),
+        this.unavailableReviewCondition(now),
+      )).run();
+
       transaction
         .update(analysisJobs)
         .set({
@@ -254,6 +300,13 @@ export class AnalysisJobRepository {
           eq(analysisJobs.status, "queued"),
           lte(analysisJobs.availableAt, now),
           sql`${analysisJobs.attempt} < ${this.maxAttempts}`,
+          sql`EXISTS (
+            SELECT 1 FROM reviews
+            WHERE reviews.id = ${analysisJobs.reviewId}
+              AND reviews.owner_id = ${analysisJobs.ownerId}
+              AND reviews.deleting_at IS NULL
+              AND (reviews.expires_at IS NULL OR reviews.expires_at > ${now.valueOf()})
+          )`,
         ))
         .orderBy(asc(analysisJobs.availableAt), asc(analysisJobs.createdAt), asc(analysisJobs.id))
         .get();
@@ -273,43 +326,64 @@ export class AnalysisJobRepository {
         eq(analysisJobs.status, "queued"),
         lte(analysisJobs.availableAt, now),
         sql`${analysisJobs.attempt} < ${this.maxAttempts}`,
+        sql`EXISTS (
+          SELECT 1 FROM reviews
+          WHERE reviews.id = ${analysisJobs.reviewId}
+            AND reviews.owner_id = ${analysisJobs.ownerId}
+            AND reviews.deleting_at IS NULL
+            AND (reviews.expires_at IS NULL OR reviews.expires_at > ${now.valueOf()})
+        )`,
       )).run();
       if (update.changes !== 1) return null;
-      return this.requireByIdInTransaction(transaction, undefined, candidate.id);
+      const claimed = this.requireByIdInTransaction(transaction, undefined, candidate.id);
+      if (claimed.status !== "running" || claimed.leaseExpiresAt === null) {
+        throw new Error("Claimed analysis job is unexpectedly not running");
+      }
+      return claimed as ClaimedAnalysisJobRecord;
     });
   }
 
-  transition(id: string, target: AnalysisJobStatus, options: TransitionOptions = {}): AnalysisJobRecord {
-    assertId(id, "jobId");
+  transition(claim: AnalysisJobClaim, target: AnalysisJobStatus, options: TransitionOptions = {}): AnalysisJobRecord {
+    const normalizedClaim = this.assertClaim(claim);
     const now = assertDate(this.now(), "now");
     return this.database.transaction((transaction) => {
-      const current = this.requireByIdInTransaction(transaction, undefined, id);
-      const valid = current.status === "running" && ["succeeded", "failed", "canceled"].includes(target)
-        || current.status === "queued" && target === "canceled";
+      const current = this.requireByIdInTransaction(transaction, undefined, normalizedClaim.id);
+      const valid = current.status === "running" && ["succeeded", "failed", "canceled"].includes(target);
       if (!valid) throw new AnalysisJobTransitionError(current.status, target);
-      transaction.update(analysisJobs).set({
+      const update = transaction.update(analysisJobs).set({
         status: target,
         errorCode: options.errorCode ?? null,
         message: options.message ?? null,
         leaseExpiresAt: null,
         finishedAt: now,
-      }).where(and(eq(analysisJobs.id, id), eq(analysisJobs.status, current.status))).run();
-      return this.requireByIdInTransaction(transaction, undefined, id);
+      }).where(this.runningClaimCondition(normalizedClaim, now)).run();
+      if (update.changes !== 1) throw new AnalysisJobLostClaimError(normalizedClaim.id);
+      return this.requireByIdInTransaction(transaction, undefined, normalizedClaim.id);
     });
   }
 
-  updateProgress(id: string, stage: Exclude<AnalysisProgressStage, "queued">, message: string | null = null): AnalysisJobRecord {
-    assertId(id, "jobId");
-    const current = this.getInternal(id);
-    if (!current) throw new AnalysisJobNotFoundError(id);
-    if (current.status !== "running") throw new AnalysisJobTransitionError(current.status, "running");
-    this.database.update(analysisJobs).set({ progressStage: stage, message })
-      .where(and(eq(analysisJobs.id, id), eq(analysisJobs.status, "running"))).run();
-    return this.requireInternal(id);
+  updateProgress(claim: AnalysisJobClaim, stage: Exclude<AnalysisProgressStage, "queued">, message: string | null = null): ClaimedAnalysisJobRecord {
+    const normalizedClaim = this.assertClaim(claim);
+    const current = this.getInternal(normalizedClaim.id);
+    if (!current) throw new AnalysisJobNotFoundError(normalizedClaim.id);
+    if (current.status !== "running") throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    const currentIndex = progressStages.indexOf(current.progressStage as Exclude<AnalysisProgressStage, "queued">);
+    const requestedIndex = progressStages.indexOf(stage);
+    if (requestedIndex !== currentIndex + 1) {
+      throw new AnalysisJobTransitionError(current.status, current.status);
+    }
+    const update = this.database.update(analysisJobs).set({ progressStage: stage, message })
+      .where(this.runningClaimCondition(normalizedClaim, assertDate(this.now(), "now"))).run();
+    if (update.changes !== 1) throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    const updated = this.requireInternal(normalizedClaim.id);
+    if (updated.status !== "running" || updated.leaseExpiresAt === null) {
+      throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    }
+    return updated as ClaimedAnalysisJobRecord;
   }
 
   /** Lets a worker keep an existing claim alive without revealing it to clients. */
-  renewLease(id: string, expectedLeaseExpiresAt: Date): AnalysisJobRecord | null {
+  renewLease(id: string, expectedLeaseExpiresAt: Date): ClaimedAnalysisJobRecord | null {
     assertId(id, "jobId");
     const now = assertDate(this.now(), "now");
     const expected = assertDate(expectedLeaseExpiresAt, "expectedLeaseExpiresAt");
@@ -321,7 +395,10 @@ export class AnalysisJobRepository {
         eq(analysisJobs.leaseExpiresAt, expected),
         gt(analysisJobs.leaseExpiresAt, now),
       )).run();
-    return result.changes === 1 ? this.requireInternal(id) : null;
+    if (result.changes !== 1) return null;
+    const updated = this.requireInternal(id);
+    if (updated.status !== "running" || updated.leaseExpiresAt === null) return null;
+    return updated as ClaimedAnalysisJobRecord;
   }
 
   /** Cancels active work for any review that is deleting or past its retention deadline. */
@@ -335,12 +412,7 @@ export class AnalysisJobRepository {
       finishedAt: now,
     }).where(and(
       activeStatusCondition(),
-      sql`EXISTS (
-        SELECT 1 FROM reviews
-        WHERE reviews.id = ${analysisJobs.reviewId}
-          AND reviews.owner_id = ${analysisJobs.ownerId}
-          AND (reviews.deleting_at IS NOT NULL OR reviews.expires_at <= ${now.valueOf()})
-      )`,
+      this.unavailableReviewCondition(now),
     )).run().changes;
   }
 
@@ -371,5 +443,35 @@ export class AnalysisJobRepository {
     const row = database.select().from(analysisJobs).where(conditions).get();
     if (!row) throw new AnalysisJobNotFoundError(id);
     return toRecord(row);
+  }
+
+  private assertClaim(claim: AnalysisJobClaim): AnalysisJobClaim {
+    if (typeof claim !== "object" || claim === null) throw new TypeError("claim is required");
+    assertId(claim.id, "jobId");
+    assertPositiveInteger(claim.attempt, "claim.attempt");
+    return {
+      id: claim.id,
+      attempt: claim.attempt,
+      leaseExpiresAt: assertDate(claim.leaseExpiresAt, "claim.leaseExpiresAt"),
+    };
+  }
+
+  private runningClaimCondition(claim: AnalysisJobClaim, now: Date) {
+    return and(
+      eq(analysisJobs.id, claim.id),
+      eq(analysisJobs.status, "running"),
+      eq(analysisJobs.attempt, claim.attempt),
+      eq(analysisJobs.leaseExpiresAt, claim.leaseExpiresAt),
+      gt(analysisJobs.leaseExpiresAt, now),
+    );
+  }
+
+  private unavailableReviewCondition(now: Date) {
+    return sql`EXISTS (
+      SELECT 1 FROM reviews
+      WHERE reviews.id = ${analysisJobs.reviewId}
+        AND reviews.owner_id = ${analysisJobs.ownerId}
+        AND (reviews.deleting_at IS NOT NULL OR reviews.expires_at <= ${now.valueOf()})
+    )`;
   }
 }
