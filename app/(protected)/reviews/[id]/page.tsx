@@ -52,11 +52,19 @@ export default function ReviewPage() {
   const mountedRef = useRef(false);
   const requestTokenRef = useRef(0);
   const requestControllerRef = useRef<AbortController | null>(null);
+  const jobRequestTokenRef = useRef(0);
+  const jobRequestControllerRef = useRef<AbortController | null>(null);
 
   const invalidateLoad = useCallback(() => {
     requestTokenRef.current += 1;
     requestControllerRef.current?.abort();
     requestControllerRef.current = null;
+  }, []);
+
+  const invalidateJobLoad = useCallback(() => {
+    jobRequestTokenRef.current += 1;
+    jobRequestControllerRef.current?.abort();
+    jobRequestControllerRef.current = null;
   }, []);
 
   const applyReview = useCallback((loaded: ReviewView) => {
@@ -67,11 +75,23 @@ export default function ReviewPage() {
   }, []);
 
   const loadJob = useCallback(async () => {
-    const result = await apiFetch<{ job: AnalysisJobView | null }>(
-      `/api/reviews/${encodeURIComponent(reviewId)}/analyze/status`,
-    );
-    setAnalysisJob(result.job);
-    return result.job;
+    const token = jobRequestTokenRef.current + 1;
+    jobRequestTokenRef.current = token;
+    jobRequestControllerRef.current?.abort();
+    const controller = new AbortController();
+    jobRequestControllerRef.current = controller;
+    const isLatest = () => mountedRef.current && jobRequestTokenRef.current === token;
+    try {
+      const result = await apiFetch<{ job: AnalysisJobView | null }>(
+        `/api/reviews/${encodeURIComponent(reviewId)}/analyze/status`,
+        { signal: controller.signal },
+      );
+      if (!isLatest()) return null;
+      setAnalysisJob(result.job);
+      return result.job;
+    } finally {
+      if (jobRequestTokenRef.current === token) jobRequestControllerRef.current = null;
+    }
   }, [reviewId]);
 
   const loadReview = useCallback(async (showLoading = true) => {
@@ -135,10 +155,9 @@ export default function ReviewPage() {
       .then((loaded) => {
         if (isLatest()) {
           applyReview(loaded);
-          // The worker marks the review as analyzing as soon as it claims the
-          // durable job. On a browser refresh this restores progress polling
-          // without adding an extra request for ordinary completed drafts.
-          if (loaded.status === "analyzing") void loadJob().catch(() => undefined);
+          // Query the durable job separately: a refresh can happen while the
+          // job is still queued, before the worker changes review.status.
+          void loadJob().catch(() => undefined);
         }
       })
       .catch((caught) => {
@@ -152,8 +171,9 @@ export default function ReviewPage() {
     return () => {
       mountedRef.current = false;
       invalidateLoad();
+      invalidateJobLoad();
     };
-  }, [applyReview, invalidateLoad, loadJob, reviewId]);
+  }, [applyReview, invalidateJobLoad, invalidateLoad, loadJob, reviewId]);
 
   useEffect(() => {
     if (!analysisJob || (analysisJob.status !== "queued" && analysisJob.status !== "running")) return;
@@ -162,7 +182,9 @@ export default function ReviewPage() {
         if (job?.status === "succeeded" || job?.status === "failed" || job?.status === "canceled") {
           void refresh(false, true);
         }
-      }).catch(() => setNotice("任务状态暂时无法刷新，正在尝试重新连接。"));
+      }).catch(() => {
+        if (mountedRef.current) setNotice("任务状态暂时无法刷新，正在尝试重新连接。");
+      });
     }, 1500);
     return () => window.clearInterval(timer);
   }, [analysisJob, loadJob, refresh]);
