@@ -1,0 +1,101 @@
+@page {
+  size: A4;
+  margin: 12mm;
+}
+
+.document {
+  --ink: #27221e;
+  --muted: #756a60;
+  --paper: #fffdf8;
+  --line: #ded3c6;
+  --red: #b42318;
+  --red-soft: #fff0ed;
+  min-height: 100%;
+  background: white;
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.65;
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
+.document *, .document *::before, .document *::after { box-sizing: border-box; }
+.document h1, .document h2, .document h3, .document p { margin-top: 0; }
+.document h1, .document h2, .document h3 { break-after: avoid-page; }
+
+.runningHeader, .runningFooter {
+  display: none;
+  position: fixed;
+  right: 0;
+  left: 0;
+  color: var(--muted);
+  font-size: 8pt;
+}
+.runningHeader { top: -8mm; justify-content: space-between; border-bottom: .2mm solid var(--line); }
+.runningFooter { bottom: -8mm; justify-content: space-between; border-top: .2mm solid var(--line); }
+.pageNumber::before { content: "第 " counter(page) " 页"; }
+
+.sheet { min-height: 273mm; break-after: page; }
+.summary { display: grid; align-content: center; padding: 8mm; }
+.eyebrow { margin-bottom: 2mm; color: var(--red); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
+.summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
+.summaryGrid { display: grid; grid-template-columns: 44mm 1fr; gap: 8mm; margin-bottom: 12mm; }
+.totalScore, .overallComment, .assignmentInfo, .card, .sampleParagraph {
+  border: .25mm solid var(--line);
+  background: var(--paper);
+  break-inside: avoid;
+}
+.totalScore { display: grid; min-height: 48mm; padding: 6mm; place-content: center; border-top: 1.2mm solid var(--red); text-align: center; }
+.totalScore strong { color: var(--red); font: 700 40pt/1 STKaiti, KaiTi, serif; }
+.totalScore span { color: var(--muted); }
+.totalScore b { margin-top: 2mm; }
+.overallComment { padding: 7mm; border-left: 1.2mm solid var(--red); }
+.overallComment h2 { margin-bottom: 3mm; }
+.overallComment p { margin-bottom: 0; font-size: 13pt; }
+.assignmentInfo { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 0; }
+.assignmentInfo > div { padding: 4mm 5mm; border-bottom: .2mm solid var(--line); }
+.assignmentInfo dt { color: var(--muted); font-size: 8pt; }
+.assignmentInfo dd { margin: 1mm 0 0; }
+
+.annotationPage { display: grid; grid-template-rows: auto 1fr; padding-top: 2mm; }
+.pageHeading { margin-bottom: 4mm; }
+.pageHeading h2 { margin-bottom: 0; }
+.annotationLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 5mm; align-items: start; }
+.imageFigure { position: relative; width: 100%; max-height: 247mm; margin: 0; overflow: hidden; border: .25mm solid var(--line); background: #f4eee5; }
+.imageFigure img { display: block; width: 100%; max-height: 247mm; object-fit: contain; }
+.annotationOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.annotationOverlay line { stroke: var(--red); stroke-width: .45; vector-effect: non-scaling-stroke; }
+.annotationOverlay circle { fill: var(--red); stroke: white; stroke-width: .55; vector-effect: non-scaling-stroke; }
+.annotationOverlay text { fill: white; font-size: 2.2px; font-weight: 800; dominant-baseline: central; text-anchor: middle; }
+.annotationNotes { min-width: 0; }
+.annotationNotes ol { display: grid; gap: 3mm; margin: 0; padding: 0; list-style: none; }
+.annotationNotes li { display: grid; grid-template-columns: 7mm minmax(0, 1fr); gap: 2mm; padding-bottom: 3mm; border-bottom: .2mm solid #ebc9c5; break-inside: avoid; }
+.annotationNotes li > span { display: grid; width: 6mm; height: 6mm; place-items: center; border-radius: 50%; background: var(--red); color: white; font-size: 7pt; font-weight: 800; }
+.annotationNotes b { color: var(--red); overflow-wrap: anywhere; }
+.annotationNotes p { margin: 1mm 0 0; overflow-wrap: anywhere; }
+.muted { color: var(--muted); }
+
+.analysisPages { break-before: page; }
+.card, .samples { margin-bottom: 5mm; padding: 6mm; }
+.card h2, .samples h2 { margin-bottom: 3mm; }
+.themeCard { display: grid; grid-template-columns: 42mm 1fr; align-items: center; border-top: 1.2mm solid var(--red); }
+.themeCard h2 { margin-bottom: 0; color: var(--red); font-size: 18pt; }
+.themeCard > p { margin-bottom: 0; }
+.textList { display: grid; gap: 2mm; margin: 0; padding-left: 5mm; }
+.scoreTable { width: 100%; border-collapse: collapse; }
+.scoreTable th, .scoreTable td { padding: 2.5mm 3mm; border-bottom: .2mm solid var(--line); text-align: left; }
+.scoreTable td { text-align: right; }
+.totalRow { color: var(--red); font-weight: 800; }
+.samples { padding: 0; }
+.sampleParagraph { margin: 4mm 0; padding: 5mm 6mm; }
+.sampleParagraph h3 { margin-bottom: 2mm; color: var(--red); }
+.sampleText { margin-bottom: 3mm; white-space: pre-wrap; }
+.sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--red); background: var(--red-soft); color: var(--red); break-before: avoid; }
+.sampleSuggestion b { margin-right: 1mm; }
+
+@media print {
+  .runningHeader, .runningFooter { display: flex; }
+  .sheet, .card, .sampleParagraph, .annotationNotes li { break-inside: avoid; }
+  .sampleSuggestion { break-inside: avoid; }
+}
