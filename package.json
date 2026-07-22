@@ -13,6 +13,7 @@
     "accounts": "tsx scripts/accounts.ts",
     "worker": "tsx scripts/worker.ts",
     "tunnel": "tsx scripts/ngrok.ts",
+    "private-beta": "tsx scripts/private-beta.ts",
     "retention": "tsx scripts/retention.ts",
     "start": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint",
