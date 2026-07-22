@@ -11,8 +11,10 @@ export async function runNgrok(): Promise<void> {
   const token = await new MacOSKeychain({ service: NGROK_SERVICE, account: NGROK_ACCOUNT }).get();
   if (!token) throw new Error("未在 macOS 钥匙串中找到 ngrok 隧道令牌");
   await new Promise<void>((resolve, reject) => {
-    const child = spawn("ngrok", ["http", "http://127.0.0.1:3001", "--authtoken", token, "--inspect=false"], {
+    const child = spawn("ngrok", ["http", "http://127.0.0.1:3001", "--inspect=false"], {
       stdio: "inherit",
+      // ngrok reads this in-process; the token is never written to disk or argv.
+      env: { ...process.env, NGROK_AUTHTOKEN: token },
     });
     child.once("error", reject);
     child.once("exit", (code) => code === 0 ? resolve() : reject(new Error("ngrok 隧道已停止")));
