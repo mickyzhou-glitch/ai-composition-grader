@@ -37,6 +37,10 @@ npm run build
 npm run test:e2e
 ```
 
+## 两位教师内测
+
+请先阅读 [内测操作手册](docs/private-beta-runbook.md)。生产构建后可使用 `npm run private-beta -- install`、`start`、`tunnel` 和 `stop` 管理本机网页、批改 Worker 与分享隧道；公网地址必须配置为 `APP_ORIGIN`，且只应使用 HTTPS。
+
 ## 项目结构
 
 - `app/`：Next.js App Router 页面与全局样式
