@@ -49,6 +49,8 @@ export class KeychainOperationError extends Error {
 interface MacOSKeychainOptions {
   runner?: KeychainRunner;
   platform?: NodeJS.Platform;
+  service?: string;
+  account?: string;
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -63,10 +65,14 @@ function isNotFoundError(error: unknown): boolean {
 export class MacOSKeychain {
   private readonly runner: KeychainRunner;
   private readonly platform: NodeJS.Platform;
+  private readonly service: string;
+  private readonly account: string;
 
   constructor(options: MacOSKeychainOptions = {}) {
     this.runner = options.runner ?? execFileRunner;
     this.platform = options.platform ?? process.platform;
+    this.service = options.service ?? KEYCHAIN_SERVICE;
+    this.account = options.account ?? KEYCHAIN_ACCOUNT;
   }
 
   async set(secret: string): Promise<void> {
@@ -77,9 +83,9 @@ export class MacOSKeychain {
         "add-generic-password",
         "-U",
         "-s",
-        KEYCHAIN_SERVICE,
+        this.service,
         "-a",
-        KEYCHAIN_ACCOUNT,
+        this.account,
         "-w",
         secret,
       ]);
@@ -95,9 +101,9 @@ export class MacOSKeychain {
       const { stdout } = await this.runner(SECURITY_EXECUTABLE, [
         "find-generic-password",
         "-s",
-        KEYCHAIN_SERVICE,
+        this.service,
         "-a",
-        KEYCHAIN_ACCOUNT,
+        this.account,
         "-w",
       ]);
       const secret = stdout.replace(/[\r\n]+$/, "");
@@ -114,9 +120,9 @@ export class MacOSKeychain {
       await this.runner(SECURITY_EXECUTABLE, [
         "delete-generic-password",
         "-s",
-        KEYCHAIN_SERVICE,
+        this.service,
         "-a",
-        KEYCHAIN_ACCOUNT,
+        this.account,
       ]);
     } catch (error) {
       if (isNotFoundError(error)) return;

@@ -12,6 +12,7 @@
     "db:init": "node scripts/init-db.mts",
     "accounts": "tsx scripts/accounts.ts",
     "worker": "tsx scripts/worker.ts",
+    "tunnel": "tsx scripts/ngrok.ts",
     "retention": "tsx scripts/retention.ts",
     "start": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint",
