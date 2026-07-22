@@ -32,6 +32,23 @@ const stageLabels: Record<AnalysisJobView["progressStage"], string> = {
   saving_result: "保存结果",
 };
 
+function expiryNotice(value: string | null) {
+  if (!value) return "尚未上传图片；草稿会在创建 24 小时后自动清理。";
+  const expiry = new Date(value);
+  if (Number.isNaN(expiry.valueOf())) return "到期时间未知。";
+  const remainingDays = Math.max(0, Math.ceil((expiry.valueOf() - Date.now()) / (24 * 60 * 60 * 1000)));
+  const date = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Shanghai",
+  }).format(expiry);
+  return `本作文将于 ${date} 自动永久删除（剩余 ${remainingDays} 天）；导出 PDF 不会延长保存期限。`;
+}
+
+function expiresSoon(value: string | null | undefined) {
+  if (!value) return false;
+  const timestamp = new Date(value).valueOf();
+  return Number.isFinite(timestamp) && timestamp - Date.now() <= 3 * 24 * 60 * 60 * 1000;
+}
+
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -381,6 +398,7 @@ export default function ReviewPage() {
         {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
         {analysisJob ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
+        <div className={`privacy-note ${expiresSoon(review.expiresAt) ? "expiry-notice--urgent" : ""}`} role="note">{expiryNotice(review.expiresAt ?? null)}</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
 
         <section className="review-grid" aria-label="作文复核工作区">

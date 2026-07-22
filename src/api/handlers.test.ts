@@ -464,6 +464,8 @@ describe("review route handlers", () => {
     }).jpeg().toBuffer();
     const form = new FormData();
     form.append("expectedRevision", "0");
+    form.append("privacyConfirmed", "true");
+    form.append("privacyNoticeVersion", "2026-07-22");
     for (let index = 0; index < 3; index += 1) {
       form.append("images", new File([pixels], `page-${index + 1}.jpg`, { type: "image/jpeg" }));
     }
@@ -521,6 +523,56 @@ describe("review route handlers", () => {
     ]);
   });
 
+  it("首次上传必须由服务端验证隐私确认，并记录版本与到期时间", async () => {
+    repository.create(OWNER_ID, { id: "review-privacy", config });
+    const pixels = await sharp({
+      create: { width: 60, height: 80, channels: 3, background: "white" },
+    }).jpeg().toBuffer();
+    const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
+    const missing = new FormData();
+    missing.append("expectedRevision", "0");
+    missing.append("images", new File([pixels], "page.jpg", { type: "image/jpeg" }));
+
+    const rejected = await handlers.POST(
+      new Request("http://localhost/api/reviews/review-privacy/images", { method: "POST", body: missing }),
+      { params: Promise.resolve({ id: "review-privacy" }) },
+    );
+    expect(rejected.status).toBe(422);
+    expect(await json(rejected)).toMatchObject({ error: { code: "PRIVACY_CONFIRMATION_REQUIRED" } });
+
+    const accepted = new FormData();
+    accepted.append("expectedRevision", "0");
+    accepted.append("privacyConfirmed", "true");
+    accepted.append("privacyNoticeVersion", "2026-07-22");
+    accepted.append("images", new File([pixels], "page.jpg", { type: "image/jpeg" }));
+    expect((await handlers.POST(
+      new Request("http://localhost/api/reviews/review-privacy/images", { method: "POST", body: accepted }),
+      { params: Promise.resolve({ id: "review-privacy" }) },
+    )).status).toBe(200);
+    expect(repository.getById(OWNER_ID, "review-privacy")).toMatchObject({
+      privacyConsentVersion: "2026-07-22",
+      privacyConsentedAt: expect.any(Date),
+      expiresAt: expect.any(Date),
+    });
+  });
+
+  it("不同教师不能借确认标记上传他人的作文", async () => {
+    repository.create(OWNER_ID, { id: "review-private", config });
+    const form = new FormData();
+    form.append("expectedRevision", "0");
+    form.append("privacyConfirmed", "true");
+    form.append("privacyNoticeVersion", "2026-07-22");
+    form.append("images", new File([new Uint8Array([1])], "page.jpg", { type: "image/jpeg" }));
+    const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: "teacher-02" });
+
+    const response = await handlers.POST(
+      new Request("http://localhost/api/reviews/review-private/images", { method: "POST", body: form }),
+      { params: Promise.resolve({ id: "review-private" }) },
+    );
+    expect(response.status).toBe(404);
+    expect(repository.getById(OWNER_ID, "review-private")?.images).toHaveLength(0);
+  });
+
   it("旧 revision 重拍或变换都返回 409，并保留 SQLite 图片和已存文件", async () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const pixels = await sharp({
@@ -529,6 +581,8 @@ describe("review route handlers", () => {
     const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
     const initial = new FormData();
     initial.append("expectedRevision", "0");
+    initial.append("privacyConfirmed", "true");
+    initial.append("privacyNoticeVersion", "2026-07-22");
     initial.append("images", new File([pixels], "current.jpg", { type: "image/jpeg" }));
     expect((await handlers.POST(
       new Request("http://localhost/api/reviews/review-1/images", { method: "POST", body: initial }),
@@ -656,7 +710,7 @@ describe("review route handlers", () => {
           create: { width: 60, height: 80, channels: 3, background: "white" },
         }).jpeg().toBuffer(),
       },
-    ]);
+    ], { confirmed: true, version: "2026-07-22" });
     const queuedJob = {
       id: "job-1",
       reviewId: "review-1",

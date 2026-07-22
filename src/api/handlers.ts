@@ -6,6 +6,7 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   evaluationReportSchema,
+  PRIVACY_NOTICE_VERSION,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
 import type { PdfService } from "../pdf/pdf-service";
@@ -74,6 +75,7 @@ function reviewDto(review: {
   pdfPath?: string | null;
   pdfRevision?: number | null;
   exportedAt?: unknown;
+  expiresAt?: unknown;
 }) {
   const hasPdf =
     typeof review.pdfFilename === "string" &&
@@ -93,6 +95,7 @@ function reviewDto(review: {
     images: review.images.map(reviewImageDto),
     hasPdf,
     pdfFilename: hasPdf ? review.pdfFilename : null,
+    expiresAt: review.expiresAt ?? null,
   };
 }
 
@@ -375,6 +378,19 @@ export function createReviewImagesRouteHandlers(
         const expectedRevision = multipartRevisionSchema.parse(
           form.get("expectedRevision"),
         );
+        const privacyConfirmed = form.get("privacyConfirmed") === "true";
+        const privacyNoticeVersion = form.get("privacyNoticeVersion");
+        const id = (await context.params).id;
+        if (
+          dependencies.imageService.requiresPrivacyConfirmation(dependencies.ownerId, id) &&
+          (!privacyConfirmed || privacyNoticeVersion !== PRIVACY_NOTICE_VERSION)
+        ) {
+          throw routeError(
+            "PRIVACY_CONFIRMATION_REQUIRED",
+            "请先确认真实作文上传说明后再上传图片",
+            422,
+          );
+        }
         if (entries.length < 1 || entries.length > 3) {
           throw routeError(
             "IMAGE_COUNT_INVALID",
@@ -405,9 +421,12 @@ export function createReviewImagesRouteHandlers(
         return ok(imageCollectionDto(
           await dependencies.imageService.upload(
             dependencies.ownerId,
-            (await context.params).id,
+            id,
             expectedRevision,
             files,
+            privacyConfirmed && privacyNoticeVersion === PRIVACY_NOTICE_VERSION
+              ? { confirmed: true, version: PRIVACY_NOTICE_VERSION }
+              : undefined,
           ),
         ));
       } catch (error) {

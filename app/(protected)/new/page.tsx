@@ -3,7 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import type { AssignmentConfig, NormalizedCrop } from "@/src/domain/contracts";
+import {
+  PRIVACY_NOTICE_VERSION,
+  type AssignmentConfig,
+  type NormalizedCrop,
+} from "@/src/domain/contracts";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
@@ -70,6 +74,7 @@ export default function NewReviewPage() {
   const [images, setImages] = useState<PendingImage[]>([]);
   const [review, setReview] = useState<ReviewSession | null>(null);
   const [uploaded, setUploaded] = useState<UploadedImage[] | null>(null);
+  const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -140,6 +145,8 @@ export default function NewReviewPage() {
       if (!serverImages) {
         const form = new FormData();
         form.append("expectedRevision", String(currentReview.revision));
+        form.append("privacyConfirmed", String(privacyConfirmed));
+        form.append("privacyNoticeVersion", PRIVACY_NOTICE_VERSION);
         images.forEach(({ file }) => form.append("images", file));
         const uploadResult = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
           method: "POST",
@@ -251,8 +258,8 @@ export default function NewReviewPage() {
             <p className="eyebrow">第三步</p><h2 id="confirm-heading">确认批改内容</h2>
             <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span></div>
             <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°{asCrop(image.crop) ? " · 已裁剪" : ""}</small></li>)}</ol>
-            <p className="privacy-note">图片保存在本机，点击AI批改后会发送到教师配置的AI服务用于识别/分析，请勿上传未经授权内容。</p>
-            <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel="正在建立批改…" onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
+            <div className="privacy-note"><b>真实作文上传说明</b><p>请勿上传学生姓名、学号、班级、学校等无关身份信息；本次图片仅用于作文批改，并会发送到教师配置的第三方 AI 服务识别和分析。</p><p>作文图片与批改文件自首次上传起仅在本机保存 30 天，随后自动永久删除；第三方 AI 服务对数据的保存和处理以其自身规则为准。</p><label><input aria-label="确认真实作文上传说明" type="checkbox" checked={privacyConfirmed} onChange={(event) => setPrivacyConfirmed(event.target.checked)} /> 我确认已获得上传和使用该作文的必要授权。</label></div>
+            <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel="正在建立批改…" disabled={!privacyConfirmed} onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
           </section>
         ) : null}
       </main>

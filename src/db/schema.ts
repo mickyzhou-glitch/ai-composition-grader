@@ -66,6 +66,8 @@ export const reviews = sqliteTable(
     exportedAt: integer("exported_at", { mode: "timestamp_ms" }),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
     deletingAt: integer("deleting_at", { mode: "timestamp_ms" }),
+    privacyConsentVersion: text("privacy_consent_version"),
+    privacyConsentedAt: integer("privacy_consented_at", { mode: "timestamp_ms" }),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
   },

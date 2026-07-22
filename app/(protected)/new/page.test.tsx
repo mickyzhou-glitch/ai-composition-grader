@@ -7,6 +7,10 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push }) }));
 
 import NewReviewPage from "./page";
 
+async function confirmPrivacy(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByLabelText("确认真实作文上传说明"));
+}
+
 function json(data: unknown, status = 200) {
   return Promise.resolve(
     new Response(JSON.stringify(status < 400 ? { ok: true, data } : { ok: false, error: data }), {
@@ -43,7 +47,7 @@ describe("新建作文批改", () => {
     expect(screen.getByLabelText("目标字数")).toHaveValue(600);
   });
 
-  it("在提交前明确说明图片会发送至教师配置的 AI 服务", async () => {
+  it("在提交前必须确认真实作文上传说明", async () => {
     const user = userEvent.setup();
     render(<NewReviewPage />);
 
@@ -55,7 +59,11 @@ describe("新建作文批改", () => {
     );
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
 
-    expect(screen.getByText("图片保存在本机，点击AI批改后会发送到教师配置的AI服务用于识别/分析，请勿上传未经授权内容。")).toBeInTheDocument();
+    expect(screen.getByText(/请勿上传学生姓名、学号、班级、学校/)).toBeInTheDocument();
+    expect(screen.getByText(/30 天/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeDisabled();
+    await confirmPrivacy(user);
+    expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeEnabled();
   });
 
   it("按调整后的三图顺序上传，并提交旋转和裁剪", async () => {
@@ -84,6 +92,7 @@ describe("新建作文批改", () => {
     await user.clear(screen.getByLabelText("二.jpg 裁剪左边界（%）"));
     await user.type(screen.getByLabelText("二.jpg 裁剪左边界（%）"), "10");
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await confirmPrivacy(user);
     const summary = screen.getByLabelText("图片提交顺序");
     expect(within(summary).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
       expect.stringContaining("一.jpg"),
@@ -98,6 +107,8 @@ describe("新建作文批改", () => {
     expect(JSON.parse((reviewRequest[1] as RequestInit).body as string).config.title).toBe("为自己鼓掌");
     const uploaded = (fetchMock.mock.calls[1][1] as RequestInit).body as FormData;
     expect(uploaded.get("expectedRevision")).toBe("0");
+    expect(uploaded.get("privacyConfirmed")).toBe("true");
+    expect(uploaded.get("privacyNoticeVersion")).toBe("2026-07-22");
     expect(uploaded.getAll("images").map((file) => (file as File).name)).toEqual([
       "一.jpg",
       "三.jpg",
@@ -131,6 +142,7 @@ describe("新建作文批改", () => {
       new File(["image"], "first.jpg", { type: "image/jpeg" }),
     );
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await confirmPrivacy(user);
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("上传失败");
 
@@ -173,6 +185,7 @@ describe("新建作文批改", () => {
       new File(["image"], "versioned.jpg", { type: "image/jpeg" }),
     );
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await confirmPrivacy(user);
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("处理失败");
 

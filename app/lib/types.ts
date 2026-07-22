@@ -25,6 +25,7 @@ export interface ReviewView {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  expiresAt?: string | null;
   images: ReviewImageView[];
   annotations: Annotation[];
   hasPdf: boolean;

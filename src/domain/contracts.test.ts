@@ -4,6 +4,7 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   createEvaluationReportSchema,
+  privacyUploadConsentSchema,
 } from "./contracts";
 import { deriveLevel, validateReport } from "./report-validation";
 
@@ -46,6 +47,17 @@ describe("assignmentConfigSchema", () => {
 
     expect(config.grade).toBe("上海五四学制六年级");
     expect(config.targetCharacters).toBe(600);
+  });
+});
+
+describe("privacyUploadConsentSchema", () => {
+  it("只接受当前版本的明确确认", () => {
+    expect(privacyUploadConsentSchema.parse({ confirmed: true, version: "2026-07-22" })).toEqual({
+      confirmed: true,
+      version: "2026-07-22",
+    });
+    expect(() => privacyUploadConsentSchema.parse({ confirmed: false, version: "2026-07-22" })).toThrow();
+    expect(() => privacyUploadConsentSchema.parse({ confirmed: true, version: "old" })).toThrow();
   });
 });
 

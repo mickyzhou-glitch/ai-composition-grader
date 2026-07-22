@@ -17,6 +17,23 @@ function reviewDate(value: string) {
     : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(date);
 }
 
+function expiryNotice(value: string | null) {
+  if (!value) return "尚未上传图片；草稿会在创建 24 小时后自动清理";
+  const expiry = new Date(value);
+  if (Number.isNaN(expiry.valueOf())) return "到期时间未知";
+  const remainingDays = Math.max(0, Math.ceil((expiry.valueOf() - Date.now()) / (24 * 60 * 60 * 1000)));
+  const date = new Intl.DateTimeFormat("zh-CN", {
+    year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Shanghai",
+  }).format(expiry);
+  return `将于 ${date} 自动永久删除（剩余 ${remainingDays} 天）`;
+}
+
+function expiresSoon(value: string | null | undefined) {
+  if (!value) return false;
+  const timestamp = new Date(value).valueOf();
+  return Number.isFinite(timestamp) && timestamp - Date.now() <= 3 * 24 * 60 * 60 * 1000;
+}
+
 export default function Home() {
   const [reviews, setReviews] = useState<ReviewView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,7 +69,7 @@ export default function Home() {
   }), [reviews]);
 
   async function remove(review: ReviewView) {
-    if (!window.confirm(`确认删除《${review.config.title}》？此操作无法撤销。`)) return;
+    if (!window.confirm(`确认永久删除《${review.config.title}》？删除后不可恢复。`)) return;
     setDeleting(review.id);
     setError("");
     try {
@@ -120,6 +137,7 @@ export default function Home() {
                   <div className="history-meta"><StatusBadge status={review.status} /><time>{reviewDate(review.updatedAt ?? review.createdAt)}</time></div>
                   <h3><Link href={`/reviews/${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
                   <p>{review.report ? `${review.report.scores.total} 分 · ${review.report.scores.level}` : "尚未生成评分"}</p>
+                  <p className={expiresSoon(review.expiresAt) ? "expiry-notice expiry-notice--urgent" : "muted"}>{expiryNotice(review.expiresAt ?? null)}</p>
                 </div>
                 <div className="card-actions">
                   <Link className="button button--quiet" href={`/reviews/${encodeURIComponent(review.id)}`}>进入复核</Link>

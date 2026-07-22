@@ -25,6 +25,7 @@ const review = {
   },
   hasPdf: false,
   pdfFilename: null,
+  expiresAt: "2026-08-19T08:00:00.000Z",
 };
 
 function json(data: unknown, status = 200) {
@@ -58,6 +59,15 @@ describe("复核页", () => {
     });
     return vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
   }
+
+  it("复核与导出入口持续显示自动删除期限", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+
+    expect(await screen.findByRole("note")).toHaveTextContent("导出 PDF 不会延长保存期限");
+  });
 
   it("保存时 PATCH 完整 report 与 annotations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")

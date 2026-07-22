@@ -11,6 +11,7 @@ const review = {
   report: { scores: { total: 36, level: "优秀作文" } },
   createdAt: "2026-07-20T08:00:00.000Z",
   updatedAt: "2026-07-20T08:00:00.000Z",
+  expiresAt: "2026-08-19T08:00:00.000Z",
   hasPdf: false,
   pdfFilename: null,
 };
@@ -59,8 +60,16 @@ describe("历史首页", () => {
 
     await user.click(screen.getByRole("button", { name: "删除《为自己鼓掌》" }));
 
+    expect(window.confirm).toHaveBeenCalledWith("确认永久删除《为自己鼓掌》？删除后不可恢复。");
     await waitFor(() => expect(screen.queryByText("36 分 · 优秀作文")).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenLastCalledWith("/api/reviews/review-1", { method: "DELETE" });
+  });
+
+  it("历史显示上传后的自动永久删除日期", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([review]));
+    render(<Home />);
+
+    expect(await screen.findByText(/自动永久删除（剩余/)).toBeInTheDocument();
   });
 
   it("没有记录时显示直接新建的空状态", async () => {

@@ -4,7 +4,11 @@ import path from "node:path";
 import sharp from "sharp";
 import { z } from "zod";
 
-import { normalizedCropSchema, type NormalizedCrop } from "../domain/contracts";
+import {
+  normalizedCropSchema,
+  type NormalizedCrop,
+  type PrivacyUploadConsent,
+} from "../domain/contracts";
 import {
   RevisionConflictError,
   type ReviewImage,
@@ -43,6 +47,7 @@ export interface ImageRepository {
     reviewId: string,
     expectedRevision: number,
     images: ReviewImageInput[],
+    options?: { privacyConsent?: PrivacyUploadConsent },
   ): { images: ReviewImage[]; revision: number };
 }
 
@@ -251,12 +256,23 @@ export class ImageService {
     this.lock = options.lock ?? new InMemoryReviewLock();
   }
 
-  async upload(ownerId: string, reviewId: string, expectedRevision: number, files: UploadedImage[]) {
+  async upload(
+    ownerId: string,
+    reviewId: string,
+    expectedRevision: number,
+    files: UploadedImage[],
+    privacyConsent?: PrivacyUploadConsent,
+  ) {
     return this.lock.runExclusive(reviewId, () =>
       this.fileStore.withReviewLock(ownerId, reviewId, () =>
-        this.uploadExclusive(ownerId, reviewId, expectedRevision, files),
+        this.uploadExclusive(ownerId, reviewId, expectedRevision, files, privacyConsent),
       ),
     );
+  }
+
+  requiresPrivacyConfirmation(ownerId: string, reviewId: string): boolean {
+    const review = this.repository.getById(ownerId, reviewId);
+    return review?.images.length === 0;
   }
 
   private async uploadExclusive(
@@ -264,6 +280,7 @@ export class ImageService {
     reviewId: string,
     expectedRevision: number,
     files: UploadedImage[],
+    privacyConsent?: PrivacyUploadConsent,
   ) {
     const review = this.repository.getById(ownerId, reviewId);
     if (!review) {
@@ -319,6 +336,7 @@ export class ImageService {
       prepared,
       review.images,
       review.pdfFilename,
+      privacyConsent,
     );
   }
 
@@ -432,6 +450,7 @@ export class ImageService {
     prepared: PreparedImageVersion[],
     previous: ReviewImage[],
     previousPdfFilename?: string | null,
+    privacyConsent?: PrivacyUploadConsent,
   ) {
     const written: string[] = [];
     let saved: { images: ReviewImage[]; revision: number };
@@ -453,6 +472,7 @@ export class ImageService {
         reviewId,
         expectedRevision,
         prepared.map(({ record }) => record),
+        { privacyConsent },
       );
     } catch (error) {
       await Promise.allSettled(

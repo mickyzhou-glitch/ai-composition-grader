@@ -170,6 +170,7 @@ textarea { min-height: 100px; resize: vertical; }
 .template-mark { display: grid; position: absolute; top: 12px; right: 12px; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: var(--red-soft); color: var(--red); font-weight: 800; }
 .assignment-preview, .privacy-note { padding: 16px 18px; border-radius: 10px; background: #faf5ed; color: var(--muted); }
 .assignment-preview p:last-child, .privacy-note { margin-bottom: 0; }
+.expiry-notice--urgent { color: var(--red); font-weight: 700; }
 .form-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin: 24px 0; }
 .form-grid label { display: grid; gap: 7px; font-size: .88rem; font-weight: 700; }
 .form-grid .wide { grid-column: 1 / -1; }

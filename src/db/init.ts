@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   exported_at INTEGER,
   expires_at INTEGER,
   deleting_at INTEGER,
+  privacy_consent_version TEXT,
+  privacy_consented_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -206,6 +208,8 @@ function migrateReviews(database: Database.Database): void {
     ["exported_at", "INTEGER"],
     ["expires_at", "INTEGER"],
     ["deleting_at", "INTEGER"],
+    ["privacy_consent_version", "TEXT"],
+    ["privacy_consented_at", "INTEGER"],
   ];
 
   for (const [name, definition] of additions) {
@@ -251,17 +255,19 @@ function migrateReviews(database: Database.Database): void {
         exported_at INTEGER,
         expires_at INTEGER,
         deleting_at INTEGER,
+        privacy_consent_version TEXT,
+        privacy_consented_at INTEGER,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
       INSERT INTO reviews_owner_migration (
         id, owner_id, status, config, report, revision, analysis_run_id,
         pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
-        deleting_at, created_at, updated_at
+        deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       )
       SELECT id, owner_id, status, config, report, revision, analysis_run_id,
         pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
-        deleting_at, created_at, updated_at
+        deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       FROM reviews;
       DROP TABLE reviews;
       ALTER TABLE reviews_owner_migration RENAME TO reviews;

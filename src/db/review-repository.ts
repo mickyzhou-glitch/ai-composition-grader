@@ -10,6 +10,7 @@ import {
   type AssignmentConfig,
   type EvaluationReport,
   type NormalizedCrop,
+  type PrivacyUploadConsent,
   type ReviewStatus,
   EMPTY_DRAFT_RETENTION_MS,
   reviewExpiryAt,
@@ -51,6 +52,8 @@ export interface ReviewRecord {
   exportedAt: Date | null;
   expiresAt?: Date | null;
   deletingAt?: Date | null;
+  privacyConsentVersion?: string | null;
+  privacyConsentedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
   images: ReviewImage[];
@@ -78,6 +81,10 @@ export interface TeacherReviewEdits {
   config?: AssignmentConfig;
   report?: EvaluationReport;
   annotations?: Annotation[];
+}
+
+export interface ReplaceImagesOptions {
+  privacyConsent?: PrivacyUploadConsent;
 }
 
 export interface AnalysisToken {
@@ -216,6 +223,8 @@ export class ReviewRepository {
         exportedAt: null,
         expiresAt: images.length > 0 ? reviewExpiryAt(now) : null,
         deletingAt: null,
+        privacyConsentVersion: null,
+        privacyConsentedAt: null,
         createdAt: now,
         updatedAt: now,
       }).run();
@@ -255,6 +264,8 @@ export class ReviewRepository {
         exportedAt: reviews.exportedAt,
         expiresAt: reviews.expiresAt,
         deletingAt: reviews.deletingAt,
+        privacyConsentVersion: reviews.privacyConsentVersion,
+        privacyConsentedAt: reviews.privacyConsentedAt,
         createdAt: reviews.createdAt,
         updatedAt: reviews.updatedAt,
       })
@@ -534,6 +545,7 @@ export class ReviewRepository {
     id: string,
     expectedRevision: number,
     input: ReviewImageInput[],
+    options: ReplaceImagesOptions = {},
   ): ReviewRecord {
     const images = input.map(validateImage);
     const now = this.now();
@@ -551,6 +563,10 @@ export class ReviewRepository {
       };
       if (images.length > 0) {
         updateValues.expiresAt = sql`coalesce(${reviews.expiresAt}, ${reviewExpiryAt(now).valueOf()})`;
+        if (options.privacyConsent) {
+          updateValues.privacyConsentVersion = sql`coalesce(${reviews.privacyConsentVersion}, ${options.privacyConsent.version})`;
+          updateValues.privacyConsentedAt = sql`coalesce(${reviews.privacyConsentedAt}, ${now.valueOf()})`;
+        }
       }
       const update = transaction
         .update(reviews)
