@@ -39,15 +39,14 @@
 .eyebrow { margin-bottom: 2mm; color: var(--red); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
 .summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
 .summaryGrid { display: grid; grid-template-columns: 44mm 1fr; gap: 8mm; margin-bottom: 12mm; }
-.totalScore, .overallComment, .assignmentInfo, .card, .sampleParagraph {
+.levelBadge, .overallComment, .assignmentInfo, .card, .sampleParagraph {
   border: .25mm solid var(--line);
   background: var(--paper);
   break-inside: avoid;
 }
-.totalScore { display: grid; min-height: 48mm; padding: 6mm; place-content: center; border-top: 1.2mm solid var(--red); text-align: center; }
-.totalScore strong { color: var(--red); font: 700 40pt/1 STKaiti, KaiTi, serif; }
-.totalScore span { color: var(--muted); }
-.totalScore b { margin-top: 2mm; }
+.levelBadge { display: grid; min-height: 48mm; padding: 6mm; place-content: center; border-top: 1.2mm solid var(--red); text-align: center; }
+.levelBadge span { color: var(--muted); font-size: 8pt; }
+.levelBadge b { margin-top: 2mm; color: var(--ink); font: 700 19pt/1.2 STKaiti, KaiTi, serif; }
 .overallComment { padding: 7mm; border-left: 1.2mm solid var(--red); }
 .overallComment h2 { margin-bottom: 3mm; }
 .overallComment p { margin-bottom: 0; font-size: 13pt; }
@@ -89,7 +88,7 @@
 .sampleParagraph { margin: 4mm 0; padding: 5mm 6mm; }
 .sampleParagraph h3 { margin-bottom: 2mm; color: var(--red); }
 .sampleText { margin-bottom: 3mm; white-space: pre-wrap; }
-.sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--red); background: var(--red-soft); color: var(--red); break-before: avoid; }
+.sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--line); background: #faf7f1; color: var(--ink); break-before: avoid; }
 .sampleSuggestion b { margin-right: 1mm; }
 
 @media print {

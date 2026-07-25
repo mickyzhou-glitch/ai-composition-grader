@@ -87,7 +87,7 @@ const review: ReviewRecord = {
 };
 
 describe("A4 打印稿", () => {
-  it("按总评、逐页红批、分析、分项和示范文顺序组织", () => {
+  it("学生版仅展示等级、总评、诊断与示范文，不展示朱批或分项分数", () => {
     const { container } = render(<PrintReview review={review} />);
 
     expect(container.firstElementChild).toHaveAttribute("data-print-ready", "true");
@@ -97,45 +97,31 @@ describe("A4 打印稿", () => {
       ),
     ).toEqual([
       "summary",
-      "annotated-page-1",
-      "annotated-page-2",
       "theme",
       "pain-points",
       "common-issues",
       "suggestions",
-      "score-breakdown",
       "sample-paragraphs",
     ]);
-    expect(container.querySelectorAll('[data-page-kind="annotation"]')).toHaveLength(2);
+    expect(container.querySelectorAll('[data-page-kind="annotation"]')).toHaveLength(0);
     expect(container.querySelector("footer")).toBeNull();
-    expect(screen.getByLabelText("总分 35 分")).toHaveTextContent("35/ 40");
+    expect(screen.getByLabelText("作文等级")).toHaveTextContent("优秀作文");
+    expect(screen.queryByText("35")).not.toBeInTheDocument();
+    expect(screen.queryByText("逐页红批")).not.toBeInTheDocument();
+    expect(screen.queryByText("分项明细")).not.toBeInTheDocument();
     expect(screen.getByText("细节真实，情感自然。")).toBeInTheDocument();
   });
 
-  it("图片只使用 imageId 安全接口，批注按 pageIndex 和 y 排序并绘制红色引线", () => {
+  it("学生版不渲染作文图片、批注引线或批注正文", () => {
     const { container } = render(<PrintReview review={review} />);
-    const images = screen.getAllByRole("img");
-
-    expect(images[0]).toHaveAttribute(
-      "src",
-      "/api/reviews/review-1/files?imageId=10&variant=annotation",
-    );
-    expect(images[0].getAttribute("src")).not.toContain("private-annotation");
-    expect(images[1]).toHaveAttribute(
-      "src",
-      "/api/reviews/review-1/files?imageId=11&variant=annotation",
-    );
-    expect(
-      Array.from(container.querySelectorAll("[data-annotation-number]")).map(
-        (node) => node.getAttribute("data-annotation-number"),
-      ),
-    ).toEqual(["1", "2", "3"]);
-    expect(container.querySelectorAll("line[data-anchor-line]")).toHaveLength(3);
-    expect(container.querySelectorAll("circle[data-anchor-point]")).toHaveLength(3);
-    expect(screen.getByText("第一条").closest("li")).toHaveTextContent("第一处");
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(container.querySelectorAll("[data-annotation-number]")).toHaveLength(0);
+    expect(container.querySelectorAll("line[data-anchor-line]")).toHaveLength(0);
+    expect(container.querySelectorAll("circle[data-anchor-point]")).toHaveLength(0);
+    expect(screen.queryByText("第一条")).not.toBeInTheDocument();
   });
 
-  it("每个结构化示范段落后紧跟红色修改建议", () => {
+  it("每个结构化示范段落后紧跟修改建议", () => {
     render(<PrintReview review={review} />);
 
     const paragraphs = screen.getAllByTestId("sample-paragraph");
