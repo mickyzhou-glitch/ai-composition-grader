@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
+import type { SavedAssignmentRecord } from "../db/review-repository";
 import type {
   ReviewRecord,
   ReviewRepository,
@@ -157,12 +158,22 @@ export class ReviewService {
     return this.fileStore.withReviewLock(ownerId, id, async () => {
       await this.fileStore.createReview(ownerId, id);
       try {
-        return this.repository.create(ownerId, { id, config });
+        const review = this.repository.create(ownerId, { id, config });
+        if (config.templateType === "custom") this.repository.saveCustomAssignment(ownerId, config);
+        return review;
       } catch (error) {
         await this.fileStore.deleteReview(ownerId, id);
         throw error;
       }
     });
+  }
+
+  listSavedAssignments(ownerId: string): SavedAssignmentRecord[] {
+    return this.repository.listSavedAssignments(ownerId);
+  }
+
+  deleteSavedAssignment(ownerId: string, id: string): void {
+    this.repository.deleteSavedAssignment(ownerId, id);
   }
 
   async update(ownerId: string, id: string, input: TeacherReviewEdits): Promise<ReviewRecord> {

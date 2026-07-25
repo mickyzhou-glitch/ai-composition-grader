@@ -1,4 +1,5 @@
 import { and, desc, eq, gt, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
 import {
@@ -17,7 +18,7 @@ import {
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import type { AppDatabase } from "./client";
-import { analysisJobs, annotations, reviewImages, reviews } from "./schema";
+import { analysisJobs, annotations, reviewImages, reviews, savedAssignments } from "./schema";
 
 export interface ReviewImageInput {
   position: number;
@@ -102,6 +103,14 @@ export interface ExportedPdfInput {
   pdfFilename: string;
   pdfPath: string;
   exportedAt: Date;
+}
+
+export interface SavedAssignmentRecord {
+  id: string;
+  ownerId: string;
+  config: AssignmentConfig;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 interface ReviewRepositoryOptions {
@@ -247,6 +256,49 @@ export class ReviewRepository {
 
   createReview(ownerId: string, input: CreateReviewInput): ReviewRecord {
     return this.create(ownerId, input);
+  }
+
+  listSavedAssignments(ownerId: string): SavedAssignmentRecord[] {
+    return this.database
+      .select()
+      .from(savedAssignments)
+      .where(eq(savedAssignments.ownerId, ownerId))
+      .orderBy(desc(savedAssignments.updatedAt))
+      .all()
+      .map((assignment) => ({
+        ...assignment,
+        config: assignmentConfigSchema.parse(assignment.config),
+      }));
+  }
+
+  saveCustomAssignment(ownerId: string, input: AssignmentConfig): SavedAssignmentRecord {
+    const config = assignmentConfigSchema.parse(input);
+    if (config.templateType !== "custom") throw new TypeError("only custom assignments can be saved");
+    const now = this.now();
+    const title = config.title.trim();
+    this.database
+      .insert(savedAssignments)
+      .values({ id: randomUUID(), ownerId, title, config: { ...config, title }, createdAt: now, updatedAt: now })
+      .onConflictDoUpdate({
+        target: [savedAssignments.ownerId, savedAssignments.title],
+        set: { config: { ...config, title }, updatedAt: now },
+      })
+      .run();
+    const assignment = this.database
+      .select()
+      .from(savedAssignments)
+      .where(and(eq(savedAssignments.ownerId, ownerId), eq(savedAssignments.title, title)))
+      .get();
+    if (!assignment) throw new Error("saved assignment was not found after saving");
+    return { ...assignment, config: assignmentConfigSchema.parse(assignment.config) };
+  }
+
+  deleteSavedAssignment(ownerId: string, id: string): void {
+    const result = this.database
+      .delete(savedAssignments)
+      .where(and(eq(savedAssignments.ownerId, ownerId), eq(savedAssignments.id, id)))
+      .run();
+    if (result.changes === 0) throw new ReviewNotFoundError(id);
   }
 
   getById(ownerId: string, id: string): ReviewRecord | null {

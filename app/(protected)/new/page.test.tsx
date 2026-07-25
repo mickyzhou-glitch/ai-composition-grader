@@ -48,7 +48,7 @@ describe("新建作文批改", () => {
   });
 
   it("自定义题目可用 AI 先生成写作、结构与评分要求，且保留可编辑性", async () => {
-    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json({
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([])).mockImplementationOnce(() => json({
       writingRequirements: "选择一件真实小事，写清变化。",
       structureRequirements: "开头设置情境，中间展开经过，结尾回扣题目。",
       scoringFocus: "事件具体，细节真实，感受自然。",
@@ -90,6 +90,7 @@ describe("新建作文批改", () => {
   it("按调整后的三图顺序上传，并提交旋转和裁剪", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json([]))
       .mockImplementationOnce(() => json({ id: "review-new", revision: 0 }, 201))
       .mockImplementationOnce(() =>
         json({ images: [
@@ -123,10 +124,10 @@ describe("新建作文批改", () => {
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews/review-new"));
-    const reviewRequest = fetchMock.mock.calls[0];
+    const reviewRequest = fetchMock.mock.calls[1];
     expect(reviewRequest[0]).toBe("/api/reviews");
     expect(JSON.parse((reviewRequest[1] as RequestInit).body as string).config.title).toBe("为自己鼓掌");
-    const uploaded = (fetchMock.mock.calls[1][1] as RequestInit).body as FormData;
+    const uploaded = (fetchMock.mock.calls[2][1] as RequestInit).body as FormData;
     expect(uploaded.get("expectedRevision")).toBe("0");
     expect(uploaded.get("privacyConfirmed")).toBe("true");
     expect(uploaded.get("privacyNoticeVersion")).toBe("2026-07-22");
@@ -135,7 +136,7 @@ describe("新建作文批改", () => {
       "三.jpg",
       "二.jpg",
     ]);
-    const transforms = JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string);
+    const transforms = JSON.parse((fetchMock.mock.calls[3][1] as RequestInit).body as string);
     expect(transforms.expectedRevision).toBe(1);
     expect(transforms.images[2]).toMatchObject({ id: 13, position: 2, rotation: 90 });
     expect(transforms.images[2].crop.x).toBe(0.1);
@@ -144,6 +145,7 @@ describe("新建作文批改", () => {
   it("上传失败后改题重试会先 PATCH 最新配置，再上传图片", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json([]))
       .mockImplementationOnce(() => json({ id: "review-retry", revision: 0 }, 201))
       .mockImplementationOnce(() => json({ code: "UPLOAD_FAILED", message: "上传失败" }, 502))
       .mockImplementationOnce(() => json({ id: "review-retry", revision: 1 }))
@@ -191,6 +193,7 @@ describe("新建作文批改", () => {
   it("图片后续接口返回新版本时，重试配置同步使用最新版本", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json([]))
       .mockImplementationOnce(() => json({ id: "review-versioned", revision: 0 }, 201))
       .mockImplementationOnce(() => json({ images: [{ id: 41, position: 0 }], revision: 1 }))
       .mockImplementationOnce(() => json({ code: "TRANSFORM_FAILED", message: "处理失败" }, 502))
@@ -211,9 +214,9 @@ describe("新建作文批改", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("处理失败");
 
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
 
-    const retryConfig = fetchMock.mock.calls[3];
+    const retryConfig = fetchMock.mock.calls[4];
     expect(retryConfig[0]).toBe("/api/reviews/review-versioned");
     expect(JSON.parse((retryConfig[1] as RequestInit).body as string)).toMatchObject({
       expectedRevision: 1,

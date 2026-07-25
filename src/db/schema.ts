@@ -78,6 +78,22 @@ export const reviews = sqliteTable(
   ],
 );
 
+export const savedAssignments = sqliteTable(
+  "saved_assignments",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    title: text("title").notNull(),
+    config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("saved_assignments_owner_title_unique_idx").on(table.ownerId, table.title),
+    index("saved_assignments_owner_updated_at_idx").on(table.ownerId, table.updatedAt),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

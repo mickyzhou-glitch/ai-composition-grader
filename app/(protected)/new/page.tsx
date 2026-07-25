@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import {
   PRIVACY_NOTICE_VERSION,
@@ -51,6 +51,11 @@ interface AssignmentGuidance {
   scoringFocus: string;
 }
 
+interface SavedAssignment {
+  id: string;
+  config: AssignmentConfig;
+}
+
 function asCrop(edges: CropEdges): NormalizedCrop | null {
   const { left, top, right, bottom } = edges;
   if (left === 0 && top === 0 && right === 0 && bottom === 0) return null;
@@ -83,6 +88,24 @@ export default function NewReviewPage() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [guidanceBusy, setGuidanceBusy] = useState(false);
+  const [savedAssignments, setSavedAssignments] = useState<SavedAssignment[]>([]);
+  const [savedAssignmentsLoaded, setSavedAssignmentsLoaded] = useState(false);
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    void apiFetch<SavedAssignment[]>("/api/saved-assignments")
+      .then((assignments) => {
+        if (active) setSavedAssignments(assignments);
+      })
+      .catch(() => {
+        // The core new-review flow remains usable if saved templates are unavailable.
+      })
+      .finally(() => {
+        if (active) setSavedAssignmentsLoaded(true);
+      });
+    return () => { active = false; };
+  }, []);
 
   function updateConfig<K extends keyof AssignmentConfig>(key: K, value: AssignmentConfig[K]) {
     setConfig((current) => ({ ...current, [key]: value }));
@@ -110,6 +133,19 @@ export default function NewReviewPage() {
       setError(`${errorMessage(caught)}。请检查 AI 设置后重试。`);
     } finally {
       setGuidanceBusy(false);
+    }
+  }
+
+  async function deleteSavedAssignment(id: string) {
+    setDeletingAssignmentId(id);
+    setError("");
+    try {
+      await apiFetch(`/api/saved-assignments/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setSavedAssignments((current) => current.filter((assignment) => assignment.id !== id));
+    } catch (caught) {
+      setError(`${errorMessage(caught)}。暂时无法删除该题目。`);
+    } finally {
+      setDeletingAssignmentId(null);
     }
   }
 
@@ -239,6 +275,22 @@ export default function NewReviewPage() {
                 <span className="template-mark" aria-hidden="true">+</span><strong>自定义题目</strong><small>自行设置年级、结构与评分重点</small>
               </button>
             </div>
+            {savedAssignments.length ? (
+              <section className="saved-assignments" aria-labelledby="saved-assignment-heading">
+                <div className="saved-assignment-heading"><div><p className="eyebrow">常用题目</p><h3 id="saved-assignment-heading">已保存的自定义题目</h3></div><small>选择后可继续修改</small></div>
+                <div className="saved-assignment-list">
+                  {savedAssignments.map((assignment) => (
+                    <article className="saved-assignment-card" key={assignment.id}>
+                      <button type="button" className="saved-assignment-select" aria-label={`使用已保存题目${assignment.config.title}`} onClick={() => { setConfig({ ...assignment.config, templateType: "custom" }); setError(""); }}>
+                        <strong>{assignment.config.title}</strong><small>{assignment.config.grade} · {assignment.config.targetCharacters} 字</small>
+                        <span>{assignment.config.writingRequirements}</span>
+                      </button>
+                      <button type="button" className="saved-assignment-delete" aria-label={`删除已保存题目${assignment.config.title}`} disabled={deletingAssignmentId === assignment.id} onClick={() => void deleteSavedAssignment(assignment.id)}>{deletingAssignmentId === assignment.id ? "删除中…" : "删除"}</button>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ) : savedAssignmentsLoaded ? <p className="saved-assignment-empty">完成一次自定义题目批改后，题目要求会自动保存在这里。</p> : null}
             {config.templateType === "custom" ? (
               <div className="form-grid">
                 <label>作文题目<input value={config.title} onChange={(event) => updateConfig("title", event.target.value)} /></label>

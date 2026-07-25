@@ -352,6 +352,29 @@ export function createReviewsRouteHandlers(dependencies: {
   };
 }
 
+export function createSavedAssignmentsRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "listSavedAssignments" | "deleteSavedAssignment">;
+  ownerId: string;
+}) {
+  return {
+    async GET() {
+      try {
+        return ok(dependencies.reviewService.listSavedAssignments(dependencies.ownerId));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+    async DELETE(_request: Request, context: RouteContext) {
+      try {
+        await dependencies.reviewService.deleteSavedAssignment(dependencies.ownerId, (await context.params).id);
+        return ok({ deleted: true });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
 export function createReviewRouteHandlers(dependencies: {
   reviewService: ReviewService;
   ownerId: string;

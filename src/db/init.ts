@@ -55,6 +55,19 @@ CREATE TABLE IF NOT EXISTS settings (
   updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 );
 
+CREATE TABLE IF NOT EXISTS saved_assignments (
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  config TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(owner_id, title)
+);
+
+CREATE INDEX IF NOT EXISTS saved_assignments_owner_updated_at_idx
+  ON saved_assignments(owner_id, updated_at);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
