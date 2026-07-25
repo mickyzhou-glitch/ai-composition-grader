@@ -55,6 +55,13 @@
 .assignmentInfo dt { color: var(--muted); font-size: 8pt; }
 .assignmentInfo dd { margin: 1mm 0 0; }
 
+.feedbackPage { display: grid; grid-template-rows: auto 1fr; padding-top: 2mm; }
+.feedbackHeading { margin-bottom: 4mm; }
+.feedbackHeading h2 { margin-bottom: 0; }
+.feedbackLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr); gap: 4mm; align-items: start; }
+.sampleColumn, .annotationNotes { min-width: 0; padding: 4mm; border: .25mm solid var(--line); background: var(--paper); }
+.sampleColumn > h3, .annotationNotes > h3 { margin-bottom: 4mm; color: var(--ink); font-size: 12pt; }
+
 .annotationPage { display: grid; grid-template-rows: auto 1fr; padding-top: 2mm; }
 .pageHeading { margin-bottom: 4mm; }
 .pageHeading h2 { margin-bottom: 0; }
@@ -65,11 +72,11 @@
 .annotationOverlay line { stroke: var(--red); stroke-width: .45; vector-effect: non-scaling-stroke; }
 .annotationOverlay circle { fill: var(--red); stroke: white; stroke-width: .55; vector-effect: non-scaling-stroke; }
 .annotationOverlay text { fill: white; font-size: 2.2px; font-weight: 800; dominant-baseline: central; text-anchor: middle; }
-.annotationNotes { min-width: 0; }
+.annotationOverlay rect { fill: rgba(187, 132, 34, .08); stroke: #9b6a1c; stroke-width: .75; vector-effect: non-scaling-stroke; }
 .annotationNotes ol { display: grid; gap: 3mm; margin: 0; padding: 0; list-style: none; }
-.annotationNotes li { display: grid; grid-template-columns: 7mm minmax(0, 1fr); gap: 2mm; padding-bottom: 3mm; border-bottom: .2mm solid #ebc9c5; break-inside: avoid; }
-.annotationNotes li > span { display: grid; width: 6mm; height: 6mm; place-items: center; border-radius: 50%; background: var(--red); color: white; font-size: 7pt; font-weight: 800; }
-.annotationNotes b { color: var(--red); overflow-wrap: anywhere; }
+.annotationNotes li { display: grid; grid-template-columns: 7mm minmax(0, 1fr); gap: 2mm; padding-bottom: 3mm; border-bottom: .2mm solid var(--line); break-inside: avoid; }
+.annotationNotes li > span { display: grid; width: 6mm; height: 6mm; place-items: center; border-radius: 50%; background: #9b6a1c; color: white; font-size: 7pt; font-weight: 800; }
+.annotationNotes b { color: var(--ink); overflow-wrap: anywhere; }
 .annotationNotes p { margin: 1mm 0 0; overflow-wrap: anywhere; }
 .muted { color: var(--muted); }
 
@@ -85,9 +92,10 @@
 .scoreTable td { text-align: right; }
 .totalRow { color: var(--red); font-weight: 800; }
 .samples { padding: 0; }
-.sampleParagraph { margin: 4mm 0; padding: 5mm 6mm; }
-.sampleParagraph h3 { margin-bottom: 2mm; color: var(--red); }
-.sampleText { margin-bottom: 3mm; white-space: pre-wrap; }
+.sampleParagraph { margin: 0 0 4mm; padding: 0 0 3mm; border: 0; border-bottom: .2mm solid var(--line); background: transparent; }
+.sampleParagraph:last-child { margin-bottom: 0; border-bottom: 0; }
+.sampleParagraph h4 { margin: 0 0 2mm; color: #9b6a1c; font-size: 9pt; }
+.sampleText { margin-bottom: 0; white-space: pre-wrap; }
 .sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--line); background: #faf7f1; color: var(--ink); break-before: avoid; }
 .sampleSuggestion b { margin-right: 1mm; }
 

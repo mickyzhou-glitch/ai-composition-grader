@@ -29,5 +29,14 @@ export default async function PrintReviewPage({
     throw error;
   }
   if (!review.report || review.images.length === 0) notFound();
-  return <PrintReview review={review} />;
+  const imageSources = await Promise.all(review.images.map(async (image) => {
+    const file = await getApplicationServices().reviewService.readImageFile(
+      token.ownerId,
+      id,
+      image.id,
+      "original",
+    );
+    return `data:${file.contentType};base64,${file.data.toString("base64")}`;
+  }));
+  return <PrintReview review={review} imageSources={imageSources} />;
 }

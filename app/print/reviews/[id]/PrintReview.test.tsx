@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { ReviewRecord } from "@/src/db/review-repository";
@@ -87,8 +87,8 @@ const review: ReviewRecord = {
 };
 
 describe("A4 打印稿", () => {
-  it("学生版仅展示等级、总评、诊断与示范文，不展示朱批或分项分数", () => {
-    const { container } = render(<PrintReview review={review} />);
+  it("按总评和逐页三栏反馈组织，只展示等级而不展示分项分数", () => {
+    const { container } = render(<PrintReview review={review} imageSources={["data:image/jpeg;base64,one", "data:image/jpeg;base64,two"]} />);
 
     expect(container.firstElementChild).toHaveAttribute("data-print-ready", "true");
     expect(
@@ -97,13 +97,10 @@ describe("A4 打印稿", () => {
       ),
     ).toEqual([
       "summary",
-      "theme",
-      "pain-points",
-      "common-issues",
-      "suggestions",
-      "sample-paragraphs",
+      "feedback-page-1",
+      "feedback-page-2",
     ]);
-    expect(container.querySelectorAll('[data-page-kind="annotation"]')).toHaveLength(0);
+    expect(container.querySelectorAll('[data-page-kind="feedback"]')).toHaveLength(2);
     expect(container.querySelector("footer")).toBeNull();
     expect(screen.getByLabelText("作文等级")).toHaveTextContent("优秀作文");
     expect(screen.queryByText("35")).not.toBeInTheDocument();
@@ -112,27 +109,28 @@ describe("A4 打印稿", () => {
     expect(screen.getByText("细节真实，情感自然。")).toBeInTheDocument();
   });
 
-  it("学生版不渲染作文图片、批注引线或批注正文", () => {
-    const { container } = render(<PrintReview review={review} />);
-    expect(screen.queryByRole("img")).toBeNull();
-    expect(container.querySelectorAll("[data-annotation-number]")).toHaveLength(0);
-    expect(container.querySelectorAll("line[data-anchor-line]")).toHaveLength(0);
-    expect(container.querySelectorAll("circle[data-anchor-point]")).toHaveLength(0);
-    expect(screen.queryByText("第一条")).not.toBeInTheDocument();
+  it("逐页居中放原作文，用问题框和右侧建议对应问题，左侧分配示范文章", () => {
+    const { container } = render(<PrintReview review={review} imageSources={["data:image/jpeg;base64,one", "data:image/jpeg;base64,two"]} />);
+    const images = screen.getAllByRole("img");
+    expect(images).toHaveLength(2);
+    expect(images[0]).toHaveAttribute("src", "data:image/jpeg;base64,one");
+    expect(images[1]).toHaveAttribute("src", "data:image/jpeg;base64,two");
+    expect(container.querySelectorAll("[data-issue-box]")).toHaveLength(3);
+    expect(Array.from(container.querySelectorAll("[data-annotation-number]")).map((node) => node.getAttribute("data-annotation-number"))).toEqual(["1", "2", "3"]);
+    expect(screen.getByLabelText("第 1 页示范文章")).toHaveTextContent("第 1 段示范正文");
+    expect(screen.getByLabelText("第 2 页示范文章")).toHaveTextContent("第 5 段示范正文");
+    expect(screen.getByText("第一条").closest("li")).toHaveTextContent("第一处");
   });
 
-  it("每个结构化示范段落后紧跟修改建议", () => {
-    render(<PrintReview review={review} />);
+  it("完整示范文分配在左侧栏，修改建议只在原文右侧呈现", () => {
+    render(<PrintReview review={review} imageSources={["data:image/jpeg;base64,one", "data:image/jpeg;base64,two"]} />);
 
     const paragraphs = screen.getAllByTestId("sample-paragraph");
     expect(paragraphs).toHaveLength(5);
     paragraphs.forEach((paragraph, index) => {
-      const scoped = within(paragraph);
-      expect(scoped.getByRole("heading", { name: `第 ${index + 1} 段` })).toBeInTheDocument();
-      const text = scoped.getByText(`第 ${index + 1} 段示范正文`);
-      const suggestion = scoped.getByText(`第 ${index + 1} 段红色修改建议`);
-      expect(text.compareDocumentPosition(suggestion) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(suggestion).toHaveAttribute("data-suggestion", "true");
+      expect(paragraph).toHaveTextContent(`第 ${index + 1} 段`);
+      expect(paragraph).toHaveTextContent(`第 ${index + 1} 段示范正文`);
+      expect(paragraph).not.toHaveTextContent(`第 ${index + 1} 段红色修改建议`);
     });
   });
 });

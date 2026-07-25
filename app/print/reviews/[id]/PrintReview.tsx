@@ -1,40 +1,27 @@
+import type { Annotation } from "@/src/domain/contracts";
 import type { ReviewRecord } from "@/src/db/review-repository";
 
 import styles from "./print.module.css";
 
-const themeLabels = {
-  fits: "切题",
-  partial: "部分切题",
-  off_topic: "偏题",
-} as const;
-
-function ListSection({
-  title,
-  items,
-  section,
-}: {
-  title: string;
-  items: string[];
-  section: string;
-}) {
-  return (
-    <section className={styles.card} data-print-section={section}>
-      <h2>{title}</h2>
-      {items.length ? (
-        <ul className={styles.textList}>
-          {items.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}
-        </ul>
-      ) : <p className={styles.muted}>暂无</p>}
-    </section>
-  );
+function orderedAnnotations(annotations: Annotation[]) {
+  return [...annotations]
+    .sort((left, right) =>
+      left.pageIndex - right.pageIndex || left.y - right.y || left.x - right.x,
+    )
+    .map((annotation, index) => ({ annotation, number: index + 1 }));
 }
 
-export function PrintReview({ review }: { review: ReviewRecord }) {
+function sampleParagraphsForPage<T>(paragraphs: T[], pageIndex: number, pageCount: number): T[] {
+  return paragraphs.filter((_, index) => Math.floor((index * pageCount) / paragraphs.length) === pageIndex);
+}
+
+export function PrintReview({ review, imageSources }: { review: ReviewRecord; imageSources: string[] }) {
   if (!review.report || review.images.length === 0) {
     throw new TypeError("print review requires report and images");
   }
 
   const report = review.report;
+  const numbered = orderedAnnotations(review.annotations);
   return (
     <article className={styles.document} data-print-ready="true">
       <header className={styles.runningHeader} aria-hidden="true">
@@ -66,31 +53,68 @@ export function PrintReview({ review }: { review: ReviewRecord }) {
         </dl>
       </section>
 
-      <div className={styles.analysisPages} data-page-kind="analysis">
-        <section className={`${styles.card} ${styles.themeCard}`} data-print-section="theme">
-          <div>
-            <p className={styles.eyebrow}>主题判断</p>
-            <h2>{themeLabels[report.themeFit]}</h2>
-          </div>
-          <p>{report.themeReason}</p>
-        </section>
-        <ListSection title="核心痛点" items={report.painPoints} section="pain-points" />
-        <ListSection title="共性问题" items={report.commonIssues} section="common-issues" />
-        <ListSection title="修改建议" items={report.revisionSuggestions} section="suggestions" />
-        <section className={styles.samples} data-print-section="sample-paragraphs">
-          <p className={styles.eyebrow}>示范文</p>
-          <h2>逐段修改示范</h2>
-          {report.sampleParagraphs.map((paragraph, index) => (
-            <article className={styles.sampleParagraph} data-testid="sample-paragraph" key={`${index}-${paragraph.title}`}>
-              <h3>{paragraph.title}</h3>
-              <p className={styles.sampleText}>{paragraph.text}</p>
-              <p className={styles.sampleSuggestion} data-suggestion="true">
-                <b>修改建议：</b>{paragraph.suggestion}
-              </p>
-            </article>
-          ))}
-        </section>
-      </div>
+      {review.images.map((image, pageIndex) => {
+        const pageAnnotations = numbered.filter(({ annotation }) => annotation.pageIndex === image.position);
+        const samples = sampleParagraphsForPage(report.sampleParagraphs, pageIndex, review.images.length);
+        return (
+          <section
+            className={`${styles.sheet} ${styles.feedbackPage}`}
+            data-page-kind="feedback"
+            data-print-section={`feedback-page-${pageIndex + 1}`}
+            key={image.id}
+          >
+            <div className={styles.feedbackHeading}>
+              <p className={styles.eyebrow}>逐页学习反馈</p>
+              <h2>第 {pageIndex + 1} 页：原文、示范与修改建议</h2>
+            </div>
+            <div className={styles.feedbackLayout}>
+              <aside className={styles.sampleColumn} aria-label={`第 ${pageIndex + 1} 页示范文章`}>
+                <h3>示范文章</h3>
+                {samples.map((paragraph, index) => (
+                  <article className={styles.sampleParagraph} data-testid="sample-paragraph" key={`${pageIndex}-${index}-${paragraph.title}`}>
+                    <h4>{paragraph.title}</h4>
+                    <p className={styles.sampleText}>{paragraph.text}</p>
+                  </article>
+                ))}
+              </aside>
+              <figure className={styles.imageFigure}>
+                {/* A native image is intentional: PdfService waits on document.images. */}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img alt={`第 ${pageIndex + 1} 页原作文`} src={imageSources[pageIndex]} />
+                <svg aria-hidden="true" className={styles.annotationOverlay} preserveAspectRatio="none" viewBox="0 0 100 100">
+                  {pageAnnotations.map(({ annotation, number }) => (
+                    <rect
+                      data-issue-box="true"
+                      key={`issue-${number}`}
+                      x={Math.max(0, annotation.x * 100 - 4)}
+                      y={Math.max(0, annotation.y * 100 - 3)}
+                      width="8"
+                      height="6"
+                      rx="0.8"
+                    />
+                  ))}
+                </svg>
+              </figure>
+              <aside className={styles.annotationNotes} aria-label={`第 ${pageIndex + 1} 页修改建议`}>
+                <h3>修改建议</h3>
+                {pageAnnotations.length ? (
+                  <ol>
+                    {pageAnnotations.map(({ annotation, number }) => (
+                      <li data-annotation-number={number} key={`note-${number}`}>
+                        <span>{number}</span>
+                        <div>
+                          {annotation.anchorText ? <b>{annotation.anchorText}</b> : null}
+                          <p>{annotation.comment}</p>
+                        </div>
+                      </li>
+                    ))}
+                  </ol>
+                ) : <p className={styles.muted}>这一页没有需要重点修改的问题。</p>}
+              </aside>
+            </div>
+          </section>
+        );
+      })}
     </article>
   );
 }
