@@ -87,7 +87,7 @@ const review: ReviewRecord = {
 };
 
 describe("A4 打印稿", () => {
-  it("只输出无标题的逐页三栏学习页", () => {
+  it("先输出红色总体评价，再输出逐页三栏学习页", () => {
     const { container } = render(<PrintReview review={review} imageSources={["data:image/jpeg;base64,one", "data:image/jpeg;base64,two"]} />);
 
     expect(container.firstElementChild).toHaveAttribute("data-print-ready", "true");
@@ -95,14 +95,14 @@ describe("A4 打印稿", () => {
       Array.from(container.querySelectorAll("[data-print-section]")).map(
         (node) => node.getAttribute("data-print-section"),
       ),
-    ).toEqual(["feedback-page-1", "feedback-page-2"]);
+    ).toEqual(["summary", "feedback-page-1", "feedback-page-2"]);
     expect(container.querySelectorAll('[data-page-kind="feedback"]')).toHaveLength(2);
     expect(container.querySelector("footer")).toBeNull();
-    expect(screen.queryByText("作文批改报告")).not.toBeInTheDocument();
+    expect(screen.getByText("总体评价")).toBeInTheDocument();
     expect(screen.queryByText("35")).not.toBeInTheDocument();
     expect(screen.queryByText("逐页红批")).not.toBeInTheDocument();
     expect(screen.queryByText("分项明细")).not.toBeInTheDocument();
-    expect(screen.queryByText("细节真实，情感自然。")).not.toBeInTheDocument();
+    expect(screen.getByText(/细节真实，情感自然/)).toBeInTheDocument();
   });
 
   it("中间只标结构问题，左侧给建议，右侧给彩色范文", () => {
@@ -112,7 +112,7 @@ describe("A4 打印稿", () => {
     expect(images[0]).toHaveAttribute("src", "data:image/jpeg;base64,one");
     expect(images[1]).toHaveAttribute("src", "data:image/jpeg;base64,two");
     expect(container.querySelectorAll("[data-issue-underline]")).toHaveLength(2);
-    expect(Array.from(container.querySelectorAll("[data-annotation-number]")).map((node) => node.getAttribute("data-annotation-number"))).toEqual(["1", "2"]);
+    expect(container.querySelectorAll("[data-issue-circle]")).toHaveLength(2);
     expect(screen.getByLabelText("第 1 页考场范文")).toHaveTextContent("第 1 段示范正文");
     expect(screen.getByLabelText("第 2 页考场范文")).toHaveTextContent("第 5 段示范正文");
     expect(screen.getByLabelText("第 1 页段落修改建议")).toHaveTextContent("第 1 段红色修改建议");

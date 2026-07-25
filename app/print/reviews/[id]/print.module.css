@@ -1,20 +1,20 @@
 @page {
-  size: A4 landscape;
-  margin: 10mm;
+  size: 16in 9in;
+  margin: 0;
 }
 
 .document {
-  --ink: #27221e;
+  --ink: #202020;
   --muted: #756a60;
   --paper: #fffdf8;
   --line: #ded3c6;
   --red: #b42318;
   --red-soft: #fff0ed;
   min-height: 100%;
-  background: white;
+  background: #fff;
   color: var(--ink);
   font-family: STKaiti, KaiTi, "Kaiti SC", "FZKai-Z03", serif;
-  font-size: 12pt;
+  font-size: 18pt;
   line-height: 1.65;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
@@ -34,8 +34,11 @@
 }
 .runningHeader { top: -8mm; justify-content: space-between; border-bottom: .2mm solid var(--line); }
 
-.sheet { min-height: 190mm; break-after: page; }
-.summary { display: grid; align-content: center; padding: 8mm; }
+.sheet { min-height: 9in; break-after: page; }
+.summary { display: grid; place-items: center; padding: 1.1in 2.6in; }
+.summaryContent { color: #c90000; font-size: 31pt; line-height: 1.38; }
+.summaryContent h1 { margin: 0 0 .24in; font-size: 39pt; font-weight: 500; }
+.summaryContent p { margin: .38in 0 0; }
 .eyebrow { margin-bottom: 2mm; color: var(--red); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
 .summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
 .summaryGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8mm; margin-bottom: 12mm; }
@@ -55,34 +58,31 @@
 .assignmentInfo dt { color: var(--muted); font-size: 8pt; }
 .assignmentInfo dd { margin: 1mm 0 0; }
 
-.feedbackPage { display: grid; align-content: center; padding: 4mm 0; }
-.feedbackLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 3fr) minmax(0, 4fr) minmax(0, 3fr); gap: 5mm; align-items: center; }
+.feedbackPage { display: grid; align-content: stretch; padding: 0; }
+.feedbackLayout { display: grid; min-height: 9in; grid-template-columns: 19.5% 44% 36.5%; gap: 0; align-items: stretch; }
 .suggestionColumn, .modelColumn { min-width: 0; }
+.suggestionColumn { padding: .42in .22in .3in .25in; color: #c90000; font-size: 19pt; line-height: 1.24; }
+.modelColumn { padding: .16in .3in .2in .22in; color: #255ab1; font-size: 17pt; line-height: 1.27; }
+.modelColumn > h2 { margin: 0 0 .06in; font-size: 23pt; font-weight: 500; }
 
 .annotationPage { display: grid; grid-template-rows: auto 1fr; padding-top: 2mm; }
 .pageHeading { margin-bottom: 4mm; }
 .pageHeading h2 { margin-bottom: 0; }
 .annotationLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 5mm; align-items: start; }
-.imageFigure { position: relative; width: 100%; max-height: 165mm; margin: 0; overflow: hidden; border: .25mm solid var(--line); background: #f4eee5; }
-.imageFigure img { display: block; width: 100%; max-height: 165mm; object-fit: contain; }
+.imageFigure { position: relative; width: 100%; height: 9in; margin: 0; overflow: hidden; background: #f4eee5; }
+.imageFigure img { display: block; width: 100%; height: 9in; object-fit: contain; }
 .annotationOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .annotationOverlay line { stroke: var(--red); stroke-width: .45; vector-effect: non-scaling-stroke; }
 .annotationOverlay circle { fill: var(--red); stroke: white; stroke-width: .55; vector-effect: non-scaling-stroke; }
 .annotationOverlay text { fill: white; font-size: 2.2px; font-weight: 800; dominant-baseline: central; text-anchor: middle; }
 .annotationOverlay line { stroke: #b42318; stroke-width: 1.1; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.suggestionParagraph { display: grid; grid-template-columns: 6mm minmax(0, 1fr); gap: 2mm; margin: 0 0 7mm; color: #604632; }
-.suggestionParagraph span { display: grid; width: 5.5mm; height: 5.5mm; place-items: center; border-radius: 50%; background: #c45b3f; color: white; font-size: 8pt; }
+.annotationOverlay ellipse { fill: none; stroke: #d00000; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
+.suggestionParagraph { margin: 0 0 .56in; }
+.suggestionParagraph h3 { margin: 0 0 .04in; color: #d00000; font-size: 20pt; font-weight: 500; }
 .suggestionParagraph p { margin: 0; }
-.modelParagraph { margin: 0 0 6mm; padding: 0 0 4mm 4mm; border-left: 1mm solid #b9a47a; }
-.modelParagraph h4 { margin: 0 0 1mm; font-size: 11pt; }
+.modelParagraph { margin: 0 0 .34in; padding: 0; border: 0; }
+.modelParagraph h4 { margin: 0 0 .03in; color: #d00000; font-size: 18pt; font-weight: 500; }
 .modelParagraph p { margin: 0; white-space: pre-wrap; }
-.modelParagraph:nth-child(1) { border-color: #bb5541; color: #8b3427; }
-.modelParagraph:nth-child(2) { border-color: #4a8191; color: #255e70; }
-.modelParagraph:nth-child(3) { border-color: #b08330; color: #85601e; }
-.modelParagraph:nth-child(4) { border-color: #6d8b55; color: #42643c; }
-.modelParagraph:nth-child(5) { border-color: #7b628d; color: #5a426e; }
-.structureNotes { display: grid; gap: 2mm; margin: 4mm 0 0; padding: 0; list-style: none; color: #a33629; font-size: 10pt; }
-.structureNotes li { padding-left: 2mm; border-left: .7mm solid #b42318; }
 .muted { color: var(--muted); }
 
 .analysisPages { break-before: page; }
