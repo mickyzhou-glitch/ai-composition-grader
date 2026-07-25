@@ -88,6 +88,25 @@ function setup(contents: Array<string | null | Error>) {
 }
 
 describe("OpenAIReviewAdapter", () => {
+  it("可以一次重写完整五段示范文", async () => {
+    const sampleParagraphs = report.sampleParagraphs.map((sample) => ({
+      ...sample,
+      text: `${sample.text}（整体优化）`,
+    }));
+    const harness = setup([JSON.stringify({ sampleParagraphs })]);
+
+    await expect(harness.adapter.rewriteAllSamples({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+      instruction: "删去无关人物",
+    })).resolves.toEqual({ sampleParagraphs });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("重写整篇五段考场范文");
+    expect(serialized).toContain("删去无关人物");
+    expect(serialized).toContain("550-650");
+  });
+
   it("只读取 SettingsService 的原子运行时快照", async () => {
     const create = vi.fn(async (input: unknown) => {
       void input;

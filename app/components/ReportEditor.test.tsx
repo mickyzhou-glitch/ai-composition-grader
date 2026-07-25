@@ -73,4 +73,16 @@ describe("ReportEditor", () => {
       }),
     );
   });
+
+  it("提供整篇 AI 重写与按整体要求修改入口", () => {
+    const onRewriteAllSamples = vi.fn(async () => undefined);
+    render(<ReportEditor report={report} onChange={vi.fn()} onRewriteAllSamples={onRewriteAllSamples} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 全文重新生成" }));
+    expect(onRewriteAllSamples).toHaveBeenCalledWith();
+
+    fireEvent.change(screen.getByLabelText("AI 整体修改要求"), { target: { value: "删去无关人物" } });
+    fireEvent.click(screen.getByRole("button", { name: "AI 按整体要求修改" }));
+    expect(onRewriteAllSamples).toHaveBeenLastCalledWith("删去无关人物");
+  });
 });

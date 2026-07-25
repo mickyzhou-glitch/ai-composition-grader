@@ -20,6 +20,9 @@ export interface AiReviewer {
     imageDataUrls: string[];
   }): Promise<AiReviewEnvelope>;
   rewriteSample?(input: RewriteSampleInput): Promise<{ text: string }>;
+  rewriteAllSamples?(input: Omit<RewriteSampleInput, "index">): Promise<{
+    sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
+  }>;
 }
 
 export interface PreparedReviewAnalysis {
@@ -192,6 +195,23 @@ export class ReviewService {
       config: review.config,
       sampleParagraphs: review.report.sampleParagraphs,
       index,
+      instruction,
+    });
+  }
+
+  async rewriteAllSamples(
+    ownerId: string,
+    id: string,
+    instruction?: string,
+  ): Promise<{ sampleParagraphs: Array<{ title: string; text: string; suggestion: string }> }> {
+    const review = this.get(ownerId, id);
+    if (!review.report) throw new ReviewServiceError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+    if (!this.aiReviewer.rewriteAllSamples) {
+      throw new Error("当前 AI 服务不支持整篇示范文重写");
+    }
+    return this.aiReviewer.rewriteAllSamples({
+      config: review.config,
+      sampleParagraphs: review.report.sampleParagraphs,
       instruction,
     });
   }

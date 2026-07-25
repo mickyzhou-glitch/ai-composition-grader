@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   aiReviewEnvelopeSchema,
+  sampleParagraphSchema,
   type AiReviewEnvelope,
   type AssignmentConfig,
 } from "../domain/contracts";
@@ -296,6 +297,40 @@ export class OpenAIReviewAdapter {
       return z.object({ text: z.string().trim().min(1).max(2_000) }).parse(parseJsonResponse(content));
     } catch {
       throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回的示范段落无效", 502);
+    }
+  }
+
+  async rewriteAllSamples(input: Omit<RewriteSampleInput, "index">): Promise<{
+    sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
+  }> {
+    const settings = await this.settings.getRuntimeConfig();
+    if (!settings) {
+      throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
+    }
+    const client = this.clientFactory({
+      apiKey: settings.apiKey,
+      baseURL: settings.baseUrl,
+      timeout: AI_TIMEOUT_MS,
+      maxRetries: AI_MAX_RETRIES,
+    });
+    const content = await completionContent(client, {
+      model: settings.model,
+      response_format: { type: "json_object" },
+      messages: [{
+        role: "user",
+        content: [
+          "你是上海五升六学生的作文老师。请重写整篇五段考场范文，不要只改一段。",
+          `作文要求：${JSON.stringify(input.config)}`,
+          `当前五段范文：${JSON.stringify(input.sampleParagraphs)}`,
+          `教师附加要求：${input.instruction?.trim() || "请整体提升细节、逻辑和前后衔接。"}`,
+          "必须输出严格五段。人物称呼、关系、时间顺序和事件因果必须统一；只保留一条核心事件线，删去无关人物、无关争吵和枝节，不得凭空增加关键经历。五段 text 合计 550-650 个汉字。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。",
+        ].join("\n\n"),
+      }],
+    });
+    try {
+      return z.object({ sampleParagraphs: z.array(sampleParagraphSchema).length(5) }).parse(parseJsonResponse(content));
+    } catch {
+      throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回的整篇示范文无效", 502);
     }
   }
 }

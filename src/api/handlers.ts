@@ -435,6 +435,26 @@ export function createSampleRewriteRouteHandlers(dependencies: {
   };
 }
 
+export function createSamplesRewriteRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "rewriteAllSamples">;
+  ownerId: string;
+}) {
+  return {
+    async POST(request: Request, context: RouteContext) {
+      try {
+        const input = sampleRewriteSchema.parse(await readJson(request));
+        return ok(await dependencies.reviewService.rewriteAllSamples(
+          dependencies.ownerId,
+          (await context.params).id,
+          input.instruction,
+        ));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
 export function createReviewImagesRouteHandlers(
   dependencies: { imageService: ImageService; ownerId: string },
   options: { maxMultipartBytes?: number } = {},
