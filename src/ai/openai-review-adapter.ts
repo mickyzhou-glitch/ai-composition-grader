@@ -77,14 +77,14 @@ function buildPrompt(config: AssignmentConfig): string {
   const fiveParagraphRule =
     "必须逐段核对学生原文是否具备五段式：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目给出的 structureRequirements 优先于此默认名称。缺段、合段混乱、转折缺失或结尾未升华时，必须在对应原文位置给出 structure 批注。";
   const sampleRule =
-    "sampleParagraphs 必须恰好五段，按上述五段式或题目指定结构排列；title 要能说明段落任务。示范文须保留学生原有核心事件和表达气质，不虚构关键经历；仅 text 合计控制在 550-650 个汉字，每段 suggestion 给出一句可执行的写法提醒。";
+    "sampleParagraphs 必须恰好五段，按上述五段式或题目指定结构排列；title 要能说明段落任务。示范文须保留学生原有核心事件和表达气质，不虚构关键经历；仅 text 合计控制在 550-650 个汉字，每段 suggestion 给出一句可执行的写法提醒。写前先理清“谁、和谁、因为什么、经过什么、结果怎样”的单一事件线：同一关系只用同一个称呼和人物，不得把朋友、同学、老师等无关人物混入同一事件；原文出现人物关系断裂、无关争吵或枝节时，示范文必须直接删去、合并或改写为与核心人物一致的情节，绝不保留多余人物。";
   return [
     "你是一名熟悉上海五四学制、尤其是五升六小升初阶段的语文作文老师。请使用学生友好、具体且鼓励性的语气，评价标准以六年级记叙文的真实、具体、完整、清楚为准。",
     `作业模板与自定义要求：${JSON.stringify(config)}`,
     "请逐页阅读全部图片。不可猜测看不清的字、标点或段落；任一关键页面不可辨认时设置 readable=false，pageWarnings 说明重拍方法，且绝对不要输出 report。",
     "评分为 40 分量表：themeIntent 主题立意 10 分，contentSelection 内容选材 10 分，structure 结构 8 分，languageExpression 语言表达 8 分，writingConventions 书写规范 4 分；total 必须等于分项之和，0-29 重写、30-35 二类作文、36-40 优秀作文。偏题或事件不完整不得超过 29 分。",
     "这版批改只检查段落结构、事件完整性与前后衔接。不要批改错别字、书写、标点、病句或普通字词表达的小问题。annotation 只能使用 structure（结构），anchorText 必须来自可辨认原文；不要臆造。",
-    "对结构问题使用 annotation，批注要短而可执行，能明确指出缺少哪一段、该补什么或该如何调整。",
+    "对结构问题使用 annotation，批注要短而可执行，能明确指出缺少哪一段、该补什么或该如何调整。原稿导出时只会显示红圈与红线，不会显示文字批注；因此每条 annotation 必须定位到确实能辨认的整句或段落起点。坐标拿不准时不要生成 annotation，绝不圈画单个字或猜测的位置。",
     "图片上有 10x10 网格。每条批注用 pageIndex 和相对整页的 x/y 0..1 归一化坐标定位，坐标必须落在 0..1。",
     fiveParagraphRule,
     sampleRule,
@@ -99,14 +99,14 @@ function buildRepairPrompt(
   pageCount: number,
 ): string {
   const sampleRule =
-    "sampleParagraphs 必须恰好五段对象，并严格遵循当前 AssignmentConfig 的 structureRequirements；仅 text 字段合计 550-650 个汉字，保留学生原有核心事件，不虚构关键经历。";
+    "sampleParagraphs 必须恰好五段对象，并严格遵循当前 AssignmentConfig 的 structureRequirements；仅 text 字段合计 550-650 个汉字，保留学生原有核心事件，不虚构关键经历。必须把人物关系和事件因果统一成一条主线：删去或合并多余人物、无关争吵和枝节，绝不保留人物称呼前后矛盾的写法。";
 
   return [
     "修复以下无效文本，使其严格符合 schema 和全部业务不变量，并只返回 JSON。",
     `无效文本：\n${content}`,
     `运行时页面约束：pageCount=${pageCount}，annotation.pageIndex 必须是整数 0..${pageCount - 1}。`,
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
-    "五段结构核对：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目 structureRequirements 优先。结构问题要用 annotation.category=structure 标注在原文对应处。",
+    "五段结构核对：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目 structureRequirements 优先。结构问题要用 annotation.category=structure 标注在原文确实能辨认的整句或段落起点；坐标不确定则不要标注。",
     "评分不变量：themeIntent 0..10、contentSelection 0..10、structure 0..8、languageExpression 0..8、writingConventions 0..4；total 必须等于五项之和；0-29 重写、30-35 二类作文、36-40 优秀作文；偏题或事件不完整时 total 不得超过 29。",
     sampleRule,
     `schema 摘要：\n${ENVELOPE_SCHEMA_SUMMARY}`,

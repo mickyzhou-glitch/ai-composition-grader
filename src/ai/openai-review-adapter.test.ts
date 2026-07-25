@@ -160,6 +160,9 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("学生友好");
     expect(serialized).toContain("五段");
     expect(serialized).toContain("550-650");
+    expect(serialized).toContain("人物关系");
+    expect(serialized).toContain("多余人物");
+    expect(serialized).toContain("坐标拿不准时不要生成 annotation");
     expect(serialized).toContain("sampleParagraphs:{title:string,text:string,suggestion:string}[]");
   });
 
