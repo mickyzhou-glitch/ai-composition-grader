@@ -40,6 +40,13 @@ function cookieNameForOrigin(origin: string): string | null {
 
 export function sessionCookieName(request: Request): string | null {
   try {
+    const configured = applicationOrigin();
+    const forwardedHost = request.headers.get("x-forwarded-host");
+    const forwardedProto = request.headers.get("x-forwarded-proto");
+    const forwarded = forwardedHost && forwardedProto
+      ? `${forwardedProto.split(",")[0].trim()}://${forwardedHost.split(",")[0].trim()}`
+      : null;
+    if (configured && forwarded === configured) return PRODUCTION_SESSION_COOKIE;
     return cookieNameForOrigin(new URL(request.url).origin);
   } catch {
     return null;
@@ -142,11 +149,23 @@ export function assertTrustedWriteOrigin(request: Request): void {
   // fixed loopback default so the app remains convenient without a .env file.
   const trusted = configured ?? (process.env.NODE_ENV === "production" ? null : LOCAL_ORIGIN);
   let requestOrigin: string;
+  let directUrl: URL;
   try {
-    requestOrigin = new URL(request.url).origin;
+    directUrl = new URL(request.url);
+    requestOrigin = directUrl.origin;
   } catch {
     throw new AuthRequestError(403, "请求来源不受信任", "UNTRUSTED_ORIGIN");
   }
+  // ngrok terminates HTTPS then forwards only to our loopback listener. Trust
+  // forwarded origin headers solely in that explicitly configured deployment.
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  const forwardedOrigin = forwardedHost && forwardedProto
+    ? `${forwardedProto.split(",")[0].trim()}://${forwardedHost.split(",")[0].trim()}`
+    : null;
+  const loopback = directUrl.hostname === "127.0.0.1" || directUrl.hostname === "localhost";
+  const proxyMatchesConfiguredOrigin = Boolean(configured && loopback && forwardedOrigin === configured);
+  if (proxyMatchesConfiguredOrigin) requestOrigin = configured as string;
   if (!trusted || !origin || origin !== requestOrigin || origin !== trusted) {
     throw new AuthRequestError(403, "请求来源不受信任", "UNTRUSTED_ORIGIN");
   }
