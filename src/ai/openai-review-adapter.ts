@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { z } from "zod";
 
 import {
   aiReviewEnvelopeSchema,
@@ -45,6 +46,13 @@ export interface AiSettingsSource {
 export interface AnalyzeCompositionInput {
   config: AssignmentConfig;
   imageDataUrls: string[];
+}
+
+export interface RewriteSampleInput {
+  config: AssignmentConfig;
+  sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
+  index: number;
+  instruction?: string;
 }
 
 export class AiAdapterError extends Error {
@@ -251,6 +259,43 @@ export class OpenAIReviewAdapter {
           502,
         );
       }
+    }
+  }
+
+  async rewriteSample(input: RewriteSampleInput): Promise<{ text: string }> {
+    if (!Number.isInteger(input.index) || input.index < 0 || input.index >= input.sampleParagraphs.length) {
+      throw new TypeError("sample paragraph index is invalid");
+    }
+    const settings = await this.settings.getRuntimeConfig();
+    if (!settings) {
+      throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
+    }
+    const client = this.clientFactory({
+      apiKey: settings.apiKey,
+      baseURL: settings.baseUrl,
+      timeout: AI_TIMEOUT_MS,
+      maxRetries: AI_MAX_RETRIES,
+    });
+    const current = input.sampleParagraphs[input.index];
+    const content = await completionContent(client, {
+      model: settings.model,
+      response_format: { type: "json_object" },
+      messages: [{
+        role: "user",
+        content: [
+          "你是上海五升六学生的作文老师。请只重写指定的一段考场范文，保持其与其他四段前后衔接。",
+          `作文要求：${JSON.stringify(input.config)}`,
+          `五段范文：${JSON.stringify(input.sampleParagraphs)}`,
+          `要重写第 ${input.index + 1} 段：${JSON.stringify(current)}`,
+          `教师附加要求：${input.instruction?.trim() || "请换一种更具体、更自然的写法。"}`,
+          "必须坚持一条清楚的事件线，统一人物称呼和关系；删除无关人物、无关争吵与枝节，不得凭空增添关键经历。只返回 JSON：{\"text\":\"重写后的这一段正文\"}。",
+        ].join("\n\n"),
+      }],
+    });
+    try {
+      return z.object({ text: z.string().trim().min(1).max(2_000) }).parse(parseJsonResponse(content));
+    } catch {
+      throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回的示范段落无效", 502);
     }
   }
 }

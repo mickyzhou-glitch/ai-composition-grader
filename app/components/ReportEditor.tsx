@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+
 import type { EvaluationReport, ScoreBreakdown, ScoreLevel } from "@/src/domain/contracts";
 import { ScoreCard } from "./ScoreCard";
 
@@ -11,6 +13,8 @@ export function scoreSummary(values: readonly number[]): { total: number; level:
 interface ReportEditorProps {
   report: EvaluationReport;
   onChange: (report: EvaluationReport) => void;
+  onRewriteSample?: (index: number, instruction?: string) => Promise<void>;
+  rewritingSampleIndex?: number | null;
 }
 
 const scoreFields = [
@@ -37,7 +41,8 @@ function normalisedScores(scores: ScoreBreakdown, themeFit: EvaluationReport["th
   return { ...next, ...scoreSummary(scoreFields.map(([field]) => next[field])) };
 }
 
-export function ReportEditor({ report, onChange }: ReportEditorProps) {
+export function ReportEditor({ report, onChange, onRewriteSample, rewritingSampleIndex = null }: ReportEditorProps) {
+  const [rewriteInstructions, setRewriteInstructions] = useState<string[]>([]);
   function update<K extends keyof EvaluationReport>(key: K, value: EvaluationReport[K]) {
     onChange({ ...report, [key]: value });
   }
@@ -86,7 +91,7 @@ export function ReportEditor({ report, onChange }: ReportEditorProps) {
       <section className="report-section" aria-labelledby="samples-heading">
         <p className="eyebrow">可直接借鉴</p><h2 id="samples-heading">示范段落</h2><p className="muted">每段保留示范正文和对应的修改建议；内置题目固定为五段。</p>
         <div className="sample-list">{report.sampleParagraphs.map((sample, index) => (
-          <fieldset className="sample-card" key={index}><legend>第 {index + 1} 段</legend><label>标题<input value={sample.title} onChange={(event) => updateSample(index, { title: event.target.value })} /></label><label>示范正文<textarea value={sample.text} onChange={(event) => updateSample(index, { text: event.target.value })} /></label><label>修改建议<textarea value={sample.suggestion} onChange={(event) => updateSample(index, { suggestion: event.target.value })} /></label></fieldset>
+          <fieldset className="sample-card" key={index}><legend>第 {index + 1} 段</legend><label>标题<input value={sample.title} onChange={(event) => updateSample(index, { title: event.target.value })} /></label><label>示范正文<textarea value={sample.text} onChange={(event) => updateSample(index, { text: event.target.value })} /></label>{onRewriteSample ? <div className="sample-ai-actions"><label>AI 修改要求（可选）<input aria-label={`第 ${index + 1} 段 AI 修改要求`} value={rewriteInstructions[index] ?? ""} placeholder="例如：把开头写得更紧张" onChange={(event) => setRewriteInstructions((current) => { const next = [...current]; next[index] = event.target.value; return next; })} /></label><div><button type="button" disabled={rewritingSampleIndex !== null} onClick={() => void onRewriteSample(index)}>AI 重新生成</button><button type="button" disabled={rewritingSampleIndex !== null || !(rewriteInstructions[index] ?? "").trim()} onClick={() => void onRewriteSample(index, rewriteInstructions[index])}>{rewritingSampleIndex === index ? "AI 正在修改…" : "AI 按要求修改"}</button></div></div> : null}<label>修改建议<textarea value={sample.suggestion} onChange={(event) => updateSample(index, { suggestion: event.target.value })} /></label></fieldset>
         ))}</div>
       </section>
     </div>

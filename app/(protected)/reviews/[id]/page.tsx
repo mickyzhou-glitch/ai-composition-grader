@@ -62,7 +62,8 @@ export default function ReviewPage() {
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobView | null>(null);
   const [activePage, setActivePage] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | null>(null);
+  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | "rewrite-sample" | null>(null);
+  const [rewritingSampleIndex, setRewritingSampleIndex] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -252,6 +253,36 @@ export default function ReviewPage() {
     setNotice("");
   }
 
+  async function rewriteSample(index: number, instruction?: string) {
+    if (!review || !report || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    setBusy("rewrite-sample");
+    setRewritingSampleIndex(index);
+    setError("");
+    setNotice("");
+    try {
+      const result = await apiFetch<{ text: string }>(
+        `/api/reviews/${encodeURIComponent(review.id)}/sample-paragraphs/${index}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(instruction?.trim() ? { instruction } : {}),
+        },
+      );
+      changeReport({
+        ...report,
+        sampleParagraphs: report.sampleParagraphs.map((sample, sampleIndex) =>
+          sampleIndex === index ? { ...sample, text: result.text } : sample,
+        ),
+      });
+      setNotice(`第 ${index + 1} 段示范正文已由 AI 更新，请复核后保存。`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setRewritingSampleIndex(null);
+      setBusy(null);
+    }
+  }
+
   async function save() {
     if (!report || !review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     setBusy("save");
@@ -407,7 +438,7 @@ export default function ReviewPage() {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 3 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
         </section>
       </main>

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
+import type { RewriteSampleInput } from "../ai/openai-review-adapter";
 import type { SavedAssignmentRecord } from "../db/review-repository";
 import type {
   ReviewRecord,
@@ -18,6 +19,7 @@ export interface AiReviewer {
     config: AssignmentConfig;
     imageDataUrls: string[];
   }): Promise<AiReviewEnvelope>;
+  rewriteSample?(input: RewriteSampleInput): Promise<{ text: string }>;
 }
 
 export interface PreparedReviewAnalysis {
@@ -170,6 +172,28 @@ export class ReviewService {
 
   listSavedAssignments(ownerId: string): SavedAssignmentRecord[] {
     return this.repository.listSavedAssignments(ownerId);
+  }
+
+  async rewriteSample(
+    ownerId: string,
+    id: string,
+    index: number,
+    instruction?: string,
+  ): Promise<{ text: string }> {
+    const review = this.get(ownerId, id);
+    if (!review.report) throw new ReviewServiceError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+    if (!Number.isInteger(index) || index < 0 || index >= review.report.sampleParagraphs.length) {
+      throw new ReviewServiceError("FILE_NOT_FOUND", "示范段落不存在", 404);
+    }
+    if (!this.aiReviewer.rewriteSample) {
+      throw new Error("当前 AI 服务不支持示范段落重写");
+    }
+    return this.aiReviewer.rewriteSample({
+      config: review.config,
+      sampleParagraphs: review.report.sampleParagraphs,
+      index,
+      instruction,
+    });
   }
 
   deleteSavedAssignment(ownerId: string, id: string): void {

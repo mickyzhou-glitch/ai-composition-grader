@@ -406,6 +406,35 @@ export function createReviewRouteHandlers(dependencies: {
   };
 }
 
+const sampleRewriteSchema = z.object({
+  instruction: z.string().trim().max(1_000).optional(),
+}).strict();
+
+type SampleRewriteContext = { params: Promise<{ id: string; index: string }> };
+
+export function createSampleRewriteRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "rewriteSample">;
+  ownerId: string;
+}) {
+  return {
+    async POST(request: Request, context: SampleRewriteContext) {
+      try {
+        const input = sampleRewriteSchema.parse(await readJson(request));
+        const { id, index } = await context.params;
+        if (!/^\d+$/.test(index)) throw routeError("INVALID_SAMPLE_INDEX", "示范段落序号无效", 400);
+        return ok(await dependencies.reviewService.rewriteSample(
+          dependencies.ownerId,
+          id,
+          Number(index),
+          input.instruction,
+        ));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
 export function createReviewImagesRouteHandlers(
   dependencies: { imageService: ImageService; ownerId: string },
   options: { maxMultipartBytes?: number } = {},
