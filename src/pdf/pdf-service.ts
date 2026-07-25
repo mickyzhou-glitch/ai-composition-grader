@@ -35,7 +35,7 @@ interface PdfPage {
     printBackground: true;
     preferCSSPageSize: true;
     tagged: true;
-    displayHeaderFooter: true;
+    displayHeaderFooter: boolean;
     headerTemplate: string;
     footerTemplate: string;
   }): Promise<Buffer>;
@@ -322,7 +322,7 @@ export class PdfService {
     await this.fileStore.migrateLegacyReview?.(ownerId, reviewId);
 
     if (
-      review.pdfFilename &&
+      review.pdfFilename?.endsWith("-v2.pdf") &&
       review.pdfPath === `pdf/${review.pdfFilename}` &&
       review.pdfRevision === review.revision &&
       review.exportedAt !== null
@@ -339,7 +339,7 @@ export class PdfService {
     }
 
     const generatedAt = this.now();
-    const filename = `作文批改-${safeTitle(review.config.title)}-${timestamp(generatedAt, this.timeZone)}.pdf`;
+    const filename = `作文批改-${safeTitle(review.config.title)}-${timestamp(generatedAt, this.timeZone)}-v2.pdf`;
     const data = await this.render(ownerId, reviewId, review.config.title);
     await this.fileStore.writeFile(ownerId, reviewId, "pdf", filename, data);
     try {
@@ -445,7 +445,7 @@ export class PdfService {
             printBackground: true,
             preferCSSPageSize: true,
             tagged: true,
-            displayHeaderFooter: true,
+            displayHeaderFooter: false,
             headerTemplate: "<div></div>",
             footerTemplate: footerTemplate(title),
           });

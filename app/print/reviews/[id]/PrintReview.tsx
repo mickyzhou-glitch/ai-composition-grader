@@ -21,28 +21,9 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
   }
 
   const report = review.report;
-  const numbered = orderedAnnotations(review.annotations.filter((annotation) => !annotation.isHighlight));
+  const numbered = orderedAnnotations(review.annotations.filter((annotation) => annotation.category === "structure"));
   return (
     <article className={styles.document} data-print-ready="true">
-      <header className={styles.runningHeader} aria-hidden="true">
-        <span>作文批改报告</span>
-        <b>{review.config.title}</b>
-      </header>
-      <section
-        className={`${styles.sheet} ${styles.summary}`}
-        data-page-kind="summary"
-        data-print-section="summary"
-      >
-        <p className={styles.eyebrow}>小升初作文批改</p>
-        <h1>{review.config.title}</h1>
-        <div className={styles.summaryGrid}>
-          <div className={styles.overallComment}>
-            <h2>总评</h2>
-            <p>{report.personalizedComment}</p>
-          </div>
-        </div>
-      </section>
-
       {review.images.map((image, pageIndex) => {
         const pageAnnotations = numbered.filter(({ annotation }) => annotation.pageIndex === image.position);
         const samples = sampleParagraphsForPage(report.sampleParagraphs, pageIndex, review.images.length);
@@ -53,17 +34,12 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
             data-print-section={`feedback-page-${pageIndex + 1}`}
             key={image.id}
           >
-            <div className={styles.feedbackHeading}>
-              <p className={styles.eyebrow}>五段式学习单</p>
-              <h2>第 {pageIndex + 1} 页：考场范文、原文问题与修改</h2>
-            </div>
             <div className={styles.feedbackLayout}>
-              <aside className={styles.sampleColumn} aria-label={`第 ${pageIndex + 1} 页示范文章`}>
-                <h3>示范文章</h3>
+              <aside className={styles.suggestionColumn} aria-label={`第 ${pageIndex + 1} 页段落修改建议`}>
                 {samples.map((paragraph, index) => (
-                  <article className={styles.sampleParagraph} data-testid="sample-paragraph" key={`${pageIndex}-${index}-${paragraph.title}`}>
-                    <h4>{paragraph.title}</h4>
-                    <p className={styles.sampleText}>{paragraph.text}</p>
+                  <article className={styles.suggestionParagraph} data-testid="sample-suggestion" key={`${pageIndex}-${index}-${paragraph.title}`}>
+                    <span>{index + 1}</span>
+                    <p>{paragraph.suggestion}</p>
                   </article>
                 ))}
               </aside>
@@ -84,23 +60,18 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
                   ))}
                 </svg>
               </figure>
-              <aside className={styles.annotationNotes} aria-label={`第 ${pageIndex + 1} 页修改建议`}>
-                <h3>修改建议</h3>
-                {pageAnnotations.length ? (
-                  <ol>
-                    {pageAnnotations.map(({ annotation, number }) => (
-                      <li data-annotation-number={number} key={`note-${number}`}>
-                        <span>{number}</span>
-                        <div>
-                          {annotation.anchorText ? <b>{annotation.anchorText}</b> : null}
-                          <p>{annotation.comment}</p>
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                ) : <p className={styles.muted}>这一页没有需要重点修改的问题。</p>}
+              <aside className={styles.modelColumn} aria-label={`第 ${pageIndex + 1} 页考场范文`}>
+                {samples.map((paragraph, index) => (
+                  <article className={styles.modelParagraph} data-testid="sample-paragraph" key={`${pageIndex}-${index}-${paragraph.title}`}>
+                    <h4>{paragraph.title}</h4>
+                    <p>{paragraph.text}</p>
+                  </article>
+                ))}
               </aside>
             </div>
+            {pageAnnotations.length ? <ol className={styles.structureNotes} aria-label={`第 ${pageIndex + 1} 页结构问题`}>
+              {pageAnnotations.map(({ annotation, number }) => <li data-annotation-number={number} key={`note-${number}`}>{annotation.comment}</li>)}
+            </ol> : null}
           </section>
         );
       })}

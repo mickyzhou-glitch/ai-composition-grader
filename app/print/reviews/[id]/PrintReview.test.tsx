@@ -80,14 +80,14 @@ const review: ReviewRecord = {
     },
   ],
   annotations: [
-    { pageIndex: 1, x: 0.4, y: 0.2, category: "sentence", anchorText: "第三处", comment: "第三条", isHighlight: false },
-    { pageIndex: 0, x: 0.2, y: 0.8, category: "expression", anchorText: "第二处", comment: "第二条", isHighlight: false },
+    { pageIndex: 1, x: 0.4, y: 0.2, category: "structure", anchorText: "第三处", comment: "第三条", isHighlight: false },
+    { pageIndex: 0, x: 0.2, y: 0.8, category: "structure", anchorText: "第二处", comment: "第二条", isHighlight: false },
     { pageIndex: 0, x: 0.3, y: 0.1, category: "typo", anchorText: "第一处", comment: "第一条", isHighlight: false },
   ],
 };
 
 describe("A4 打印稿", () => {
-  it("按总评和逐页三栏反馈组织，只展示等级而不展示分项分数", () => {
+  it("只输出无标题的逐页三栏学习页", () => {
     const { container } = render(<PrintReview review={review} imageSources={["data:image/jpeg;base64,one", "data:image/jpeg;base64,two"]} />);
 
     expect(container.firstElementChild).toHaveAttribute("data-print-ready", "true");
@@ -95,31 +95,27 @@ describe("A4 打印稿", () => {
       Array.from(container.querySelectorAll("[data-print-section]")).map(
         (node) => node.getAttribute("data-print-section"),
       ),
-    ).toEqual([
-      "summary",
-      "feedback-page-1",
-      "feedback-page-2",
-    ]);
+    ).toEqual(["feedback-page-1", "feedback-page-2"]);
     expect(container.querySelectorAll('[data-page-kind="feedback"]')).toHaveLength(2);
     expect(container.querySelector("footer")).toBeNull();
-    expect(screen.queryByLabelText("作文等级")).not.toBeInTheDocument();
+    expect(screen.queryByText("作文批改报告")).not.toBeInTheDocument();
     expect(screen.queryByText("35")).not.toBeInTheDocument();
     expect(screen.queryByText("逐页红批")).not.toBeInTheDocument();
     expect(screen.queryByText("分项明细")).not.toBeInTheDocument();
-    expect(screen.getByText("细节真实，情感自然。")).toBeInTheDocument();
+    expect(screen.queryByText("细节真实，情感自然。")).not.toBeInTheDocument();
   });
 
-  it("逐页居中放原作文，用问题框和右侧建议对应问题，左侧分配示范文章", () => {
+  it("中间只标结构问题，左侧给建议，右侧给彩色范文", () => {
     const { container } = render(<PrintReview review={review} imageSources={["data:image/jpeg;base64,one", "data:image/jpeg;base64,two"]} />);
     const images = screen.getAllByRole("img");
     expect(images).toHaveLength(2);
     expect(images[0]).toHaveAttribute("src", "data:image/jpeg;base64,one");
     expect(images[1]).toHaveAttribute("src", "data:image/jpeg;base64,two");
-    expect(container.querySelectorAll("[data-issue-underline]")).toHaveLength(3);
-    expect(Array.from(container.querySelectorAll("[data-annotation-number]")).map((node) => node.getAttribute("data-annotation-number"))).toEqual(["1", "2", "3"]);
-    expect(screen.getByLabelText("第 1 页示范文章")).toHaveTextContent("第 1 段示范正文");
-    expect(screen.getByLabelText("第 2 页示范文章")).toHaveTextContent("第 5 段示范正文");
-    expect(screen.getByText("第一条").closest("li")).toHaveTextContent("第一处");
+    expect(container.querySelectorAll("[data-issue-underline]")).toHaveLength(2);
+    expect(Array.from(container.querySelectorAll("[data-annotation-number]")).map((node) => node.getAttribute("data-annotation-number"))).toEqual(["1", "2"]);
+    expect(screen.getByLabelText("第 1 页考场范文")).toHaveTextContent("第 1 段示范正文");
+    expect(screen.getByLabelText("第 2 页考场范文")).toHaveTextContent("第 5 段示范正文");
+    expect(screen.getByLabelText("第 1 页段落修改建议")).toHaveTextContent("第 1 段红色修改建议");
   });
 
   it("完整示范文分配在左侧栏，修改建议只在原文右侧呈现", () => {

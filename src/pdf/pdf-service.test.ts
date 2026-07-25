@@ -163,16 +163,14 @@ describe("PdfService", () => {
       printBackground: true,
       preferCSSPageSize: true,
       tagged: true,
-      displayHeaderFooter: true,
+      displayHeaderFooter: false,
       headerTemplate: "<div></div>",
-      footerTemplate: expect.stringContaining(
-        '<span class="pageNumber"></span>/<span class="totalPages"></span>',
-      ),
+      footerTemplate: expect.any(String),
     });
     const pdfOptions = page.pdf.mock.calls[0][0];
     expect(pdfOptions.footerTemplate).toContain("为/自己");
     expect(result.data).toEqual(Buffer.from("generated-pdf"));
-    expect(result.filename).toBe("作文批改-为-自己-鼓掌-20260721-1405.pdf");
+    expect(result.filename).toBe("作文批改-为-自己-鼓掌-20260721-1405-v2.pdf");
     expect(fileStore.writeFile).toHaveBeenCalledWith(
       OWNER_ID,
       "review-1",
@@ -194,8 +192,8 @@ describe("PdfService", () => {
       status: "exported",
       revision: 8,
       pdfRevision: 8,
-      pdfFilename: "cached.pdf",
-      pdfPath: "pdf/cached.pdf",
+      pdfFilename: "cached-v2.pdf",
+      pdfPath: "pdf/cached-v2.pdf",
       exportedAt: new Date("2026-07-21T06:00:00.000Z"),
     });
     const { service, fileStore, browserFactory, repository } = harness({ current: cached });
@@ -203,7 +201,7 @@ describe("PdfService", () => {
 
     const result = await service.getOrCreate(OWNER_ID, "review-1");
 
-    expect(result).toMatchObject({ filename: "cached.pdf", cached: true });
+    expect(result).toMatchObject({ filename: "cached-v2.pdf", cached: true });
     expect(result.data).toEqual(Buffer.from("cached-pdf"));
     expect(browserFactory.launch).not.toHaveBeenCalled();
     expect(repository.markExported).not.toHaveBeenCalled();
