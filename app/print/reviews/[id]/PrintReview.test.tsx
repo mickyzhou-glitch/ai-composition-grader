@@ -102,7 +102,7 @@ describe("A4 打印稿", () => {
     ]);
     expect(container.querySelectorAll('[data-page-kind="feedback"]')).toHaveLength(2);
     expect(container.querySelector("footer")).toBeNull();
-    expect(screen.getByLabelText("作文等级")).toHaveTextContent("优秀作文");
+    expect(screen.queryByLabelText("作文等级")).not.toBeInTheDocument();
     expect(screen.queryByText("35")).not.toBeInTheDocument();
     expect(screen.queryByText("逐页红批")).not.toBeInTheDocument();
     expect(screen.queryByText("分项明细")).not.toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("A4 打印稿", () => {
     expect(images).toHaveLength(2);
     expect(images[0]).toHaveAttribute("src", "data:image/jpeg;base64,one");
     expect(images[1]).toHaveAttribute("src", "data:image/jpeg;base64,two");
-    expect(container.querySelectorAll("[data-issue-box]")).toHaveLength(3);
+    expect(container.querySelectorAll("[data-issue-underline]")).toHaveLength(3);
     expect(Array.from(container.querySelectorAll("[data-annotation-number]")).map((node) => node.getAttribute("data-annotation-number"))).toEqual(["1", "2", "3"]);
     expect(screen.getByLabelText("第 1 页示范文章")).toHaveTextContent("第 1 段示范正文");
     expect(screen.getByLabelText("第 2 页示范文章")).toHaveTextContent("第 5 段示范正文");

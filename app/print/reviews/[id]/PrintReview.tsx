@@ -21,7 +21,7 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
   }
 
   const report = review.report;
-  const numbered = orderedAnnotations(review.annotations);
+  const numbered = orderedAnnotations(review.annotations.filter((annotation) => !annotation.isHighlight));
   return (
     <article className={styles.document} data-print-ready="true">
       <header className={styles.runningHeader} aria-hidden="true">
@@ -33,24 +33,14 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
         data-page-kind="summary"
         data-print-section="summary"
       >
-        <p className={styles.eyebrow}>作文批改报告</p>
+        <p className={styles.eyebrow}>小升初作文批改</p>
         <h1>{review.config.title}</h1>
         <div className={styles.summaryGrid}>
-          <div className={styles.levelBadge} aria-label="作文等级">
-            <span>作文等级</span>
-            <b>{report.scores.level}</b>
-          </div>
           <div className={styles.overallComment}>
             <h2>总评</h2>
             <p>{report.personalizedComment}</p>
           </div>
         </div>
-        <dl className={styles.assignmentInfo}>
-          <div><dt>年级</dt><dd>{review.config.grade}</dd></div>
-          <div><dt>目标字数</dt><dd>{review.config.targetCharacters} 字</dd></div>
-          <div><dt>写作要求</dt><dd>{review.config.writingRequirements}</dd></div>
-          <div><dt>结构要求</dt><dd>{review.config.structureRequirements}</dd></div>
-        </dl>
       </section>
 
       {review.images.map((image, pageIndex) => {
@@ -64,8 +54,8 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
             key={image.id}
           >
             <div className={styles.feedbackHeading}>
-              <p className={styles.eyebrow}>逐页学习反馈</p>
-              <h2>第 {pageIndex + 1} 页：原文、示范与修改建议</h2>
+              <p className={styles.eyebrow}>五段式学习单</p>
+              <h2>第 {pageIndex + 1} 页：考场范文、原文问题与修改</h2>
             </div>
             <div className={styles.feedbackLayout}>
               <aside className={styles.sampleColumn} aria-label={`第 ${pageIndex + 1} 页示范文章`}>
@@ -83,14 +73,13 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
                 <img alt={`第 ${pageIndex + 1} 页原作文`} src={imageSources[pageIndex]} />
                 <svg aria-hidden="true" className={styles.annotationOverlay} preserveAspectRatio="none" viewBox="0 0 100 100">
                   {pageAnnotations.map(({ annotation, number }) => (
-                    <rect
-                      data-issue-box="true"
+                    <line
+                      data-issue-underline="true"
                       key={`issue-${number}`}
-                      x={Math.max(0, annotation.x * 100 - 4)}
-                      y={Math.max(0, annotation.y * 100 - 3)}
-                      width="8"
-                      height="6"
-                      rx="0.8"
+                      x1={Math.max(0, annotation.x * 100 - 5)}
+                      y1={Math.min(99, annotation.y * 100 + 2)}
+                      x2={Math.min(100, annotation.x * 100 + 5)}
+                      y2={Math.min(99, annotation.y * 100 + 2)}
                     />
                   ))}
                 </svg>
