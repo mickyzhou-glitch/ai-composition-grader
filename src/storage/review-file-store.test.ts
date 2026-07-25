@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ReviewFileStore, UnsafeStoragePathError } from "./review-file-store";
 
@@ -103,7 +103,7 @@ describe("ReviewFileStore", () => {
     await utimes(staleLock, staleAt, staleAt);
 
     let called = false;
-    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
       if (pid === 19701) throw Object.assign(new Error("gone"), { code: "ESRCH" });
       return true;
     });
@@ -128,7 +128,7 @@ describe("ReviewFileStore", () => {
     await writeFile(path.join(lockPath, "owner.json"), JSON.stringify({ pid: 19702, nonce: "live-owner-nonce---" }));
     const staleAt = new Date(Date.now() - 6 * 60 * 1000);
     await utimes(lockPath, staleAt, staleAt);
-    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid: number) => {
       if (pid === 19702) return true;
       return true;
     });

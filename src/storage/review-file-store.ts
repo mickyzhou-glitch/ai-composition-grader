@@ -134,10 +134,19 @@ async function assertRealDirectory(
     throw new UnsafeStoragePathError(directory);
   }
 
-  const [realDirectory, realParent] = await Promise.all([
-    realpath(directory),
-    realpath(parent),
-  ]);
+  let realDirectory: string;
+  let realParent: string;
+  try {
+    [realDirectory, realParent] = await Promise.all([
+      realpath(directory),
+      realpath(parent),
+    ]);
+  } catch (error) {
+    // Another process can atomically reclaim a stale lease between lstat and
+    // realpath. Treat that as absent so the caller retries acquisition.
+    if (isMissing(error)) return false;
+    throw error;
+  }
   if (
     path.dirname(realDirectory) !== realParent ||
     path.basename(realDirectory) !== path.basename(directory)

@@ -28,8 +28,8 @@ function json(data: unknown, ok = true) {
 describe("历史首页", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
-    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
+    delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
   });
 
   function mockBrowserDownload() {

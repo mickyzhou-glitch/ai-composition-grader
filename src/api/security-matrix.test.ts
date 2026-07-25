@@ -54,7 +54,7 @@ describe("业务 API 安全矩阵", () => {
     services.settingsService.get.mockResolvedValue({ baseUrl: "https://ai.test/v1", model: "m", keyConfigured: false });
     services.settingsService.testCandidate.mockResolvedValue({ baseUrl: "https://ai.test/v1", model: "m", keyConfigured: true });
     delete process.env.APP_ORIGIN;
-    process.env.NODE_ENV = "test";
+    (process.env as Record<string, string | undefined>).NODE_ENV = "test";
   });
 
   it("无 Cookie、失效 Cookie 都在业务执行前返回 401", async () => {
@@ -84,7 +84,7 @@ describe("业务 API 安全矩阵", () => {
   });
 
   it("生产环境缺少 APP_ORIGIN 时拒绝写请求", async () => {
-    process.env.NODE_ENV = "production";
+    (process.env as Record<string, string | undefined>).NODE_ENV = "production";
     session({ id: "admin-1", role: "admin" });
     const response = await putSettings(request("/api/settings", {
       method: "PUT",

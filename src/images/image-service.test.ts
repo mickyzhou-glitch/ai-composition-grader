@@ -253,11 +253,11 @@ describe("ImageService", () => {
     ].map((storedPath) => path.basename(storedPath));
     const deleteFile = store.deleteFile.bind(store);
     const deleteSpy = vi.spyOn(store, "deleteFile").mockImplementation(
-      async (reviewId, kind, filename) => {
+      async (ownerId, reviewId, kind, filename) => {
         if (oldFilenames.includes(filename)) {
           throw new Error("cleanup failed");
         }
-        await deleteFile(reviewId, kind, filename);
+        await deleteFile(ownerId, reviewId, kind, filename);
       },
     );
 
