@@ -15,7 +15,9 @@ function plist(label: Service, command: string[]): string {
   const output = join(logs, `${label}.log`);
   const error = join(logs, `${label}.error.log`);
   const program = command.map((value) => `<string>${value.replaceAll("&", "&amp;")}</string>`).join("");
-  return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array>${program}</array><key>WorkingDirectory</key><string>${root}</string><key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>${output}</string><key>StandardErrorPath</key><string>${error}</string></dict></plist>`;
+  const origin = process.env.APP_ORIGIN?.trim();
+  const environment = origin ? `<key>EnvironmentVariables</key><dict><key>APP_ORIGIN</key><string>${origin}</string></dict>` : "";
+  return `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>Label</key><string>${label}</string><key>ProgramArguments</key><array>${program}</array><key>WorkingDirectory</key><string>${root}</string>${environment}<key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>StandardOutPath</key><string>${output}</string><key>StandardErrorPath</key><string>${error}</string></dict></plist>`;
 }
 
 async function install(): Promise<void> {
