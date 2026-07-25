@@ -1,9 +1,16 @@
 import { execFileSync, spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { chmod, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+import { MacOSKeychain } from "../src/settings/keychain.ts";
+import {
+  PDF_PRINT_TOKEN_KEYCHAIN_ACCOUNT,
+  PDF_PRINT_TOKEN_KEYCHAIN_SERVICE,
+} from "../src/pdf/print-token-secret.ts";
 
 const root = resolve(import.meta.dirname, "..");
 const labels = ["ai-composition-grader-web", "ai-composition-grader-worker", "ai-composition-grader-tunnel"] as const;
@@ -24,8 +31,16 @@ async function install(): Promise<void> {
   mkdirSync(logs, { recursive: true, mode: 0o700 });
   mkdirSync(agents, { recursive: true });
   const node = process.execPath;
+  const printTokenStore = new MacOSKeychain({
+    service: PDF_PRINT_TOKEN_KEYCHAIN_SERVICE,
+    account: PDF_PRINT_TOKEN_KEYCHAIN_ACCOUNT,
+  });
+  const existingPrintToken = await printTokenStore.get();
+  if (!existingPrintToken || existingPrintToken.length < 32) {
+    await printTokenStore.set(randomBytes(32).toString("base64url"));
+  }
   const services: Array<[Service, string[]]> = [
-    [labels[0], [node, join(root, "node_modules", "next", "dist", "bin", "next"), "start", "--hostname", "127.0.0.1", "--port", "3001"]],
+    [labels[0], [node, join(root, "node_modules", "tsx", "dist", "cli.mjs"), "scripts/web.ts"]],
     [labels[1], [node, join(root, "node_modules", "tsx", "dist", "cli.mjs"), "scripts/worker.ts"]],
     [labels[2], [node, join(root, "node_modules", "tsx", "dist", "cli.mjs"), "scripts/ngrok.ts"]],
   ];
