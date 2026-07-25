@@ -45,6 +45,11 @@ interface PendingImage {
 interface UploadedImage { id: number; position: number }
 interface ReviewSession { id: string; revision: number }
 interface ImageMutationResult { images: UploadedImage[]; revision: number }
+interface AssignmentGuidance {
+  writingRequirements: string;
+  structureRequirements: string;
+  scoringFocus: string;
+}
 
 function asCrop(edges: CropEdges): NormalizedCrop | null {
   const { left, top, right, bottom } = edges;
@@ -77,9 +82,35 @@ export default function NewReviewPage() {
   const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [guidanceBusy, setGuidanceBusy] = useState(false);
 
   function updateConfig<K extends keyof AssignmentConfig>(key: K, value: AssignmentConfig[K]) {
     setConfig((current) => ({ ...current, [key]: value }));
+  }
+
+  async function generateGuidance() {
+    if (!config.title.trim()) {
+      setError("请先填写作文题目");
+      return;
+    }
+    setGuidanceBusy(true);
+    setError("");
+    try {
+      const guidance = await apiFetch<AssignmentGuidance>("/api/assignment-guidance", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title: config.title,
+          grade: config.grade,
+          targetCharacters: config.targetCharacters,
+        }),
+      });
+      setConfig((current) => ({ ...current, ...guidance }));
+    } catch (caught) {
+      setError(`${errorMessage(caught)}。请检查 AI 设置后重试。`);
+    } finally {
+      setGuidanceBusy(false);
+    }
   }
 
   function chooseFiles(files: File[]) {
@@ -213,6 +244,7 @@ export default function NewReviewPage() {
                 <label>作文题目<input value={config.title} onChange={(event) => updateConfig("title", event.target.value)} /></label>
                 <label>适用年级<input value={config.grade} onChange={(event) => updateConfig("grade", event.target.value)} /></label>
                 <label>目标字数<input aria-label="目标字数" type="number" min={1} value={config.targetCharacters} onChange={(event) => updateConfig("targetCharacters", Number(event.target.value))} /></label>
+                <div className="wide ai-guidance-action"><div><b>先由 AI 拟定要求</b><small>根据题目、年级和目标字数生成初稿；生成后可继续手动修改。</small></div><AsyncButton className="button button--quiet" type="button" busy={guidanceBusy} busyLabel="AI 正在拟定…" disabled={!config.title.trim()} onClick={() => void generateGuidance()}>AI 生成要求</AsyncButton></div>
                 <label className="wide">写作要求<textarea value={config.writingRequirements} onChange={(event) => updateConfig("writingRequirements", event.target.value)} /></label>
                 <label className="wide">结构要求<textarea value={config.structureRequirements} onChange={(event) => updateConfig("structureRequirements", event.target.value)} /></label>
                 <label className="wide">评分侧重<textarea value={config.scoringFocus} onChange={(event) => updateConfig("scoringFocus", event.target.value)} /></label>

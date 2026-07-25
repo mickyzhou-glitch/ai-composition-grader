@@ -19,6 +19,7 @@ import {
 import type { ReviewService } from "../services/review-service";
 import { reviewImageVariants, type ReviewImageVariant } from "../services/review-service";
 import type { AnalysisJobService } from "../jobs/analysis-job-service";
+import type { AssignmentGuidance, AssignmentGuidanceInput } from "../ai/assignment-guidance-adapter";
 
 const MAX_MULTIPART_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -212,6 +213,12 @@ const settingsTestSchema = settingsWriteSchema.extend({
   apiKey: z.string().min(1).optional(),
 });
 
+const assignmentGuidanceSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  grade: z.string().trim().min(1).max(120),
+  targetCharacters: z.number().int().positive().max(3_000),
+}).strict();
+
 interface SettingsRouteService {
   get(): Promise<SettingsView | null>;
   testCandidate(
@@ -276,6 +283,21 @@ export function createSettingsRouteHandlers(
           false,
         );
         return ok({ connected: true });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+export function createAssignmentGuidanceRouteHandlers(dependencies: {
+  generate(input: AssignmentGuidanceInput): Promise<AssignmentGuidance>;
+}) {
+  return {
+    async POST(request: Request) {
+      try {
+        const input = assignmentGuidanceSchema.parse(await readJson(request));
+        return ok(await dependencies.generate(input));
       } catch (error) {
         return failure(error);
       }

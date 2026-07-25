@@ -19,6 +19,7 @@ import { ImageService, MAX_IMAGE_BYTES } from "../images/image-service";
 import { ReviewService, type AiReviewer } from "../services/review-service";
 import { ReviewFileStore } from "../storage/review-file-store";
 import {
+  createAssignmentGuidanceRouteHandlers,
   createAnalyzeRouteHandlers,
   createReviewImagesRouteHandlers,
   createReviewRouteHandlers,
@@ -214,6 +215,36 @@ describe("settings route handlers", () => {
       model: "m",
       apiKey: "bad-key",
     }, testConnection, false);
+  });
+});
+
+describe("assignment guidance route handlers", () => {
+  it("校验输入并返回 AI 生成的可编辑要求", async () => {
+    const generate = vi.fn(async () => ({
+      writingRequirements: "写清一件具体的事。",
+      structureRequirements: "开头点题，中间展开，结尾回扣题目。",
+      scoringFocus: "内容具体，感受真实。",
+    }));
+    const handlers = createAssignmentGuidanceRouteHandlers({ generate });
+
+    const response = await handlers.POST(
+      jsonRequest("http://localhost/api/assignment-guidance", "POST", {
+        title: "我学会了等待",
+        grade: "上海五四学制六年级",
+        targetCharacters: 600,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({
+      ok: true,
+      data: { writingRequirements: "写清一件具体的事。" },
+    });
+    expect(generate).toHaveBeenCalledWith({
+      title: "我学会了等待",
+      grade: "上海五四学制六年级",
+      targetCharacters: 600,
+    });
   });
 });
 

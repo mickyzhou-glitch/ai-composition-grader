@@ -27,6 +27,8 @@ const SAFE_MESSAGES: Record<string, string> = {
   PDF_UNTRUSTED_NAVIGATION: "PDF 服务暂时不可用",
   PDF_TIMEOUT: "PDF 服务暂时不可用",
   AI_REQUEST_FAILED: "AI 服务暂时不可用",
+  AI_SETTINGS_INCOMPLETE: "请先由管理员配置 AI 服务",
+  AI_INVALID_RESPONSE: "AI 服务暂时不可用",
   AI_RESPONSE_INVALID: "AI 服务暂时不可用",
   SETTINGS_INVALID: "设置参数无效",
   SETTINGS_UNAVAILABLE: "设置服务暂时不可用",

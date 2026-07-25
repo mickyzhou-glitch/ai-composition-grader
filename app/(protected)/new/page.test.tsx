@@ -47,6 +47,27 @@ describe("新建作文批改", () => {
     expect(screen.getByLabelText("目标字数")).toHaveValue(600);
   });
 
+  it("自定义题目可用 AI 先生成写作、结构与评分要求，且保留可编辑性", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json({
+      writingRequirements: "选择一件真实小事，写清变化。",
+      structureRequirements: "开头设置情境，中间展开经过，结尾回扣题目。",
+      scoringFocus: "事件具体，细节真实，感受自然。",
+    }));
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+
+    await user.click(screen.getByRole("button", { name: "自定义题目" }));
+    await user.type(screen.getByLabelText("作文题目"), "我学会了等待");
+    await user.click(screen.getByRole("button", { name: "AI 生成要求" }));
+
+    expect(await screen.findByDisplayValue("选择一件真实小事，写清变化。")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("开头设置情境，中间展开经过，结尾回扣题目。")).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("写作要求"));
+    await user.type(screen.getByLabelText("写作要求"), "教师手动调整后的要求。");
+    expect(screen.getByDisplayValue("教师手动调整后的要求。")).toBeInTheDocument();
+    expect(globalThis.fetch).toHaveBeenCalledWith("/api/assignment-guidance", expect.objectContaining({ method: "POST" }));
+  });
+
   it("在提交前必须确认真实作文上传说明", async () => {
     const user = userEvent.setup();
     render(<NewReviewPage />);
