@@ -68,6 +68,22 @@ describe("authentication route handlers", () => {
     expect(cookie).not.toContain("Domain=");
   });
 
+  it("uses the first trusted proxy address for a configured HTTPS deployment", async () => {
+    process.env.APP_ORIGIN = "https://grader.example.test";
+    const response = await login(jsonRequest("http://127.0.0.1:3001/api/auth/login", "POST", {
+      username: "teacher.one",
+      password: "password",
+    }, {
+      origin: "https://grader.example.test",
+      "x-forwarded-host": "grader.example.test",
+      "x-forwarded-proto": "https",
+      "x-forwarded-for": "203.0.113.7, 127.0.0.1",
+    }));
+    expect(response.status).toBe(200);
+    expect(authService.login).toHaveBeenCalledWith(expect.objectContaining({ ipHash: expect.stringMatching(/^[a-f0-9]{64}$/) }));
+    expect(response.headers.get("set-cookie")).toContain("__Host-zuowen_session=raw-session-token");
+  });
+
   it("rejects a similar but untrusted origin before reading credentials", async () => {
     process.env.APP_ORIGIN = "https://grader.example.test";
     const response = await login(jsonRequest("https://grader.example.test/api/auth/login", "POST", { username: "teacher.one", password: "password" }, { origin: "https://grader.example.test.evil" }));

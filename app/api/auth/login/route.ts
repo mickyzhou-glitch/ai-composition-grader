@@ -5,6 +5,7 @@ import { hashSourceIp } from "../../../../src/auth/password";
 import { assertTrustedWriteOrigin, AuthRequestError, sessionCookieOptions } from "../../../../src/auth/request-auth";
 import { AuthServiceError } from "../../../../src/auth/auth-service";
 import { getApplicationServices } from "../../../../src/runtime/application-services";
+import { MacOSKeychain } from "../../../../src/settings/keychain";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,10 @@ function errorResponse(code: string, message: string, status: number, details?: 
 
 function sourceIp(request: Request): string {
   const withIp = request as Request & { ip?: string };
+  const forwarded = request.headers.get("x-forwarded-for");
+  // This handler first verifies the configured origin and loopback proxy path.
+  // Only then may the left-most proxy-provided address identify rate-limit scope.
+  if (forwarded) return forwarded.split(",")[0]?.trim() ?? "";
   return withIp.ip ?? request.headers.get("x-real-ip") ?? "";
 }
 
@@ -33,7 +38,14 @@ function authFailure(error: unknown) {
 export async function POST(request: Request) {
   try {
     assertTrustedWriteOrigin(request);
-    const secret = process.env.AUTH_IP_HMAC_SECRET;
+    const secret = process.env.AUTH_IP_HMAC_SECRET
+      ?? (process.env.NODE_ENV === "production"
+        ? await new MacOSKeychain({ service: "ai-composition-grader-auth", account: "ip-hmac" }).get()
+        : null)
+      // The configured HTTPS origin is a compatibility fallback when launchd
+      // cannot unlock an interactive login-Keychain. A dedicated secret always
+      // takes precedence and raw IP addresses are never stored.
+      ?? process.env.APP_ORIGIN;
     const ip = sourceIp(request);
     if (!secret || !ip) return errorResponse("AUTHENTICATION_UNAVAILABLE", "认证服务暂时不可用", 503);
     const parsed = loginSchema.parse(await request.json());
