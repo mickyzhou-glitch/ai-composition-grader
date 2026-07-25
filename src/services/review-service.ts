@@ -104,52 +104,52 @@ export class ReviewService {
     data: Buffer;
     contentType: string;
   }> {
-    return this.fileStore.withReviewLock(ownerId, id, async () => {
-      const review = this.get(ownerId, id);
-      await this.fileStore.migrateLegacyReview(ownerId, id);
-      const image = review.images.find((candidate) => candidate.id === imageId);
-      if (!image) {
+    // PDF rendering holds the cross-process review lock while its authenticated
+    // print page asks this service for the original image. Reading the immutable
+    // image file must therefore not attempt to acquire that same lock again.
+    const review = this.get(ownerId, id);
+    const image = review.images.find((candidate) => candidate.id === imageId);
+    if (!image) {
+      throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
+    }
+    const storedPath = image[`${variant}Path`];
+    if (!/^images\/[^/\\\0]+$/.test(storedPath)) {
+      throw new ReviewServiceError("INVALID_FILE_PATH", "图片路径无效", 400);
+    }
+    const extension = storedPath.split(".").at(-1)?.toLowerCase();
+    const contentTypes: Record<string, string> = {
+      jpg: "image/jpeg",
+      jpeg: "image/jpeg",
+      png: "image/png",
+      webp: "image/webp",
+      heic: "image/heic",
+      heif: "image/heif",
+    };
+    const contentType = extension ? contentTypes[extension] : undefined;
+    if (!contentType) {
+      throw new ReviewServiceError("INVALID_FILE_PATH", "图片格式无效", 400);
+    }
+    try {
+      return {
+        data: await this.fileStore.readFile(
+          ownerId,
+          id,
+          "images",
+          storedPath.slice("images/".length),
+        ),
+        contentType,
+      };
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
         throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
       }
-      const storedPath = image[`${variant}Path`];
-      if (!/^images\/[^/\\\0]+$/.test(storedPath)) {
-        throw new ReviewServiceError("INVALID_FILE_PATH", "图片路径无效", 400);
-      }
-      const extension = storedPath.split(".").at(-1)?.toLowerCase();
-      const contentTypes: Record<string, string> = {
-        jpg: "image/jpeg",
-        jpeg: "image/jpeg",
-        png: "image/png",
-        webp: "image/webp",
-        heic: "image/heic",
-        heif: "image/heif",
-      };
-      const contentType = extension ? contentTypes[extension] : undefined;
-      if (!contentType) {
-        throw new ReviewServiceError("INVALID_FILE_PATH", "图片格式无效", 400);
-      }
-      try {
-        return {
-          data: await this.fileStore.readFile(
-            ownerId,
-            id,
-            "images",
-            storedPath.slice("images/".length),
-          ),
-          contentType,
-        };
-      } catch (error) {
-        if (
-          typeof error === "object" &&
-          error !== null &&
-          "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          throw new ReviewServiceError("FILE_NOT_FOUND", "图片不存在", 404);
-        }
-        throw error;
-      }
-    });
+      throw error;
+    }
   }
 
   async create(ownerId: string, config: AssignmentConfig): Promise<ReviewRecord> {
