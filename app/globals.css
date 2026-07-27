@@ -65,6 +65,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
   box-shadow: 0 6px 15px rgb(180 35 24 / 18%);
 }
 .header-actions, .form-actions, .card-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.header-action-error {
+  flex-basis: 100%;
+  color: var(--red);
+  font-size: .78rem;
+  font-weight: 700;
+  text-align: right;
+}
 .button, button.button, .hero-cta {
   display: inline-flex;
   min-height: 42px;
@@ -340,6 +347,7 @@ textarea { min-height: 100px; resize: vertical; }
   .seal { width: 32px; height: 32px; }
   .header-actions { justify-content: flex-end; }
   .header-actions .button { min-height: 34px; padding: 6px 9px; font-size: .78rem; }
+  .header-action-error { font-size: .72rem; }
   .page-container, .narrow-page { width: calc(100% - 32px); padding-top: 32px; }
   .hero { grid-template-columns: 1fr; min-height: 0; padding: 34px 26px; gap: 24px; }
   .hero-cta { width: 100%; }

@@ -2,9 +2,15 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const navigation = vi.hoisted(() => ({ reviewId: "review-1" }));
+const navigation = vi.hoisted(() => ({
+  reviewId: "review-1",
+  router: { replace: vi.fn(), refresh: vi.fn() },
+}));
 
-vi.mock("next/navigation", () => ({ useParams: () => ({ id: navigation.reviewId }) }));
+vi.mock("next/navigation", () => ({
+  useParams: () => ({ id: navigation.reviewId }),
+  useRouter: () => navigation.router,
+}));
 
 import ReviewPage from "./page";
 
