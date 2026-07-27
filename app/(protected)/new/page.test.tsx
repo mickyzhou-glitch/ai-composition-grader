@@ -80,14 +80,14 @@ describe("新建作文批改", () => {
     );
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
 
-    expect(screen.getByText(/请勿上传学生姓名、学号、班级、学校/)).toBeInTheDocument();
+    expect(screen.getByText(/请勿在图片中保留学生姓名、学号、班级、学校/)).toBeInTheDocument();
     expect(screen.getByText(/30 天/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeDisabled();
     await confirmPrivacy(user);
     expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeEnabled();
   });
 
-  it("按调整后的三图顺序上传，并提交旋转和裁剪", async () => {
+  it("填写学生姓名后按调整后的四图顺序上传，并提交旋转和裁剪", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json([]))
@@ -97,6 +97,7 @@ describe("新建作文批改", () => {
           { id: 11, position: 0 },
           { id: 12, position: 1 },
           { id: 13, position: 2 },
+          { id: 14, position: 3 },
         ], revision: 1 }),
       )
       .mockImplementationOnce(() => json({ images: [], revision: 2 }));
@@ -105,10 +106,12 @@ describe("新建作文批改", () => {
 
     await user.click(screen.getByRole("button", { name: /为自己鼓掌/ }));
     await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
-    const files = ["一.jpg", "二.jpg", "三.jpg"].map(
+    await user.type(screen.getByLabelText("学生姓名"), "李羿辰");
+    const files = ["一.jpg", "二.jpg", "三.jpg", "四.jpg"].map(
       (name) => new File([name], name, { type: "image/jpeg" }),
     );
     await user.upload(screen.getByLabelText("选择作文图片"), files);
+    expect(screen.getByText("4/4 张")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "上移 三.jpg" }));
     await user.click(screen.getByRole("button", { name: "旋转 二.jpg" }));
     await user.clear(screen.getByLabelText("二.jpg 裁剪左边界（%）"));
@@ -120,13 +123,18 @@ describe("新建作文批改", () => {
       expect.stringContaining("一.jpg"),
       expect.stringContaining("三.jpg"),
       expect.stringContaining("二.jpg"),
+      expect.stringContaining("四.jpg"),
     ]);
+    expect(screen.getByText("李羿辰")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews/review-new"));
     const reviewRequest = fetchMock.mock.calls[1];
     expect(reviewRequest[0]).toBe("/api/reviews");
-    expect(JSON.parse((reviewRequest[1] as RequestInit).body as string).config.title).toBe("为自己鼓掌");
+    expect(JSON.parse((reviewRequest[1] as RequestInit).body as string)).toMatchObject({
+      studentName: "李羿辰",
+      config: { title: "为自己鼓掌" },
+    });
     const uploaded = (fetchMock.mock.calls[2][1] as RequestInit).body as FormData;
     expect(uploaded.get("expectedRevision")).toBe("0");
     expect(uploaded.get("privacyConfirmed")).toBe("true");
@@ -135,6 +143,7 @@ describe("新建作文批改", () => {
       "一.jpg",
       "三.jpg",
       "二.jpg",
+      "四.jpg",
     ]);
     const transforms = JSON.parse((fetchMock.mock.calls[3][1] as RequestInit).body as string);
     expect(transforms.expectedRevision).toBe(1);

@@ -3,9 +3,11 @@ import { z } from "zod";
 
 import {
   aiReviewEnvelopeSchema,
+  MAX_REVIEW_IMAGES,
   sampleParagraphSchema,
   type AiReviewEnvelope,
   type AssignmentConfig,
+  type EvaluationReport,
 } from "../domain/contracts";
 import { deriveLevel, validateReport } from "../domain/report-validation";
 
@@ -56,6 +58,14 @@ export interface RewriteSampleInput {
   instruction?: string;
 }
 
+export type FeedbackSection = "strengths" | "improvements";
+
+export interface RewriteFeedbackInput {
+  config: AssignmentConfig;
+  report: EvaluationReport;
+  section: FeedbackSection;
+}
+
 export class AiAdapterError extends Error {
   constructor(
     readonly code:
@@ -82,6 +92,12 @@ const ENVELOPE_SCHEMA_SUMMARY = [
   "EvaluationReport={themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],scores:{themeIntent:0..10,contentSelection:0..10,structure:0..8,languageExpression:0..8,writingConventions:0..4,total:0..40,level:优秀作文|二类作文|重写},sampleParagraphs:{title:string,text:string,suggestion:string}[]}",
 ].join("\n");
 
+const SAMPLE_PARAGRAPH_TRANSITION_RULE =
+  "范文段落衔接不得依赖流水账式的时间推进：不要连续用“生日那天”“第二天放学后”“半小时后”等时间短语开启段落，第一段不得以时间词开头。优先使用对比、照应、因果、情感变化、人物动作或核心物件来承接上下文；例如可以借鉴“虽然别人的礼物……，但……”这种对比入题的方法，但不要机械照抄固定句式。只有时间变化确实推动关键情节时，才可偶尔在段中简洁交代。";
+
+const CONCISE_FEEDBACK_RULE =
+  "给学生的评价必须简洁、直观：personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加“一、二、三、四”等序号，不重复解释，条数由文章实际内容决定。优点从选材、内容表达、情感、情节完整性以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；用六年级学生能直接看懂的短句，例如“结尾部分要注意扣题”“中间段落不要啰嗦”。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。";
+
 function buildPrompt(config: AssignmentConfig): string {
   const fiveParagraphRule =
     "必须逐段核对学生原文是否具备五段式：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目给出的 structureRequirements 优先于此默认名称。缺段、合段混乱、转折缺失或结尾未升华时，必须在对应原文位置给出 structure 批注。";
@@ -97,6 +113,8 @@ function buildPrompt(config: AssignmentConfig): string {
     "图片上有 10x10 网格。每条批注用 pageIndex 和相对整页的 x/y 0..1 归一化坐标定位，坐标必须落在 0..1。",
     fiveParagraphRule,
     sampleRule,
+    SAMPLE_PARAGRAPH_TRANSITION_RULE,
+    CONCISE_FEEDBACK_RULE,
     "只返回一个 JSON 对象，不要 Markdown，不要解释。结构如下：",
     ENVELOPE_SCHEMA_SUMMARY,
   ].join("\n\n");
@@ -118,6 +136,8 @@ function buildRepairPrompt(
     "五段结构核对：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目 structureRequirements 优先。结构问题要用 annotation.category=structure 标注在原文确实能辨认的整句或段落起点；坐标不确定则不要标注。",
     "评分不变量：themeIntent 0..10、contentSelection 0..10、structure 0..8、languageExpression 0..8、writingConventions 0..4；total 必须等于五项之和；0-29 重写、30-35 二类作文、36-40 优秀作文；偏题或事件不完整时 total 不得超过 29。",
     sampleRule,
+    SAMPLE_PARAGRAPH_TRANSITION_RULE,
+    CONCISE_FEEDBACK_RULE,
     `schema 摘要：\n${ENVELOPE_SCHEMA_SUMMARY}`,
   ].join("\n\n");
 }
@@ -147,15 +167,36 @@ function validateEnvelope(
     scores.structure +
     scores.languageExpression +
     scores.writingConventions;
+  const report = validateReport(
+    {
+      ...envelope.report,
+      scores: { ...scores, total, level: deriveLevel(total) },
+    },
+    { templateType: config.templateType },
+  );
+  const strengths = report.personalizedComment
+    .split(/\r?\n/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const isShortPoint = (item: string) => {
+    const length = Array.from(item).length;
+    return length >= 10 && length <= 20;
+  };
+  if (
+    strengths.length < 2 ||
+    strengths.length > 4 ||
+    !strengths.every(isShortPoint) ||
+    report.painPoints.length < 2 ||
+    report.painPoints.length > 4 ||
+    !report.painPoints.every(isShortPoint) ||
+    report.commonIssues.length !== 0 ||
+    report.revisionSuggestions.length !== 0
+  ) {
+    throw new Error("overall feedback must contain two to four concise strengths and improvements");
+  }
   return {
     ...envelope,
-    report: validateReport(
-      {
-        ...envelope.report,
-        scores: { ...scores, total, level: deriveLevel(total) },
-      },
-      { templateType: config.templateType },
-    ),
+    report,
   };
 }
 
@@ -184,8 +225,13 @@ export class OpenAIReviewAdapter {
   }
 
   async analyze(input: AnalyzeCompositionInput): Promise<AiReviewEnvelope> {
-    if (input.imageDataUrls.length < 1 || input.imageDataUrls.length > 3) {
-      throw new TypeError("imageDataUrls must contain 1 to 3 pages");
+    if (
+      input.imageDataUrls.length < 1 ||
+      input.imageDataUrls.length > MAX_REVIEW_IMAGES
+    ) {
+      throw new TypeError(
+        `imageDataUrls must contain 1 to ${MAX_REVIEW_IMAGES} pages`,
+      );
     }
     if (
       input.imageDataUrls.some(
@@ -289,6 +335,7 @@ export class OpenAIReviewAdapter {
           `五段范文：${JSON.stringify(input.sampleParagraphs)}`,
           `要重写第 ${input.index + 1} 段：${JSON.stringify(current)}`,
           `教师附加要求：${input.instruction?.trim() || "请换一种更具体、更自然的写法。"}`,
+          SAMPLE_PARAGRAPH_TRANSITION_RULE,
           "必须坚持一条清楚的事件线，统一人物称呼和关系；删除无关人物、无关争吵与枝节，不得凭空增添关键经历。只返回 JSON：{\"text\":\"重写后的这一段正文\"}。",
         ].join("\n\n"),
       }],
@@ -297,6 +344,47 @@ export class OpenAIReviewAdapter {
       return z.object({ text: z.string().trim().min(1).max(2_000) }).parse(parseJsonResponse(content));
     } catch {
       throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回的示范段落无效", 502);
+    }
+  }
+
+  async rewriteFeedback(input: RewriteFeedbackInput): Promise<{ items: string[] }> {
+    const settings = await this.settings.getRuntimeConfig();
+    if (!settings) {
+      throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
+    }
+    const client = this.clientFactory({
+      apiKey: settings.apiKey,
+      baseURL: settings.baseUrl,
+      timeout: AI_TIMEOUT_MS,
+      maxRetries: AI_MAX_RETRIES,
+    });
+    const sectionLabel = input.section === "strengths" ? "优点" : "需要修改";
+    const content = await completionContent(client, {
+      model: settings.model,
+      response_format: { type: "json_object" },
+      messages: [{
+        role: "user",
+        content: [
+          `你是上海五升六学生的作文老师。请只重新生成“${sectionLabel}”，不要改动报告中的其他内容。`,
+          `作文要求：${JSON.stringify(input.config)}`,
+          `当前批改报告：${JSON.stringify(input.report)}`,
+          "由你判断生成 2-4 条，不要固定凑成四条。",
+          "每条必须是 10-20 个汉字，只说一个具体要点，不加序号，不写总评段落。",
+          input.section === "improvements"
+            ? "每条都要指出哪一段有问题、问题是什么、具体怎么改；给出修改指导，不是评价，并让六年级学生能直接看懂。句式可参考“结尾部分要注意扣题”“中间段落不要啰嗦”，但要结合本篇作文。"
+            : "从选材、内容表达、情感、情节完整性及特别出彩的部分中选择真实明显的维度。只写夸奖，不解释理由，不夹带修改建议，不要空泛。",
+          "只返回 JSON：{\"items\":[\"第一条\",\"第二条\"]}。",
+        ].join("\n\n"),
+      }],
+    });
+    try {
+      const itemSchema = z.string().trim().refine((item) => {
+        const length = Array.from(item).length;
+        return length >= 10 && length <= 20;
+      });
+      return z.object({ items: z.array(itemSchema).min(2).max(4) }).parse(parseJsonResponse(content));
+    } catch {
+      throw new AiAdapterError("AI_INVALID_RESPONSE", `AI 返回的${sectionLabel}无效`, 502);
     }
   }
 
@@ -323,6 +411,7 @@ export class OpenAIReviewAdapter {
           `作文要求：${JSON.stringify(input.config)}`,
           `当前五段范文：${JSON.stringify(input.sampleParagraphs)}`,
           `教师附加要求：${input.instruction?.trim() || "请整体提升细节、逻辑和前后衔接。"}`,
+          SAMPLE_PARAGRAPH_TRANSITION_RULE,
           "必须输出严格五段。人物称呼、关系、时间顺序和事件因果必须统一；只保留一条核心事件线，删去无关人物、无关争吵和枝节，不得凭空增加关键经历。五段 text 合计 550-650 个汉字。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。",
         ].join("\n\n"),
       }],

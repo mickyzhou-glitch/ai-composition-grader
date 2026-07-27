@@ -10,6 +10,9 @@ import { createPrintToken, PRINT_TOKEN_HEADER } from "./print-token";
 
 const PDF_TIMEOUT_MS = 60_000;
 const PDF_CLOSE_TIMEOUT_MS = 5_000;
+// Bump this whenever the printable document structure changes so an otherwise
+// current review cannot return a PDF rendered with an older layout.
+const PDF_LAYOUT_RELEASED_AT = new Date("2026-07-26T16:18:00.000Z");
 
 interface PdfRoute {
   request(): { url(): string };
@@ -82,7 +85,6 @@ interface PdfFileStore {
 
 interface PdfServiceOptions {
   now?: () => Date;
-  timeZone?: string;
   timeoutMs?: number;
   lock?: ReviewLock;
 }
@@ -187,23 +189,9 @@ function safeTitle(title: string): string {
   return Array.from(sanitized || "作文").slice(0, 48).join("");
 }
 
-function timestamp(date: Date, timeZone: string): string {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
-  const parts = Object.fromEntries(
-    formatter
-      .formatToParts(date)
-      .filter(({ type }) => type !== "literal")
-      .map(({ type, value }) => [type, value]),
-  );
-  return `${parts.year}${parts.month}${parts.day}-${parts.hour}${parts.minute}`;
+function pdfFilenameFor(review: ReviewRecord): string {
+  const studentName = review.studentName.trim() || "未填写";
+  return `作文批改-${safeTitle(review.config.title)}-${safeTitle(studentName)}.pdf`;
 }
 
 function escapeHtml(value: string): string {
@@ -263,7 +251,6 @@ async function closeWithin(
 
 export class PdfService {
   private readonly now: () => Date;
-  private readonly timeZone: string;
   private readonly timeoutMs: number;
   private readonly lock: ReviewLock;
   private readonly internalOrigin: string;
@@ -275,7 +262,6 @@ export class PdfService {
     options: PdfServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
-    this.timeZone = options.timeZone ?? "Asia/Shanghai";
     this.timeoutMs = options.timeoutMs ?? PDF_TIMEOUT_MS;
     this.lock = options.lock ?? new InMemoryReviewLock();
     this.internalOrigin = resolveInternalPrintOrigin();
@@ -320,12 +306,14 @@ export class PdfService {
       );
     }
     await this.fileStore.migrateLegacyReview?.(ownerId, reviewId);
+    const filename = pdfFilenameFor(review);
 
     if (
-      review.pdfFilename?.endsWith("-v2.pdf") &&
-      review.pdfPath === `pdf/${review.pdfFilename}` &&
+      review.pdfFilename === filename &&
+      review.pdfPath === `pdf/${filename}` &&
       review.pdfRevision === review.revision &&
-      review.exportedAt !== null
+      review.exportedAt !== null &&
+      review.exportedAt >= PDF_LAYOUT_RELEASED_AT
     ) {
       try {
         return {
@@ -339,7 +327,6 @@ export class PdfService {
     }
 
     const generatedAt = this.now();
-    const filename = `作文批改-${safeTitle(review.config.title)}-${timestamp(generatedAt, this.timeZone)}-v2.pdf`;
     const data = await this.render(ownerId, reviewId, review.config.title);
     await this.fileStore.writeFile(ownerId, reviewId, "pdf", filename, data);
     try {

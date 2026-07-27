@@ -6,10 +6,13 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   evaluationReportSchema,
+  MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
+  studentNameSchema,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
 import type { PdfService } from "../pdf/pdf-service";
+import type { PdfBatchService } from "../pdf/pdf-batch-service";
 import {
   normalizeBaseUrl,
   type SaveSettingsInput,
@@ -65,6 +68,7 @@ function reviewImageDto(image: {
 function reviewDto(review: {
   id: string;
   status: unknown;
+  studentName: string;
   config: unknown;
   report: unknown;
   revision: number;
@@ -87,6 +91,7 @@ function reviewDto(review: {
   return {
     id: review.id,
     status: review.status,
+    studentName: review.studentName,
     config: review.config,
     report: review.report,
     revision: review.revision,
@@ -305,10 +310,16 @@ export function createAssignmentGuidanceRouteHandlers(dependencies: {
   };
 }
 
-const createReviewSchema = z.object({ config: assignmentConfigSchema }).strict();
+const createReviewSchema = z
+  .object({
+    config: assignmentConfigSchema,
+    studentName: studentNameSchema.optional(),
+  })
+  .strict();
 const updateReviewSchema = z
   .object({
     expectedRevision: z.number().int().nonnegative(),
+    studentName: studentNameSchema.optional(),
     config: assignmentConfigSchema.optional(),
     report: evaluationReportSchema.optional(),
     annotations: z.array(annotationSchema).optional(),
@@ -317,6 +328,7 @@ const updateReviewSchema = z
   .refine(
     (input) =>
       input.config !== undefined ||
+      input.studentName !== undefined ||
       input.report !== undefined ||
       input.annotations !== undefined,
     {
@@ -344,7 +356,16 @@ export function createReviewsRouteHandlers(dependencies: {
     async POST(request: Request) {
       try {
         const input = createReviewSchema.parse(await readJson(request));
-        return ok(reviewDto(await dependencies.reviewService.create(dependencies.ownerId, input.config)), 201);
+        return ok(
+          reviewDto(
+            await dependencies.reviewService.create(
+              dependencies.ownerId,
+              input.config,
+              input.studentName,
+            ),
+          ),
+          201,
+        );
       } catch (error) {
         return failure(error);
       }
@@ -435,6 +456,29 @@ export function createSampleRewriteRouteHandlers(dependencies: {
   };
 }
 
+const feedbackSectionSchema = z.enum(["strengths", "improvements"]);
+type FeedbackRewriteContext = { params: Promise<{ id: string; section: string }> };
+
+export function createFeedbackRewriteRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "rewriteFeedback">;
+  ownerId: string;
+}) {
+  return {
+    async POST(_request: Request, context: FeedbackRewriteContext) {
+      try {
+        const { id, section } = await context.params;
+        return ok(await dependencies.reviewService.rewriteFeedback(
+          dependencies.ownerId,
+          id,
+          feedbackSectionSchema.parse(section),
+        ));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
 export function createSamplesRewriteRouteHandlers(dependencies: {
   reviewService: Pick<ReviewService, "rewriteAllSamples">;
   ownerId: string;
@@ -485,10 +529,10 @@ export function createReviewImagesRouteHandlers(
             422,
           );
         }
-        if (entries.length < 1 || entries.length > 3) {
+        if (entries.length < 1 || entries.length > MAX_REVIEW_IMAGES) {
           throw routeError(
             "IMAGE_COUNT_INVALID",
-            "一次必须上传 1 至 3 张图片",
+            `一次必须上传 1 至 ${MAX_REVIEW_IMAGES} 张图片`,
             400,
           );
         }
@@ -553,8 +597,12 @@ export function createAnalyzeRouteHandlers(dependencies: {
       try {
         const id = (await context.params).id;
         const review = dependencies.reviewService.get(dependencies.ownerId, id);
-        if (review.images.length < 1 || review.images.length > 3) {
-          throw routeError("IMAGES_REQUIRED", "请先上传 1 至 3 张作文图片", 422);
+        if (review.images.length < 1 || review.images.length > MAX_REVIEW_IMAGES) {
+          throw routeError(
+            "IMAGES_REQUIRED",
+            `请先上传 1 至 ${MAX_REVIEW_IMAGES} 张作文图片`,
+            422,
+          );
         }
         return ok(dependencies.analysisJobService.enqueue(dependencies.ownerId, id), 202);
       } catch (error) {
@@ -634,6 +682,43 @@ export function createReviewPdfRouteHandlers(dependencies: {
             "content-type": "application/pdf",
             "content-disposition":
               `attachment; filename="composition-review.pdf"; ` +
+              `filename*=UTF-8''${rfc5987Filename(result.filename)}`,
+            "cache-control": "private, no-store",
+            "x-content-type-options": "nosniff",
+          },
+        });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+const batchPdfExportSchema = z.object({
+  reviewIds: z.array(z.string().trim().min(1).max(128)).min(1).max(20),
+}).strict().refine(
+  ({ reviewIds }) => new Set(reviewIds).size === reviewIds.length,
+  { message: "reviewIds must not contain duplicates" },
+);
+
+export function createBatchReviewPdfRouteHandlers(dependencies: {
+  pdfBatchService: Pick<PdfBatchService, "exportBatch">;
+  ownerId: string;
+}) {
+  return {
+    async POST(request: Request) {
+      try {
+        const { reviewIds } = batchPdfExportSchema.parse(await readJson(request));
+        const result = await dependencies.pdfBatchService.exportBatch(
+          dependencies.ownerId,
+          reviewIds,
+        );
+        return new Response(Uint8Array.from(result.data).buffer, {
+          status: 200,
+          headers: {
+            "content-type": "application/zip",
+            "content-disposition":
+              `attachment; filename="review-pdfs.zip"; ` +
               `filename*=UTF-8''${rfc5987Filename(result.filename)}`,
             "cache-control": "private, no-store",
             "x-content-type-options": "nosniff",

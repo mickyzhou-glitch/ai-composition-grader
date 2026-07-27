@@ -13,11 +13,15 @@ export function scoreSummary(values: readonly number[]): { total: number; level:
 interface ReportEditorProps {
   report: EvaluationReport;
   onChange: (report: EvaluationReport) => void;
+  onRewriteFeedback?: (section: FeedbackSection) => Promise<void>;
+  rewritingFeedbackSection?: FeedbackSection | null;
   onRewriteSample?: (index: number, instruction?: string) => Promise<void>;
   rewritingSampleIndex?: number | null;
   onRewriteAllSamples?: (instruction?: string) => Promise<void>;
   rewritingAllSamples?: boolean;
 }
+
+export type FeedbackSection = "strengths" | "improvements";
 
 const scoreFields = [
   ["themeIntent", "主题立意", 10],
@@ -27,8 +31,8 @@ const scoreFields = [
   ["writingConventions", "书写规范", 4],
 ] as const;
 
-function lines(value: string[]) { return value.join("\n"); }
-function asLines(value: string) { return value.split("\n").map((item) => item.trim()).filter(Boolean); }
+const pointLabels = ["一", "二", "三", "四", "五", "六"] as const;
+const MAX_FEEDBACK_POINTS = pointLabels.length;
 
 function normalisedScores(scores: ScoreBreakdown, themeFit: EvaluationReport["themeFit"]): ScoreBreakdown {
   const next = { ...scores };
@@ -46,6 +50,8 @@ function normalisedScores(scores: ScoreBreakdown, themeFit: EvaluationReport["th
 export function ReportEditor({
   report,
   onChange,
+  onRewriteFeedback,
+  rewritingFeedbackSection = null,
   onRewriteSample,
   rewritingSampleIndex = null,
   onRewriteAllSamples,
@@ -74,6 +80,17 @@ export function ReportEditor({
     onChange({ ...report, themeFit, scores: normalisedScores(report.scores, themeFit) });
   }
 
+  const strengths = report.personalizedComment.split(/\r?\n/u).slice(0, MAX_FEEDBACK_POINTS);
+  const improvements = (report.painPoints.length > 0 ? report.painPoints : [""]).slice(0, MAX_FEEDBACK_POINTS);
+
+  function updateStrengths(items: string[]) {
+    update("personalizedComment", items.join("\n"));
+  }
+
+  function updateImprovements(items: string[]) {
+    update("painPoints", items);
+  }
+
   return (
     <div className="report-editor">
       <section className="report-section report-theme" aria-labelledby="theme-report-heading">
@@ -81,17 +98,58 @@ export function ReportEditor({
         <label>判断依据<textarea aria-label="主题判断依据" value={report.themeReason} onChange={(event) => update("themeReason", event.target.value)} /></label>
       </section>
 
-      <section className="report-section">
-        <p className="eyebrow">写给学生</p><h2 id="comment-heading">个性评语</h2>
-        <label className="visually-hidden" htmlFor="personalized-comment">个性评语</label>
-        <textarea id="personalized-comment" aria-label="个性评语" value={report.personalizedComment} onChange={(event) => update("personalizedComment", event.target.value)} />
+      <section className="report-section summary-points-editor" aria-labelledby="strengths-heading">
+        <div className="summary-editor-heading">
+          <h2 id="strengths-heading">优点</h2>
+          {onRewriteFeedback ? <button type="button" disabled={rewritingFeedbackSection !== null} onClick={() => void onRewriteFeedback("strengths")}>{rewritingFeedbackSection === "strengths" ? "AI 正在生成…" : "AI 重新生成优点"}</button> : null}
+        </div>
+        <div className="summary-point-list">
+          {strengths.map((item, index) => (
+            <div className="summary-point-row" key={`strength-${index}`}>
+              <span>{pointLabels[index]}、</span>
+              <input
+                aria-label={`优点${pointLabels[index]}`}
+                minLength={10}
+                maxLength={20}
+                value={item}
+                onChange={(event) => {
+                  const next = [...strengths];
+                  next[index] = event.target.value;
+                  updateStrengths(next);
+                }}
+              />
+              <button type="button" className="summary-point-delete" aria-label={`删除优点${pointLabels[index]}`} disabled={strengths.length <= 1} onClick={() => updateStrengths(strengths.filter((_, itemIndex) => itemIndex !== index))}>删除</button>
+            </div>
+          ))}
+        </div>
+        <div className="summary-point-actions"><button type="button" aria-label="新增优点" disabled={strengths.length >= MAX_FEEDBACK_POINTS} onClick={() => updateStrengths([...strengths, ""])}>＋ 新增优点</button></div>
       </section>
 
-      <section className="report-section report-arrays" aria-label="问题与建议">
-        {(["painPoints", "commonIssues", "revisionSuggestions"] as const).map((field) => {
-          const labels = { painPoints: "关键痛点", commonIssues: "共性问题", revisionSuggestions: "修改建议" };
-          return <label key={field}>{labels[field]}<small>每行一项</small><textarea value={lines(report[field])} onChange={(event) => update(field, asLines(event.target.value))} /></label>;
-        })}
+      <section className="report-section summary-points-editor" aria-labelledby="improvements-heading">
+        <div className="summary-editor-heading">
+          <h2 id="improvements-heading">需要修改</h2>
+          {onRewriteFeedback ? <button type="button" disabled={rewritingFeedbackSection !== null} onClick={() => void onRewriteFeedback("improvements")}>{rewritingFeedbackSection === "improvements" ? "AI 正在生成…" : "AI 重新生成需要修改"}</button> : null}
+        </div>
+        <div className="summary-point-list">
+          {improvements.map((item, index) => (
+            <div className="summary-point-row" key={`improvement-${index}`}>
+              <span>{pointLabels[index]}、</span>
+              <input
+                aria-label={`需要修改${pointLabels[index]}`}
+                minLength={10}
+                maxLength={20}
+                value={item}
+                onChange={(event) => {
+                  const next = [...improvements];
+                  next[index] = event.target.value;
+                  update("painPoints", next);
+                }}
+              />
+              <button type="button" className="summary-point-delete" aria-label={`删除需要修改${pointLabels[index]}`} disabled={improvements.length <= 1} onClick={() => updateImprovements(improvements.filter((_, itemIndex) => itemIndex !== index))}>删除</button>
+            </div>
+          ))}
+        </div>
+        <div className="summary-point-actions"><button type="button" aria-label="新增需要修改" disabled={improvements.length >= MAX_FEEDBACK_POINTS} onClick={() => updateImprovements([...improvements, ""])}>＋ 新增需要修改</button></div>
       </section>
 
       <section className="report-section" aria-labelledby="score-heading">

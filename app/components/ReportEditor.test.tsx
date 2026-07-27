@@ -27,6 +27,70 @@ const report = {
 };
 
 describe("ReportEditor", () => {
+  it("按实际条数展示优点和需要修改", () => {
+    render(
+      <ReportEditor
+        report={{
+          ...report,
+          personalizedComment: [
+            "选材真实贴近自己的生活",
+            "礼物线索贯穿全文始终",
+          ].join("\n"),
+          painPoints: [
+            "开头加入对比突出礼物珍贵",
+            "第三段补充人物心理变化",
+            "段落之间增加自然过渡句",
+          ],
+        }}
+        onChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText("总体评价")).not.toBeInTheDocument();
+    expect(screen.queryByText("个性评语")).not.toBeInTheDocument();
+    expect(screen.queryByText("关键痛点")).not.toBeInTheDocument();
+    expect(screen.queryByText("共性问题")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "优点" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "需要修改" })).toBeInTheDocument();
+    expect(screen.getByLabelText("优点一")).toHaveValue("选材真实贴近自己的生活");
+    expect(screen.getByLabelText("优点二")).toHaveValue("礼物线索贯穿全文始终");
+    expect(screen.queryByLabelText("优点三")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("需要修改一")).toHaveValue("开头加入对比突出礼物珍贵");
+    expect(screen.getByLabelText("需要修改三")).toHaveValue("段落之间增加自然过渡句");
+    expect(screen.queryByLabelText("需要修改四")).not.toBeInTheDocument();
+  });
+
+  it("支持新增、删除和分别使用 AI 重新生成", () => {
+    const onChange = vi.fn();
+    const onRewriteFeedback = vi.fn(async () => undefined);
+    render(
+      <ReportEditor
+        report={{
+          ...report,
+          personalizedComment: "选材真实贴近自己的生活\n礼物线索贯穿全文始终",
+          painPoints: ["开头加入对比突出礼物珍贵", "第三段补充人物心理变化"],
+        }}
+        onChange={onChange}
+        onRewriteFeedback={onRewriteFeedback}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "删除优点二" }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      personalizedComment: "选材真实贴近自己的生活",
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "新增优点" }));
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      personalizedComment: "选材真实贴近自己的生活\n礼物线索贯穿全文始终\n",
+    }));
+
+    fireEvent.click(screen.getByRole("button", { name: "AI 重新生成优点" }));
+    fireEvent.click(screen.getByRole("button", { name: "AI 重新生成需要修改" }));
+    expect(onRewriteFeedback).toHaveBeenNthCalledWith(1, "strengths");
+    expect(onRewriteFeedback).toHaveBeenNthCalledWith(2, "improvements");
+  });
+
   it.each([
     [29, "重写"], [30, "二类作文"], [35, "二类作文"], [36, "优秀作文"], [40, "优秀作文"],
   ] as const)("总分 %i 对应 %s", (total, level) => {

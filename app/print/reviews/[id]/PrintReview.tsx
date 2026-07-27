@@ -1,14 +1,49 @@
-import type { Annotation } from "@/src/domain/contracts";
 import type { ReviewRecord } from "@/src/db/review-repository";
 
 import styles from "./print.module.css";
 
-function orderedAnnotations(annotations: Annotation[]) {
-  return [...annotations]
-    .sort((left, right) =>
-      left.pageIndex - right.pageIndex || left.y - right.y || left.x - right.x,
-    )
-    .map((annotation, index) => ({ annotation, number: index + 1 }));
+function summaryDensity(textLength: number): "normal" | "compact" | "dense" {
+  if (textLength > 900) return "dense";
+  if (textLength > 450) return "compact";
+  return "normal";
+}
+
+function summaryClass(density: "normal" | "compact" | "dense", styles: Record<string, string>): string {
+  if (density === "dense") return styles.summaryDense;
+  if (density === "compact") return styles.summaryCompact;
+  return "";
+}
+
+const pointLabels = ["一", "二", "三", "四", "五", "六"] as const;
+
+function summaryItems(value: string | string[]): string[] {
+  const rawItems = Array.isArray(value) ? value : value.split(/\r?\n/u);
+  return rawItems.map((item) => item.trim()).filter(Boolean).slice(0, pointLabels.length);
+}
+
+function splitLegacyComment(comment: string): { strengths: string; improvement: string } {
+  const marker = /(?:现在)?最需要(?:调整|改进|加强)(?:的是)?[：:，,]?/u;
+  const match = marker.exec(comment);
+  if (!match || match.index === undefined) {
+    return { strengths: comment, improvement: "" };
+  }
+  return {
+    strengths: comment.slice(0, match.index).trim(),
+    improvement: comment.slice(match.index).trim(),
+  };
+}
+
+function SummaryPoints({ items }: { items: string[] }) {
+  return (
+    <ol className={styles.summaryPoints}>
+      {items.map((item, index) => (
+        <li key={`${index}-${item}`}>
+          <span>{pointLabels[index]}、</span>
+          <p>{item}</p>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 function sampleParagraphsForPage<T>(paragraphs: T[], pageIndex: number, pageCount: number): T[] {
@@ -21,24 +56,43 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
   }
 
   const report = review.report;
-  const numbered = orderedAnnotations(review.annotations.filter((annotation) => annotation.category === "structure"));
+  const personalized = splitLegacyComment(report.personalizedComment);
+  const strengths = summaryItems(personalized.strengths);
+  const improvements = summaryItems([personalized.improvement, ...report.painPoints]);
+  const strengthsDensity = summaryDensity(strengths.reduce((sum, item) => sum + Array.from(item).length, 0));
+  const improvementsDensity = summaryDensity(improvements.reduce((sum, item) => sum + Array.from(item).length, 0));
   return (
     <article className={styles.document} data-print-ready="true">
-      <section className={`${styles.sheet} ${styles.summary}`} data-page-kind="summary" data-print-section="summary">
+      <section
+        className={`${styles.sheet} ${styles.summary} ${summaryClass(strengthsDensity, styles)}`}
+        data-page-kind="summary"
+        data-print-section="strengths"
+        data-summary-density={strengthsDensity}
+      >
         <div className={styles.summaryContent}>
-          <h1>总体评价</h1>
-          <p><b>优点：</b>{report.themeReason} {report.personalizedComment}</p>
-          <p><b>需要改进：</b>{report.painPoints.length ? report.painPoints.join("；") : "继续把关键情节写得更具体，让前后衔接更自然。"}</p>
+          <h1>优点</h1>
+          <SummaryPoints items={strengths} />
+        </div>
+      </section>
+      <section
+        className={`${styles.sheet} ${styles.summary} ${summaryClass(improvementsDensity, styles)}`}
+        data-page-kind="summary"
+        data-print-section="improvements"
+        data-summary-density={improvementsDensity}
+      >
+        <div className={styles.summaryContent}>
+          <h1>需要修改</h1>
+          <SummaryPoints items={improvements} />
         </div>
       </section>
       {review.images.map((image, pageIndex) => {
-        const pageAnnotations = numbered.filter(({ annotation }) => annotation.pageIndex === image.position);
         const samples = sampleParagraphsForPage(report.sampleParagraphs, pageIndex, review.images.length);
         return (
           <section
             className={`${styles.sheet} ${styles.feedbackPage}`}
             data-page-kind="feedback"
             data-print-section={`feedback-page-${pageIndex + 1}`}
+            data-print-final={pageIndex === review.images.length - 1 ? "true" : undefined}
             key={image.id}
           >
             <div className={styles.feedbackLayout}>
@@ -54,14 +108,6 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
                 {/* A native image is intentional: PdfService waits on document.images. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img alt={`第 ${pageIndex + 1} 页原作文`} src={imageSources[pageIndex]} />
-                <svg aria-hidden="true" className={styles.annotationOverlay} preserveAspectRatio="none" viewBox="0 0 100 100">
-                  {pageAnnotations.map(({ annotation, number }) => (
-                    <g key={`issue-${number}`}>
-                      <ellipse data-issue-circle="true" cx={annotation.x * 100} cy={annotation.y * 100} rx="4.2" ry="2.4" />
-                      <line data-issue-underline="true" x1={Math.max(0, annotation.x * 100 - 5)} y1={Math.min(99, annotation.y * 100 + 3)} x2={Math.min(100, annotation.x * 100 + 5)} y2={Math.min(99, annotation.y * 100 + 3)} />
-                    </g>
-                  ))}
-                </svg>
               </figure>
               <aside className={styles.modelColumn} aria-label={`第 ${pageIndex + 1} 页考场范文`}>
                 {pageIndex === 0 ? <h2>改后范文</h2> : null}

@@ -3,12 +3,16 @@
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { Annotation, EvaluationReport } from "@/src/domain/contracts";
+import {
+  MAX_REVIEW_IMAGES,
+  type Annotation,
+  type EvaluationReport,
+} from "@/src/domain/contracts";
 import { AppHeader } from "../../../components/AppHeader";
 import { AsyncButton } from "../../../components/AsyncButton";
 import { ErrorBanner } from "../../../components/ErrorBanner";
 import { PhotoAnnotationEditor } from "../../../components/PhotoAnnotationEditor";
-import { ReportEditor } from "../../../components/ReportEditor";
+import { ReportEditor, type FeedbackSection } from "../../../components/ReportEditor";
 import { StatusBadge } from "../../../components/StatusBadge";
 import { ApiError, apiFetch, errorMessage } from "../../../lib/api";
 import { downloadReviewPdf } from "../../../lib/pdf-download";
@@ -57,12 +61,14 @@ export default function ReviewPage() {
   const { id } = useParams<{ id: string }>();
   const reviewId = String(id);
   const [review, setReview] = useState<ReviewView | null>(null);
+  const [studentName, setStudentName] = useState("");
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobView | null>(null);
   const [activePage, setActivePage] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | "rewrite-sample" | "rewrite-all-samples" | null>(null);
+  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | "rewrite-feedback" | "rewrite-sample" | "rewrite-all-samples" | null>(null);
+  const [rewritingFeedbackSection, setRewritingFeedbackSection] = useState<FeedbackSection | null>(null);
   const [rewritingSampleIndex, setRewritingSampleIndex] = useState<number | null>(null);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
@@ -88,6 +94,7 @@ export default function ReviewPage() {
 
   const applyReview = useCallback((loaded: ReviewView) => {
     setReview(loaded);
+    setStudentName(loaded.studentName);
     setReport(loaded.report);
     setAnnotations(loaded.annotations ?? []);
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
@@ -253,6 +260,14 @@ export default function ReviewPage() {
     setNotice("");
   }
 
+  function changeStudentName(next: string) {
+    if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    invalidateLoad();
+    setStudentName(next);
+    setDirty(true);
+    setNotice("");
+  }
+
   async function rewriteSample(index: number, instruction?: string) {
     if (!review || !report || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     setBusy("rewrite-sample");
@@ -279,6 +294,29 @@ export default function ReviewPage() {
       setError(errorMessage(caught));
     } finally {
       setRewritingSampleIndex(null);
+      setBusy(null);
+    }
+  }
+
+  async function rewriteFeedback(section: FeedbackSection) {
+    if (!review || !report || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    setBusy("rewrite-feedback");
+    setRewritingFeedbackSection(section);
+    setError("");
+    setNotice("");
+    try {
+      const result = await apiFetch<{ items: string[] }>(
+        `/api/reviews/${encodeURIComponent(review.id)}/feedback/${section}`,
+        { method: "POST" },
+      );
+      changeReport(section === "strengths"
+        ? { ...report, personalizedComment: result.items.join("\n") }
+        : { ...report, painPoints: result.items });
+      setNotice(`${section === "strengths" ? "优点" : "需要修改"}已由 AI 重新生成，请复核后保存。`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setRewritingFeedbackSection(null);
       setBusy(null);
     }
   }
@@ -314,7 +352,12 @@ export default function ReviewPage() {
       const saved = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision: review.revision, report, annotations }),
+        body: JSON.stringify({
+          expectedRevision: review.revision,
+          studentName,
+          report,
+          annotations,
+        }),
       });
       applyReview(saved);
       setDirty(false);
@@ -349,8 +392,8 @@ export default function ReviewPage() {
 
   async function replaceImages(files: File[]) {
     if (!review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
-    if (files.length < 1 || files.length > 3) {
-      setError("请选择 1 至 3 张作文图片");
+    if (files.length < 1 || files.length > MAX_REVIEW_IMAGES) {
+      setError(`请选择 1 至 ${MAX_REVIEW_IMAGES} 张作文图片`);
       return;
     }
     if (dirty && !window.confirm("当前复核内容尚未保存，替换图片会清空这些修改。确定继续吗？")) {
@@ -432,7 +475,22 @@ export default function ReviewPage() {
       <AppHeader compact />
       <main className="review-page">
         <header className="review-heading">
-          <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
+          <div className="review-title-block">
+            <div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div>
+            <h1>{review.config.title}</h1>
+            <label className="student-name-field">
+              <span>学生姓名</span>
+              <input
+                aria-label="学生姓名"
+                maxLength={50}
+                placeholder="请输入学生姓名"
+                value={studentName}
+                disabled={busy !== null || analysisActive}
+                onChange={(event) => changeStudentName(event.target.value)}
+              />
+            </label>
+            <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
+          </div>
           <div className="review-actions">
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>重新分析</AsyncButton>
             {review.status !== "needs_better_images" ? replacementControl() : null}
@@ -458,10 +516,10 @@ export default function ReviewPage() {
         <section className="review-grid" aria-label="作文复核工作区">
           <div className="photo-pane">
             {review.images.length > 1 ? <div className="page-tabs" role="tablist" aria-label="作文页码">{review.images.map((image, index) => <button role="tab" aria-selected={activePage === index} key={image.id} onClick={() => setActivePage(index)}>第 {index + 1} 页</button>)}</div> : null}
-            {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 3 张图片后再分析。</p></div>}
+            {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
         </section>
       </main>

@@ -16,6 +16,7 @@ function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
     id: "review-1",
     ownerId: OWNER_ID,
     status: "ready_for_review",
+    studentName: "李羿辰",
     revision: 7,
     analysisRunId: null,
     pdfFilename: null,
@@ -170,7 +171,7 @@ describe("PdfService", () => {
     const pdfOptions = page.pdf.mock.calls[0][0];
     expect(pdfOptions.footerTemplate).toContain("为/自己");
     expect(result.data).toEqual(Buffer.from("generated-pdf"));
-    expect(result.filename).toBe("作文批改-为-自己-鼓掌-20260721-1405-v2.pdf");
+    expect(result.filename).toBe("作文批改-为-自己-鼓掌-李羿辰.pdf");
     expect(fileStore.writeFile).toHaveBeenCalledWith(
       OWNER_ID,
       "review-1",
@@ -192,19 +193,68 @@ describe("PdfService", () => {
       status: "exported",
       revision: 8,
       pdfRevision: 8,
-      pdfFilename: "cached-v2.pdf",
-      pdfPath: "pdf/cached-v2.pdf",
-      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+      pdfFilename: "作文批改-为-自己-鼓掌-李羿辰.pdf",
+      pdfPath: "pdf/作文批改-为-自己-鼓掌-李羿辰.pdf",
+      exportedAt: new Date("2026-07-27T06:00:00.000Z"),
     });
     const { service, fileStore, browserFactory, repository } = harness({ current: cached });
     fileStore.readFile.mockResolvedValue(Buffer.from("cached-pdf"));
 
     const result = await service.getOrCreate(OWNER_ID, "review-1");
 
-    expect(result).toMatchObject({ filename: "cached-v2.pdf", cached: true });
+    expect(result).toMatchObject({
+      filename: "作文批改-为-自己-鼓掌-李羿辰.pdf",
+      cached: true,
+    });
     expect(result.data).toEqual(Buffer.from("cached-pdf"));
     expect(browserFactory.launch).not.toHaveBeenCalled();
     expect(repository.markExported).not.toHaveBeenCalled();
+  });
+
+  it("作文未修改但 PDF 版式已经升级时不复用旧缓存", async () => {
+    const oldLayout = review({
+      status: "exported",
+      revision: 8,
+      pdfRevision: 8,
+      pdfFilename: "作文批改-为-自己-鼓掌-李羿辰.pdf",
+      pdfPath: "pdf/作文批改-为-自己-鼓掌-李羿辰.pdf",
+      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+    });
+    const { service, browserFactory } = harness({ current: oldLayout });
+
+    const result = await service.getOrCreate(OWNER_ID, "review-1");
+
+    expect(result.cached).toBe(false);
+    expect(browserFactory.launch).toHaveBeenCalledOnce();
+  });
+
+  it("命名规则升级后不复用 v3 PDF 缓存", async () => {
+    const oldTemplate = review({
+      status: "exported",
+      revision: 8,
+      pdfRevision: 8,
+      pdfFilename: "作文批改-珍贵的礼物-20260721-1405-v3.pdf",
+      pdfPath: "pdf/作文批改-珍贵的礼物-20260721-1405-v3.pdf",
+      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+    });
+    const { service, fileStore, browserFactory } = harness({ current: oldTemplate });
+
+    const result = await service.getOrCreate(OWNER_ID, "review-1");
+
+    expect(result.cached).toBe(false);
+    expect(result.filename).toBe("作文批改-为-自己-鼓掌-李羿辰.pdf");
+    expect(browserFactory.launch).toHaveBeenCalledOnce();
+    expect(fileStore.queuePdfCleanup).toHaveBeenCalledWith(OWNER_ID, "review-1", [
+      "作文批改-珍贵的礼物-20260721-1405-v3.pdf",
+    ]);
+  });
+
+  it("未填写学生姓名时使用“未填写”作为文件名占位", async () => {
+    const { service } = harness({ current: review({ studentName: "" }) });
+
+    const result = await service.getOrCreate(OWNER_ID, "review-1");
+
+    expect(result.filename).toBe("作文批改-为-自己-鼓掌-未填写.pdf");
   });
 
   it("旧 PDF revision 不同时重新生成并清理旧文件", async () => {

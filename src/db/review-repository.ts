@@ -6,6 +6,7 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   reviewStatusSchema,
+  studentNameSchema,
   type Annotation,
   type AiReviewEnvelope,
   type AssignmentConfig,
@@ -43,6 +44,7 @@ export interface ReviewRecord {
   id: string;
   ownerId: string;
   status: ReviewStatus;
+  studentName: string;
   config: AssignmentConfig;
   report: EvaluationReport | null;
   revision: number;
@@ -72,6 +74,7 @@ export interface RetentionCandidate {
 
 export interface CreateReviewInput {
   id: string;
+  studentName?: string;
   config: AssignmentConfig;
   status?: ReviewStatus;
   images?: ReviewImageInput[];
@@ -79,6 +82,7 @@ export interface CreateReviewInput {
 
 export interface TeacherReviewEdits {
   expectedRevision: number;
+  studentName?: string;
   config?: AssignmentConfig;
   report?: EvaluationReport;
   annotations?: Annotation[];
@@ -213,6 +217,7 @@ export class ReviewRepository {
 
   create(ownerId: string, input: CreateReviewInput): ReviewRecord {
     const config = assignmentConfigSchema.parse(input.config);
+    const studentName = studentNameSchema.parse(input.studentName ?? "");
     const status = reviewStatusSchema.parse(input.status ?? "draft");
     const images = (input.images ?? []).map(validateImage);
     const now = this.now();
@@ -221,6 +226,7 @@ export class ReviewRepository {
       transaction.insert(reviews).values({
         id: input.id,
         ownerId,
+        studentName,
         config,
         status,
         report: null,
@@ -308,6 +314,7 @@ export class ReviewRepository {
         id: reviews.id,
         ownerId: reviews.ownerId,
         status: reviews.status,
+        studentName: reviews.studentName,
         revision: reviews.revision,
         analysisRunId: reviews.analysisRunId,
         pdfFilename: reviews.pdfFilename,
@@ -523,6 +530,10 @@ export class ReviewRepository {
 
   updateTeacherEdits(ownerId: string, id: string, input: TeacherReviewEdits): ReviewRecord {
     const current = this.requireById(ownerId, id);
+    const studentName =
+      input.studentName !== undefined
+        ? studentNameSchema.parse(input.studentName)
+        : current.studentName;
     const config = input.config
       ? assignmentConfigSchema.parse(input.config)
       : current.config;
@@ -556,6 +567,7 @@ export class ReviewRepository {
       const update = transaction
         .update(reviews)
         .set({
+          studentName,
           config,
           report,
           status,

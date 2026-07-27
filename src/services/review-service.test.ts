@@ -252,15 +252,15 @@ describe("ReviewService analysis CAS", () => {
     );
     const ready = repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
-      pdfFilename: "cached.pdf",
-      pdfPath: "pdf/cached.pdf",
-      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+      pdfFilename: "作文批改-为自己喝彩-未填写.pdf",
+      pdfPath: "pdf/作文批改-为自己喝彩-未填写.pdf",
+      exportedAt: new Date("2026-07-27T06:00:00.000Z"),
     });
     const cachedRead = deferred<Buffer>();
     const originalRead = fileStore.readFile.bind(fileStore);
     vi.spyOn(fileStore, "readFile").mockImplementation(
       (ownerId, id, kind, filename) =>
-        kind === "pdf" && filename === "cached.pdf"
+        kind === "pdf" && filename === "作文批改-为自己喝彩-未填写.pdf"
           ? cachedRead.promise
           : originalRead(ownerId, id, kind, filename),
     );
@@ -277,7 +277,7 @@ describe("ReviewService analysis CAS", () => {
       OWNER_ID,
       "review-1",
       "pdf",
-      "cached.pdf",
+      "作文批改-为自己喝彩-未填写.pdf",
     ));
     let editSettled = false;
     const editing = service.update(OWNER_ID, "review-1", {
@@ -295,7 +295,7 @@ describe("ReviewService analysis CAS", () => {
     expect(editSettled).toBe(false);
     expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       status: "exported",
-      pdfFilename: "cached.pdf",
+      pdfFilename: "作文批改-为自己喝彩-未填写.pdf",
     });
     cachedRead.resolve(Buffer.from("cached"));
     await expect(downloading).resolves.toMatchObject({ cached: true });

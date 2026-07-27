@@ -23,10 +23,20 @@ const config: AssignmentConfig = {
 const report: EvaluationReport = {
   themeFit: "fits",
   themeReason: "紧扣主题。",
-  personalizedComment: "你的动作描写真实，继续保持。",
-  painPoints: ["结尾略快"],
-  commonIssues: ["长句较多"],
-  revisionSuggestions: ["补充感受"],
+  personalizedComment: [
+    "选材真实贴近自己的生活",
+    "礼物线索贯穿全文始终",
+    "人物动作描写具体生动",
+    "结尾感受能够回扣题目",
+  ].join("\n"),
+  painPoints: [
+    "开头加入对比突出礼物珍贵",
+    "第三段补充人物心理变化",
+    "段落之间增加自然过渡句",
+    "结尾写清这份礼物的意义",
+  ],
+  commonIssues: [],
+  revisionSuggestions: [],
   scores: {
     themeIntent: 9,
     contentSelection: 9,
@@ -105,6 +115,26 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("重写整篇五段考场范文");
     expect(serialized).toContain("删去无关人物");
     expect(serialized).toContain("550-650");
+    expect(serialized).toContain("第一段不得以时间词开头");
+    expect(serialized).toContain("生日那天");
+    expect(serialized).toContain("对比、照应、因果");
+  });
+
+  it("单段重写也避免流水账式时间衔接", async () => {
+    const harness = setup([JSON.stringify({ text: "虽然别人的礼物十分贵重，但这份礼物更让我珍惜。" })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+      index: 0,
+    })).resolves.toEqual({
+      text: "虽然别人的礼物十分贵重，但这份礼物更让我珍惜。",
+    });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("第一段不得以时间词开头");
+    expect(serialized).toContain("第二天放学后");
+    expect(serialized).toContain("情感变化");
   });
 
   it("只读取 SettingsService 的原子运行时快照", async () => {
@@ -151,6 +181,8 @@ describe("OpenAIReviewAdapter", () => {
     const images = [
       "data:image/jpeg;base64,Zmlyc3Q=",
       "data:image/jpeg;base64,c2Vjb25k",
+      "data:image/jpeg;base64,dGhpcmQ=",
+      "data:image/jpeg;base64,Zm91cnRo",
     ];
 
     const result = await harness.adapter.analyze({ config, imageDataUrls: images });
@@ -168,8 +200,7 @@ describe("OpenAIReviewAdapter", () => {
     };
     expect(request.model).toBe("vision-model");
     const serialized = JSON.stringify(request.messages);
-    expect(serialized).toContain(images[0]);
-    expect(serialized).toContain(images[1]);
+    for (const image of images) expect(serialized).toContain(image);
     expect(serialized).toContain(config.writingRequirements);
     expect(serialized).toContain("40");
     expect(serialized).toContain("themeIntent");
@@ -181,6 +212,19 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("550-650");
     expect(serialized).toContain("人物关系");
     expect(serialized).toContain("多余人物");
+    expect(serialized).toContain("personalizedComment 包含 2-4 条优点");
+    expect(serialized).toContain("painPoints 包含 2-4 条需要修改");
+    expect(serialized).toContain("每条 10-20 个汉字");
+    expect(serialized).toContain("选材、内容表达、情感、情节完整性");
+    expect(serialized).toContain("特别出彩");
+    expect(serialized).toContain("优点只写夸奖，不解释理由");
+    expect(serialized).toContain("修改建议必须指出具体段落、问题和修改方法");
+    expect(serialized).toContain("结尾部分要注意扣题");
+    expect(serialized).toContain("中间段落不要啰嗦");
+    expect(serialized).toContain("commonIssues 和 revisionSuggestions 返回空数组");
+    expect(serialized).toContain("第一段不得以时间词开头");
+    expect(serialized).toContain("半小时后");
+    expect(serialized).toContain("对比、照应、因果");
     expect(serialized).toContain("坐标拿不准时不要生成 annotation");
     expect(serialized).toContain("sampleParagraphs:{title:string,text:string,suggestion:string}[]");
   });
@@ -191,6 +235,64 @@ describe("OpenAIReviewAdapter", () => {
     await expect(
       harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
     ).resolves.toEqual(successEnvelope);
+  });
+
+  it("总体评价不是四条短句时修复后再保存", async () => {
+    const verboseEnvelope = {
+      ...successEnvelope,
+      report: {
+        ...successEnvelope.report,
+        personalizedComment: "这是一整段很长而且把所有优点混合在一起的总体评价。",
+        painPoints: ["修改内容也没有拆成四个清楚的小点。"],
+      },
+    };
+    const harness = setup([
+      JSON.stringify(verboseEnvelope),
+      JSON.stringify(successEnvelope),
+    ]);
+
+    await expect(
+      harness.adapter.analyze({
+        config,
+        imageDataUrls: ["data:image/jpeg;base64,eA=="],
+      }),
+    ).resolves.toEqual(successEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("可以只重新生成优点或需要修改", async () => {
+    const items = ["选材真实贴近自己的生活", "礼物线索贯穿全文始终"];
+    const harness = setup([JSON.stringify({ items })]);
+
+    await expect(harness.adapter.rewriteFeedback({
+      config,
+      report,
+      section: "strengths",
+    })).resolves.toEqual({ items });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("只重新生成“优点”");
+    expect(serialized).toContain("由你判断生成 2-4 条");
+    expect(serialized).toContain("10-20 个汉字");
+    expect(serialized).toContain("只写夸奖，不解释理由");
+    expect(serialized).toContain("选材、内容表达、情感、情节完整性");
+  });
+
+  it("重新生成修改建议时给六年级学生明确的修改指导", async () => {
+    const items = ["结尾部分要注意回扣作文题目", "中间段落删去重复的礼物介绍"];
+    const harness = setup([JSON.stringify({ items })]);
+
+    await expect(harness.adapter.rewriteFeedback({
+      config,
+      report,
+      section: "improvements",
+    })).resolves.toEqual({ items });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("只重新生成“需要修改”");
+    expect(serialized).toContain("指出哪一段有问题、问题是什么、具体怎么改");
+    expect(serialized).toContain("修改指导，不是评价");
+    expect(serialized).toContain("六年级学生能直接看懂");
   });
 
   it("兼容无语言标签的完整 fenced JSON", async () => {

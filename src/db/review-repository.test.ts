@@ -113,6 +113,7 @@ describe("ReviewRepository", () => {
 
     expect(saved).toMatchObject({
       id: "review-1",
+      studentName: "",
       status: "draft",
       revision: 0,
       analysisRunId: null,
@@ -580,6 +581,27 @@ describe("ReviewRepository", () => {
         annotations: [annotation],
       }),
     ).toMatchObject({ status: "ready_for_review", report });
+  });
+
+  it("保存学生姓名且不清空已有报告和批注", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const analyzed = repository.updateTeacherEdits(OWNER_ID, "review-1", {
+      expectedRevision: 0,
+      report,
+      annotations: [annotation],
+    });
+
+    const named = repository.updateTeacherEdits(OWNER_ID, "review-1", {
+      expectedRevision: analyzed.revision,
+      studentName: "  张小明  ",
+    });
+
+    expect(named).toMatchObject({
+      studentName: "张小明",
+      status: "ready_for_review",
+      report,
+      annotations: [annotation],
+    });
   });
 
   it("删除 review 并级联删除图片和批注记录", () => {

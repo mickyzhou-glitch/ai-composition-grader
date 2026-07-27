@@ -295,12 +295,15 @@ describe("review route handlers", () => {
     expect(invalid.status).toBe(400);
 
     const created = await collection.POST(
-      jsonRequest("http://localhost/api/reviews", "POST", { config }),
+      jsonRequest("http://localhost/api/reviews", "POST", {
+        config,
+        studentName: "李羿辰",
+      }),
     );
     expect(created.status).toBe(201);
     expect(await json(created)).toMatchObject({
       ok: true,
-      data: { id: "review-1", status: "draft" },
+      data: { id: "review-1", status: "draft", studentName: "李羿辰" },
     });
 
     const listed = await collection.GET();
@@ -335,6 +338,7 @@ describe("review route handlers", () => {
     const teacherReview = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
         expectedRevision: 1,
+        studentName: "张小明",
         report,
         annotations: [
           {
@@ -352,6 +356,7 @@ describe("review route handlers", () => {
     );
     expect(teacherReview.status).toBe(200);
     expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      studentName: "张小明",
       status: "ready_for_review",
       report,
       annotations: [{ category: "sentence" }],
@@ -488,7 +493,7 @@ describe("review route handlers", () => {
     });
   });
 
-  it("multipart 一次上传三图并保存处理后的字段", async () => {
+  it("multipart 一次上传四图并保存处理后的字段", async () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const pixels = await sharp({
       create: { width: 60, height: 80, channels: 3, background: "white" },
@@ -497,7 +502,7 @@ describe("review route handlers", () => {
     form.append("expectedRevision", "0");
     form.append("privacyConfirmed", "true");
     form.append("privacyNoticeVersion", "2026-07-22");
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 4; index += 1) {
       form.append("images", new File([pixels], `page-${index + 1}.jpg`, { type: "image/jpeg" }));
     }
     const handlers = createReviewImagesRouteHandlers({ imageService, ownerId: OWNER_ID });
@@ -513,10 +518,10 @@ describe("review route handlers", () => {
     expect(response.status).toBe(200);
     const body = await json(response);
     expect(body).toMatchObject({ ok: true });
-    expect((body.data as { images: unknown[] }).images).toHaveLength(3);
-    expect(repository.getById(OWNER_ID, "review-1")?.images[2]).toMatchObject({
-      position: 2,
-      originalName: "page-3.jpg",
+    expect((body.data as { images: unknown[] }).images).toHaveLength(4);
+    expect(repository.getById(OWNER_ID, "review-1")?.images[3]).toMatchObject({
+      position: 3,
+      originalName: "page-4.jpg",
       width: 60,
       height: 80,
     });
@@ -541,11 +546,12 @@ describe("review route handlers", () => {
 
     expect(patched.status).toBe(200);
     expect(repository.getById(OWNER_ID, "review-1")?.images).toMatchObject([
-      { originalName: "page-3.jpg", position: 0 },
-      { originalName: "page-2.jpg", position: 1 },
+      { originalName: "page-4.jpg", position: 0 },
+      { originalName: "page-3.jpg", position: 1 },
+      { originalName: "page-2.jpg", position: 2 },
       {
         originalName: "page-1.jpg",
-        position: 2,
+        position: 3,
         rotation: 90,
         crop: { x: 0, y: 0, width: 0.5, height: 1 },
         width: 40,

@@ -7,6 +7,7 @@ import Home from "./page";
 const review = {
   id: "review-1",
   status: "ready_for_review",
+  studentName: "张小明",
   config: { title: "为自己鼓掌" },
   report: { scores: { total: 36, level: "优秀作文" } },
   createdAt: "2026-07-20T08:00:00.000Z",
@@ -55,6 +56,7 @@ describe("历史首页", () => {
     render(<Home />);
 
     expect(await screen.findByRole("heading", { name: "为自己鼓掌" })).toBeInTheDocument();
+    expect(screen.getByText("学生：张小明")).toBeInTheDocument();
     expect(screen.getByText("待复核", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("36 分 · 优秀作文")).toBeInTheDocument();
 
@@ -107,5 +109,41 @@ describe("历史首页", () => {
     expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/pdf");
     expect(clickDownload).toHaveBeenCalledOnce();
     expect(await screen.findByRole("button", { name: "下载 PDF" })).toBeEnabled();
+  });
+
+  it("可选择多篇批改记录并下载批量 PDF 压缩包", async () => {
+    const secondReview = {
+      ...review,
+      id: "review-2",
+      studentName: "李羿辰",
+      config: { title: "珍贵的礼物" },
+    };
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json([review, secondReview]))
+      .mockImplementationOnce(() => Promise.resolve(new Response("ZIP", {
+        headers: {
+          "content-type": "application/zip",
+          "content-disposition": `attachment; filename="review-pdfs.zip"; filename*=UTF-8''${encodeURIComponent("作文批改批量导出.zip")}`,
+        },
+      })))
+      .mockImplementationOnce(() => json([review, secondReview]));
+    const clickDownload = mockBrowserDownload();
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.click(await screen.findByRole("checkbox", { name: "选择《为自己鼓掌》" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择《珍贵的礼物》" }));
+    await user.click(screen.getByRole("button", { name: "导出所选 2 篇 PDF" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[1]).toEqual([
+      "/api/reviews/batch-pdf",
+      expect.objectContaining({ method: "POST" }),
+    ]);
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
+      reviewIds: ["review-1", "review-2"],
+    });
+    expect(clickDownload).toHaveBeenCalledOnce();
   });
 });

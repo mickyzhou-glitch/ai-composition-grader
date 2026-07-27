@@ -1,7 +1,15 @@
 import { randomUUID } from "node:crypto";
 
-import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
-import type { RewriteSampleInput } from "../ai/openai-review-adapter";
+import {
+  MAX_REVIEW_IMAGES,
+  type AiReviewEnvelope,
+  type AssignmentConfig,
+} from "../domain/contracts";
+import type {
+  FeedbackSection,
+  RewriteFeedbackInput,
+  RewriteSampleInput,
+} from "../ai/openai-review-adapter";
 import type { SavedAssignmentRecord } from "../db/review-repository";
 import type {
   ReviewRecord,
@@ -20,6 +28,7 @@ export interface AiReviewer {
     imageDataUrls: string[];
   }): Promise<AiReviewEnvelope>;
   rewriteSample?(input: RewriteSampleInput): Promise<{ text: string }>;
+  rewriteFeedback?(input: RewriteFeedbackInput): Promise<{ items: string[] }>;
   rewriteAllSamples?(input: Omit<RewriteSampleInput, "index">): Promise<{
     sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
   }>;
@@ -157,13 +166,17 @@ export class ReviewService {
     }
   }
 
-  async create(ownerId: string, config: AssignmentConfig): Promise<ReviewRecord> {
+  async create(
+    ownerId: string,
+    config: AssignmentConfig,
+    studentName = "",
+  ): Promise<ReviewRecord> {
     await this.recovery;
     const id = this.createId();
     return this.fileStore.withReviewLock(ownerId, id, async () => {
       await this.fileStore.createReview(ownerId, id);
       try {
-        const review = this.repository.create(ownerId, { id, config });
+        const review = this.repository.create(ownerId, { id, config, studentName });
         if (config.templateType === "custom") this.repository.saveCustomAssignment(ownerId, config);
         return review;
       } catch (error) {
@@ -196,6 +209,23 @@ export class ReviewService {
       sampleParagraphs: review.report.sampleParagraphs,
       index,
       instruction,
+    });
+  }
+
+  async rewriteFeedback(
+    ownerId: string,
+    id: string,
+    section: FeedbackSection,
+  ): Promise<{ items: string[] }> {
+    const review = this.get(ownerId, id);
+    if (!review.report) throw new ReviewServiceError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+    if (!this.aiReviewer.rewriteFeedback) {
+      throw new Error("当前 AI 服务不支持评语重新生成");
+    }
+    return this.aiReviewer.rewriteFeedback({
+      config: review.config,
+      report: review.report,
+      section,
     });
   }
 
@@ -295,10 +325,10 @@ export class ReviewService {
     return this.lock.runExclusive(id, () => this.fileStore.withReviewLock(ownerId, id, async () => {
       const review = this.get(ownerId, id);
       await this.fileStore.migrateLegacyReview(ownerId, id);
-      if (review.images.length < 1 || review.images.length > 3) {
+      if (review.images.length < 1 || review.images.length > MAX_REVIEW_IMAGES) {
         throw new ReviewServiceError(
           "IMAGES_REQUIRED",
-          "请先上传 1 至 3 张作文图片",
+          `请先上传 1 至 ${MAX_REVIEW_IMAGES} 张作文图片`,
           422,
         );
       }

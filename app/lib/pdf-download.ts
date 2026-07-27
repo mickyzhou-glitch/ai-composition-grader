@@ -50,3 +50,27 @@ export async function downloadReviewPdf(reviewId: string): Promise<string> {
   }
   return filename;
 }
+
+export async function downloadReviewPdfArchive(reviewIds: string[]): Promise<string> {
+  const response = await fetch("/api/reviews/batch-pdf", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ reviewIds }),
+  });
+  if (!response.ok) throw await responseError(response);
+
+  const filename = responseFilename(response);
+  const objectUrl = URL.createObjectURL(await response.blob());
+  try {
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    link.hidden = true;
+    document.body.append(link);
+    link.click();
+    link.remove();
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+  return filename;
+}

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS reviews (
       'failed'
     )
   ),
+  student_name TEXT NOT NULL DEFAULT '',
   config TEXT NOT NULL,
   report TEXT,
   revision INTEGER NOT NULL DEFAULT 0,
@@ -223,6 +224,7 @@ function migrateReviews(database: Database.Database): void {
     ["deleting_at", "INTEGER"],
     ["privacy_consent_version", "TEXT"],
     ["privacy_consented_at", "INTEGER"],
+    ["student_name", "TEXT NOT NULL DEFAULT ''"],
   ];
 
   for (const [name, definition] of additions) {
@@ -258,6 +260,7 @@ function migrateReviews(database: Database.Database): void {
         status TEXT NOT NULL CHECK (
           status IN ('draft', 'analyzing', 'needs_better_images', 'ready_for_review', 'exported', 'failed')
         ),
+        student_name TEXT NOT NULL DEFAULT '',
         config TEXT NOT NULL,
         report TEXT,
         revision INTEGER NOT NULL DEFAULT 0,
@@ -274,11 +277,11 @@ function migrateReviews(database: Database.Database): void {
         updated_at INTEGER NOT NULL
       );
       INSERT INTO reviews_owner_migration (
-        id, owner_id, status, config, report, revision, analysis_run_id,
+        id, owner_id, status, student_name, config, report, revision, analysis_run_id,
         pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
         deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       )
-      SELECT id, owner_id, status, config, report, revision, analysis_run_id,
+      SELECT id, owner_id, status, student_name, config, report, revision, analysis_run_id,
         pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
         deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       FROM reviews;

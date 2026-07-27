@@ -20,6 +20,7 @@ export interface ReviewImageView {
 export interface ReviewView {
   id: string;
   status: ReviewStatus;
+  studentName: string;
   config: AssignmentConfig;
   report: EvaluationReport | null;
   revision: number;

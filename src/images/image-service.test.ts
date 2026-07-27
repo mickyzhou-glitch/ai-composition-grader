@@ -76,7 +76,7 @@ describe("ImageService", () => {
     await rm(temporaryDirectory, { recursive: true, force: true });
   });
 
-  it.each([0, 4])("一次拒绝上传 %i 张图片", async (count) => {
+  it.each([0, 5])("一次拒绝上传 %i 张图片", async (count) => {
     const data = await jpeg();
     const files = Array.from({ length: count }, (_, index) => ({
       originalName: `page-${index}.jpg`,

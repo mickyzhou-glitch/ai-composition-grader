@@ -35,10 +35,31 @@
 .runningHeader { top: -8mm; justify-content: space-between; border-bottom: .2mm solid var(--line); }
 
 .sheet { min-height: 9in; break-after: page; }
-.summary { display: grid; place-items: center; padding: 1.1in 2.6in; }
+.sheet[data-print-final="true"] { break-after: auto; }
+.summary {
+  display: grid;
+  height: 9in;
+  min-height: 9in;
+  max-height: 9in;
+  place-items: center;
+  padding: 1.1in 2.6in;
+  overflow: hidden;
+  break-inside: avoid-page;
+}
 .summaryContent { color: #c90000; font-size: 31pt; line-height: 1.38; }
 .summaryContent h1 { margin: 0 0 .24in; font-size: 39pt; font-weight: 500; }
-.summaryContent p { margin: .38in 0 0; }
+.summaryContent p { margin: 0; }
+.summaryPoints { display: grid; gap: .22in; margin: .38in 0 0; padding: 0; list-style: none; }
+.summaryPoints li { display: grid; grid-template-columns: 1.3em minmax(0, 1fr); align-items: start; }
+.summaryPoints li > span { font-weight: 700; }
+.summaryCompact { padding: .75in 1.55in; }
+.summaryCompact .summaryContent { font-size: 23pt; line-height: 1.3; }
+.summaryCompact .summaryContent h1 { font-size: 32pt; }
+.summaryCompact .summaryPoints { gap: .15in; margin-top: .24in; }
+.summaryDense { padding: .5in .9in; }
+.summaryDense .summaryContent { font-size: 15pt; line-height: 1.22; }
+.summaryDense .summaryContent h1 { margin-bottom: .12in; font-size: 26pt; }
+.summaryDense .summaryPoints { gap: .08in; margin-top: .13in; }
 .eyebrow { margin-bottom: 2mm; color: var(--red); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
 .summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
 .summaryGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8mm; margin-bottom: 12mm; }
@@ -71,12 +92,6 @@
 .annotationLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 5mm; align-items: start; }
 .imageFigure { position: relative; width: 100%; height: 9in; margin: 0; overflow: hidden; background: #f4eee5; }
 .imageFigure img { display: block; width: 100%; height: 9in; object-fit: contain; }
-.annotationOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.annotationOverlay line { stroke: var(--red); stroke-width: .45; vector-effect: non-scaling-stroke; }
-.annotationOverlay circle { fill: var(--red); stroke: white; stroke-width: .55; vector-effect: non-scaling-stroke; }
-.annotationOverlay text { fill: white; font-size: 2.2px; font-weight: 800; dominant-baseline: central; text-anchor: middle; }
-.annotationOverlay line { stroke: #b42318; stroke-width: 1.1; stroke-linecap: round; vector-effect: non-scaling-stroke; }
-.annotationOverlay ellipse { fill: none; stroke: #d00000; stroke-width: 1.2; vector-effect: non-scaling-stroke; }
 .suggestionParagraph { margin: 0 0 .56in; }
 .suggestionParagraph h3 { margin: 0 0 .04in; color: #d00000; font-size: 20pt; font-weight: 500; }
 .suggestionParagraph p { margin: 0; }

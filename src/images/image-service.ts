@@ -5,6 +5,7 @@ import sharp from "sharp";
 import { z } from "zod";
 
 import {
+  MAX_REVIEW_IMAGES,
   normalizedCropSchema,
   type NormalizedCrop,
   type PrivacyUploadConsent,
@@ -92,7 +93,7 @@ const updateSchema = z.object({
       }),
     )
     .min(1)
-    .max(3),
+    .max(MAX_REVIEW_IMAGES),
 });
 
 export type UpdateImagesInput = z.infer<typeof updateSchema>;
@@ -291,10 +292,10 @@ export class ImageService {
     if (review.revision !== expectedRevision) {
       throw new RevisionConflictError(reviewId);
     }
-    if (files.length < 1 || files.length > 3) {
+    if (files.length < 1 || files.length > MAX_REVIEW_IMAGES) {
       throw new ImageServiceError(
         "IMAGE_COUNT_INVALID",
-        "一次必须上传 1 至 3 张图片",
+        `一次必须上传 1 至 ${MAX_REVIEW_IMAGES} 张图片`,
         400,
       );
     }

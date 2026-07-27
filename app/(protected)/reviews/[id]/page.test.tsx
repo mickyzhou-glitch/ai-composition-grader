@@ -12,6 +12,7 @@ const review = {
   id: "review-1",
   status: "ready_for_review",
   revision: 1,
+  studentName: "",
   config: { title: "为自己鼓掌", templateType: "custom" },
   images: [{ id: 1, position: 0, originalName: "作文.jpg", mimeType: "image/jpeg", width: 100, height: 100, rotation: 0, crop: null }],
   annotations: [],
@@ -78,8 +79,8 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "观察细致，继续保持");
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "观察细致，继续保持");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
@@ -94,13 +95,37 @@ describe("复核页", () => {
       "/api/reviews/review-1/files?imageId=1&variant=annotation",
     );
 
-    await user.clear(screen.getByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "第二次保存");
+    await user.clear(screen.getByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "第二次保存");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     expect(JSON.parse((fetchMock.mock.calls[3][1] as RequestInit).body as string)).toMatchObject({
       expectedRevision: 7,
     });
+  });
+
+  it("支持填写并保存学生姓名", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({
+        ...review,
+        revision: 2,
+        studentName: "张小明",
+      }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    const input = await screen.findByRole("textbox", { name: "学生姓名" });
+    await user.type(input, "张小明");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 1,
+      studentName: "张小明",
+    });
+    expect(input).toHaveValue("张小明");
   });
 
   it("保存进行时禁用保存、分析和替换，避免同页写入重叠", async () => {
@@ -112,8 +137,8 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "待保存内容");
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "待保存内容");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
 
     expect(screen.getByRole("button", { name: "保存中…" })).toBeDisabled();
@@ -132,8 +157,8 @@ describe("复核页", () => {
 
     const exportButton = await screen.findByRole("button", { name: "导出 PDF" });
     expect(exportButton).toBeEnabled();
-    await user.clear(screen.getByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "未保存修改");
+    await user.clear(screen.getByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "未保存修改");
 
     expect(exportButton).toBeDisabled();
     expect(exportButton).toHaveAttribute("title", "请先保存复核修改再导出");
@@ -210,13 +235,13 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "本地未保存内容");
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "本地未保存内容");
     await user.click(screen.getByRole("button", { name: "重新分析" }));
 
     expect(confirm).toHaveBeenCalledWith("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByLabelText("个性评语")).toHaveValue("本地未保存内容");
+    expect(screen.getByLabelText("优点一")).toHaveValue("本地未保存内容");
   });
 
   it("冲突不会覆盖脏的本地草稿，链接离开仍会确认", async () => {
@@ -233,12 +258,12 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "本地草稿");
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "本地草稿");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
     await screen.findByRole("alert");
     expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(screen.getByLabelText("个性评语")).toHaveValue("本地草稿");
+    expect(screen.getByLabelText("优点一")).toHaveValue("本地草稿");
     fireEvent.click(screen.getByRole("link", { name: "新建作文批改" }));
     expect(confirm).toHaveBeenCalledWith("复核内容尚未保存，确定离开吗？");
   });
@@ -251,8 +276,8 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "替换前本地草稿");
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "替换前本地草稿");
     await user.upload(
       screen.getByLabelText("替换/重拍作文图片"),
       new File(["image"], "replacement.jpg", { type: "image/jpeg" }),
@@ -260,7 +285,7 @@ describe("复核页", () => {
 
     expect(confirm).toHaveBeenCalledWith("当前复核内容尚未保存，替换图片会清空这些修改。确定继续吗？");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByLabelText("个性评语")).toHaveValue("替换前本地草稿");
+    expect(screen.getByLabelText("优点一")).toHaveValue("替换前本地草稿");
   });
 
   it("保存 409 提供确认后的放弃本地修改并刷新动作", async () => {
@@ -277,8 +302,8 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("个性评语"));
-    await user.type(screen.getByLabelText("个性评语"), "会被放弃的本地草稿");
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "会被放弃的本地草稿");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
     const abandon = screen.queryByRole("button", { name: "放弃本地修改并刷新" });
     expect(abandon).toBeInTheDocument();
@@ -287,7 +312,7 @@ describe("复核页", () => {
 
     expect(confirm).toHaveBeenCalledWith("将放弃当前未保存的复核修改并加载服务器最新内容，确定继续吗？");
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(screen.getByLabelText("个性评语")).toHaveValue("服务端最新内容");
+    expect(screen.getByLabelText("优点一")).toHaveValue("服务端最新内容");
   });
 
   it("提交分析后立即显示任务进度并锁定复核操作", async () => {
@@ -350,7 +375,7 @@ describe("复核页", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/analyze/status");
     expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1");
-    expect(await screen.findByLabelText("个性评语")).toHaveValue("最终批改已保存");
+    expect(await screen.findByLabelText("优点一")).toHaveValue("最终批改已保存");
     await Promise.resolve();
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
@@ -419,7 +444,7 @@ describe("复核页", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("分析结果与当前内容冲突，请刷新后重试。");
   });
 
-  it("需重拍时可直接选择 1 至 3 张图片替换作文", async () => {
+  it("需重拍时可直接选择 1 至 4 张图片替换作文", async () => {
     const unreadable = { ...review, status: "needs_better_images" as const, report: null };
     const fetchMock = vi
       .spyOn(globalThis, "fetch")

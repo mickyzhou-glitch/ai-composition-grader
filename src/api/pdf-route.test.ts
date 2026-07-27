@@ -5,7 +5,10 @@ const OWNER_ID = "local-admin";
 import { describe, expect, it, vi } from "vitest";
 
 import { PdfServiceError } from "../pdf/pdf-service";
-import { createReviewPdfRouteHandlers } from "./handlers";
+import {
+  createBatchReviewPdfRouteHandlers,
+  createReviewPdfRouteHandlers,
+} from "./handlers";
 
 const context = { params: Promise.resolve({ id: "review-1" }) };
 
@@ -91,5 +94,34 @@ describe("GET /api/reviews/[id]/pdf", () => {
     expect(serialized).toContain("PDF_ENGINE_MISSING");
     expect(serialized).toContain("npx playwright install chromium");
     expect(serialized).not.toContain("/Users/");
+  });
+});
+
+describe("POST /api/reviews/batch-pdf", () => {
+  it("将所选记录的 PDF 打包为私有 ZIP 下载", async () => {
+    const exportBatch = vi.fn().mockResolvedValue({
+      data: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: "作文批改批量导出.zip",
+    });
+    const handler = createBatchReviewPdfRouteHandlers({
+      ownerId: OWNER_ID,
+      pdfBatchService: { exportBatch } as never,
+    });
+
+    const response = await handler.POST(
+      new Request("http://localhost/api/reviews/batch-pdf", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reviewIds: ["review-1", "review-2"] }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("application/zip");
+    expect(response.headers.get("content-disposition")).toBe(
+      `attachment; filename="review-pdfs.zip"; filename*=UTF-8''${encodeURIComponent("作文批改批量导出.zip")}`,
+    );
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    expect(exportBatch).toHaveBeenCalledWith(OWNER_ID, ["review-1", "review-2"]);
   });
 });

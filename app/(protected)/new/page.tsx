@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import {
+  MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
   type AssignmentConfig,
   type NormalizedCrop,
@@ -81,6 +82,7 @@ export default function NewReviewPage() {
   const router = useRouter();
   const [step, setStep] = useState(1);
   const [config, setConfig] = useState<AssignmentConfig>(presetConfig);
+  const [studentName, setStudentName] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
   const [review, setReview] = useState<ReviewSession | null>(null);
   const [uploaded, setUploaded] = useState<UploadedImage[] | null>(null);
@@ -151,8 +153,8 @@ export default function NewReviewPage() {
 
   function chooseFiles(files: File[]) {
     setError("");
-    if (files.length < 1 || files.length > 3) {
-      setError("请选择 1 至 3 张作文图片");
+    if (files.length < 1 || files.length > MAX_REVIEW_IMAGES) {
+      setError(`请选择 1 至 ${MAX_REVIEW_IMAGES} 张作文图片`);
       return;
     }
     images.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
@@ -197,14 +199,18 @@ export default function NewReviewPage() {
         currentReview = await apiFetch<ReviewSession>("/api/reviews", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ config }),
+          body: JSON.stringify({ config, studentName }),
         });
         setReview(currentReview);
       } else {
         currentReview = await apiFetch<ReviewSession>(`/api/reviews/${encodeURIComponent(currentReview.id)}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ expectedRevision: currentReview.revision, config }),
+          body: JSON.stringify({
+            expectedRevision: currentReview.revision,
+            config,
+            studentName,
+          }),
         });
         setReview(currentReview);
       }
@@ -308,8 +314,9 @@ export default function NewReviewPage() {
 
         {step === 2 ? (
           <section className="paper-card flow-card" aria-labelledby="upload-heading">
-            <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">整理作文图片</h2></div><span className="muted">{images.length}/3 张</span></div>
-            <label className="upload-zone">选择作文图片<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>点击选择 1 至 3 张图片</span><small>支持 JPG、PNG、WebP、HEIC / HEIF，单张不超过 20MB</small></label>
+            <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">整理作文图片</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
+            <label className="upload-student-name">学生姓名<input aria-label="学生姓名" maxLength={50} placeholder="请输入学生姓名" value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label>
+            <label className="upload-zone">选择作文图片<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>点击选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP、HEIC / HEIF，单张不超过 20MB</small></label>
             <div className="image-sort-list">
               {images.map((image, index) => (
                 <article className="image-sort-card" key={image.key}>
@@ -340,9 +347,9 @@ export default function NewReviewPage() {
         {step === 3 ? (
           <section className="paper-card flow-card" aria-labelledby="confirm-heading">
             <p className="eyebrow">第三步</p><h2 id="confirm-heading">确认批改内容</h2>
-            <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span></div>
+            <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span><span>学生姓名</span><b>{studentName.trim() || "未填写"}</b></div>
             <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°{asCrop(image.crop) ? " · 已裁剪" : ""}</small></li>)}</ol>
-            <div className="privacy-note"><b>真实作文上传说明</b><p>请勿上传学生姓名、学号、班级、学校等无关身份信息；本次图片仅用于作文批改，并会发送到教师配置的第三方 AI 服务识别和分析。</p><p>作文图片与批改文件自首次上传起仅在本机保存 30 天，随后自动永久删除；第三方 AI 服务对数据的保存和处理以其自身规则为准。</p><label><input aria-label="确认真实作文上传说明" type="checkbox" checked={privacyConfirmed} onChange={(event) => setPrivacyConfirmed(event.target.checked)} /> 我确认已获得上传和使用该作文的必要授权。</label></div>
+            <div className="privacy-note"><b>真实作文上传说明</b><p>请勿在图片中保留学生姓名、学号、班级、学校等无关身份信息；本次图片仅用于作文批改，并会发送到教师配置的第三方 AI 服务识别和分析。</p><p>作文图片与批改文件自首次上传起仅在本机保存 30 天，随后自动永久删除；第三方 AI 服务对数据的保存和处理以其自身规则为准。</p><label><input aria-label="确认真实作文上传说明" type="checkbox" checked={privacyConfirmed} onChange={(event) => setPrivacyConfirmed(event.target.checked)} /> 我确认已获得上传和使用该作文的必要授权。</label></div>
             <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel="正在建立批改…" disabled={!privacyConfirmed} onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
           </section>
         ) : null}
