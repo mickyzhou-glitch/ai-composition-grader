@@ -1,0 +1,5 @@
+# Copy to .dev.vars for local Worker development. Keep all real values out of Git.
+APP_ORIGIN=http://127.0.0.1:8787
+AUTH_PROOF_ENCRYPTION_KEY=
+AUTH_IP_HMAC_SECRET=
+AI_API_KEY=

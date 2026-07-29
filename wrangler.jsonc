@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "ai-composition-grader",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2026-07-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "ai-composition-grader",
+    "database_id": "00000000-0000-0000-0000-000000000000"
+  }],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "ai-composition-grader-files" }],
+  "queues": {
+    "producers": [
+      { "binding": "ANALYSIS_QUEUE", "queue": "ai-composition-grader-analysis" },
+      { "binding": "ANALYSIS_DLQ", "queue": "ai-composition-grader-analysis-dlq" }
+    ],
+    "consumers": [{ "queue": "ai-composition-grader-analysis", "dead_letter_queue": "ai-composition-grader-analysis-dlq" }]
+  }
+}
