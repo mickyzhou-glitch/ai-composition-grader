@@ -6,6 +6,7 @@ import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
+import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
@@ -297,7 +298,23 @@ export default {
           // remains encrypted in D1 and is not included in static assets.
           { dangerouslyAllowBrowser: true },
         );
-        const result = await adapter.analyzeImageUrls({ config: JSON.parse(job.config), imageUrls: urls, teacherGuidance: job.teacher_guidance ?? undefined });
+        const analysisInput = { config: JSON.parse(job.config), teacherGuidance: job.teacher_guidance ?? undefined };
+        let result;
+        try {
+          result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: urls });
+        } catch (error) {
+          if (!(error instanceof AiAdapterError) || error.upstreamStatus !== 403) throw error;
+          // The configured model supports vision. Retry once without asking the
+          // upstream gateway to fetch our signed private Workers URLs itself.
+          const reader = new D1ReviewReader(env.DB);
+          const images = await Promise.all(results.map(async ({ id }) => {
+            const file = await reader.imageObjectKeyForAi(job.review_id, id, "ai");
+            if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
+            return { key: file.key, mimeType: file.contentType };
+          }));
+          const inlineImageUrls = await loadInlineAiImageUrls(env.FILES, images);
+          result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: inlineImageUrls });
+        }
         const now = Date.now();
         await env.DB.batch([env.DB.prepare("UPDATE reviews SET report = ?, status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND owner_id = ?").bind(result.readable ? JSON.stringify(result.report) : null, result.readable ? "ready_for_review" : "needs_better_images", now, job.review_id, job.owner_id), env.DB.prepare("DELETE FROM annotations WHERE review_id = ?").bind(job.review_id), ...result.annotations.map((annotation, position) => env.DB.prepare("INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(job.review_id, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)), env.DB.prepare("UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ? WHERE id = ?").bind(now, job.id)]);
       } catch (error) {
