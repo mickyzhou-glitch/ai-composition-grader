@@ -291,7 +291,12 @@ export default {
         const apiKey = await configuredApiKey(env, settings.encrypted_api_key);
         if (!apiKey) throw new Error("AI_SETTINGS_INCOMPLETE");
         const urls = await Promise.all(results.map(({ id }) => createAiImageUrl({ origin: env.APP_ORIGIN, secret: env.AI_FILE_URL_SECRET, reviewId: job.review_id, imageId: id, variant: "ai", expiresAt: Date.now() + 600000 })));
-        const adapter = new OpenAIReviewAdapter({ getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey }) });
+        const adapter = new OpenAIReviewAdapter(
+          { getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey }) },
+          // This code executes in a Worker, never in the browser. The API key
+          // remains encrypted in D1 and is not included in static assets.
+          { dangerouslyAllowBrowser: true },
+        );
         const result = await adapter.analyzeImageUrls({ config: JSON.parse(job.config), imageUrls: urls, teacherGuidance: job.teacher_guidance ?? undefined });
         const now = Date.now();
         await env.DB.batch([env.DB.prepare("UPDATE reviews SET report = ?, status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND owner_id = ?").bind(result.readable ? JSON.stringify(result.report) : null, result.readable ? "ready_for_review" : "needs_better_images", now, job.review_id, job.owner_id), env.DB.prepare("DELETE FROM annotations WHERE review_id = ?").bind(job.review_id), ...result.annotations.map((annotation, position) => env.DB.prepare("INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(job.review_id, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)), env.DB.prepare("UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ? WHERE id = ?").bind(now, job.id)]);

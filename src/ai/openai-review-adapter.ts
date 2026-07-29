@@ -19,6 +19,7 @@ export interface OpenAIClientOptions {
   baseURL: string;
   timeout: number;
   maxRetries: number;
+  dangerouslyAllowBrowser?: boolean;
 }
 
 export interface OpenAICompatibleClient {
@@ -90,6 +91,11 @@ export class AiAdapterError extends Error {
 
 interface OpenAIReviewAdapterOptions {
   clientFactory?: OpenAIClientFactory;
+  /**
+   * Cloudflare Workers expose browser-like globals even though this adapter
+   * runs only on the server and keeps the key out of the browser bundle.
+   */
+  dangerouslyAllowBrowser?: boolean;
 }
 
 const ENVELOPE_SCHEMA_SUMMARY = [
@@ -250,7 +256,10 @@ export class OpenAIReviewAdapter {
     private readonly settings: AiSettingsSource,
     options: OpenAIReviewAdapterOptions = {},
   ) {
-    this.clientFactory = options.clientFactory ?? defaultClientFactory;
+    this.clientFactory = options.clientFactory ?? ((clientOptions) => defaultClientFactory({
+      ...clientOptions,
+      ...(options.dangerouslyAllowBrowser ? { dangerouslyAllowBrowser: true } : {}),
+    }));
   }
 
   async analyze(input: AnalyzeCompositionInput): Promise<AiReviewEnvelope> {

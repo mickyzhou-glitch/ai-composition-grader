@@ -97,6 +97,30 @@ function setup(contents: Array<string | null | Error>) {
 }
 
 describe("OpenAIReviewAdapter", () => {
+  it("在由服务器保管密钥的 Worker 运行时可以发起 AI 请求", async () => {
+    vi.stubGlobal("window", { document: {} });
+    vi.stubGlobal("navigator", {});
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify(successEnvelope) } }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new OpenAIReviewAdapter({
+      getRuntimeConfig: async () => ({
+        baseUrl: "https://ai.example.test/v1",
+        model: "vision-model",
+        apiKey: "server-held-secret",
+      }),
+    }, { dangerouslyAllowBrowser: true });
+
+    await expect(adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).resolves.toEqual(successEnvelope);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
   it("可以一次重写完整五段示范文", async () => {
     const sampleParagraphs = report.sampleParagraphs.map((sample) => ({
       ...sample,
