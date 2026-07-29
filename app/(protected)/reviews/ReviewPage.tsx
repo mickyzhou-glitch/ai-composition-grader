@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   MAX_REVIEW_IMAGES,
+  PRIVACY_NOTICE_VERSION,
   type Annotation,
   type EvaluationReport,
 } from "@/src/domain/contracts";
@@ -15,6 +16,7 @@ import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
 import { ReportEditor, type FeedbackSection } from "../../components/ReportEditor";
 import { StatusBadge } from "../../components/StatusBadge";
 import { ApiError, apiFetch, errorMessage } from "../../lib/api";
+import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
 import { downloadReviewPdf } from "../../lib/pdf-download";
 import type { ReviewView } from "../../lib/types";
 
@@ -409,7 +411,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     try {
       const form = new FormData();
       form.append("expectedRevision", String(review.revision));
-      files.forEach((file) => form.append("images", file));
+      form.append("privacyConfirmed", "true");
+      form.append("privacyNoticeVersion", PRIVACY_NOTICE_VERSION);
+      const prepared = await Promise.all(files.map((file) => prepareImageForCloudUpload({ file, rotation: 0, crop: null })));
+      prepared.forEach(({ file }) => form.append("images", file));
+      form.append("imageMeta", JSON.stringify(prepared.map(({ width, height }) => ({ width, height }))));
       const uploaded = await apiFetch<{ images: ReviewView["images"]; revision: number }>(
         `/api/reviews/${encodeURIComponent(reviewId)}/images`,
         { method: "POST", body: form },
@@ -426,7 +432,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       setAnnotations([]);
       setActivePage(0);
       setDirty(false);
-      setNotice("作文图片已替换，可重新开始 AI 分析。");
+      setNotice("作文图片已压缩优化并替换，可重新开始 AI 分析。");
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
