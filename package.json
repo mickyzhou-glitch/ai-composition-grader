@@ -22,7 +22,9 @@
     "cf:dev": "wrangler dev",
     "cf:test": "vitest run src/cloudflare",
     "cf:deploy": "wrangler deploy",
-    "cf:audit-migration": "tsx scripts/cloudflare-migration-audit.mts"
+    "cf:audit-migration": "tsx scripts/cloudflare-migration-audit.mts",
+    "cf:export-data": "tsx scripts/cloudflare-export-data.mts",
+    "cf:upload-r2": "tsx scripts/cloudflare-upload-r2.mts"
   },
   "dependencies": {
     "argon2": "^0.45.0",

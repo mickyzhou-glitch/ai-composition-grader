@@ -41,6 +41,7 @@ yarn-error.log*
 .dev.vars*
 !.dev.vars.example
 .wrangler/
+/.migration/
 
 # local application data
 /.data/
