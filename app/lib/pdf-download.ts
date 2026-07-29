@@ -42,7 +42,7 @@ export async function downloadReviewPdf(reviewId: string): Promise<string> {
     link.href = objectUrl;
     link.download = filename;
     link.hidden = true;
-    document.body.append(link);
+    document.body.appendChild(link);
     link.click();
     link.remove();
   } finally {
@@ -66,7 +66,7 @@ export async function downloadReviewPdfArchive(reviewIds: string[]): Promise<str
     link.href = objectUrl;
     link.download = filename;
     link.hidden = true;
-    document.body.append(link);
+    document.body.appendChild(link);
     link.click();
     link.remove();
   } finally {
