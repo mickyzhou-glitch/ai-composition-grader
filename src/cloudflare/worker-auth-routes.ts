@@ -13,7 +13,7 @@ interface WorkerAuthDependencies {
   ipHmacSecret: string;
   proofs: Pick<D1PasswordProofRepository, "findByUsername">;
   challenges: LoginChallengeRepository;
-  sessions?: Pick<D1SessionRepository, "create">;
+  sessions?: Pick<D1SessionRepository, "create" | "findActiveByTokenHash" | "revokeByTokenHash">;
   proofEncryptionKey?: string;
   randomNonce?: () => string;
 }
@@ -47,6 +47,11 @@ function cookie(value: string): string {
   return `__Host-zuowen_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
 }
 
+function sessionToken(request: Request): string | null {
+  const match = /(?:^|;\s*)__Host-zuowen_session=([^;]+)/u.exec(request.headers.get("cookie") ?? "");
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
 function jsonError(code: string, message: string, status: number): Response {
   return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
 }
@@ -61,6 +66,19 @@ function sameOrigin(request: Request, origin: string): boolean {
 
 export async function handleWorkerAuth(request: Request, dependencies: WorkerAuthDependencies): Promise<Response | null> {
   const url = new URL(request.url);
+  if (url.pathname === "/api/auth/me" && request.method === "GET") {
+    if (!dependencies.sessions) return jsonError("AUTHENTICATION_UNAVAILABLE", "认证服务暂时不可用", 503);
+    const token = sessionToken(request);
+    if (!token) return jsonError("UNAUTHENTICATED", "Authentication required", 401);
+    const session = await dependencies.sessions.findActiveByTokenHash(await hashSessionToken(token), new Date());
+    return session ? Response.json({ ok: true, data: session.user }, { headers: { "cache-control": "no-store" } }) : jsonError("UNAUTHENTICATED", "Authentication required", 401);
+  }
+  if (url.pathname === "/api/auth/logout" && request.method === "POST") {
+    if (!sameOrigin(request, dependencies.appOrigin) || !dependencies.sessions) return jsonError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
+    const token = sessionToken(request);
+    if (token) await dependencies.sessions.revokeByTokenHash(await hashSessionToken(token), new Date());
+    return Response.json({ ok: true, data: {} }, { headers: { "set-cookie": "__Host-zuowen_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0" } });
+  }
   if (!["/api/auth/login/challenge", "/api/auth/login/complete"].includes(url.pathname) || request.method !== "POST") return null;
   if (!sameOrigin(request, dependencies.appOrigin)) return jsonError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
   const ipHash = await sourceIpHash(request, dependencies.ipHmacSecret);

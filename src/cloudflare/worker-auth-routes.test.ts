@@ -55,7 +55,7 @@ describe("worker auth routes", () => {
       appOrigin: "https://grader.workers.dev", ipHmacSecret: "secret", proofEncryptionKey: toBase64Url(encryptionKey),
       proofs: { findByUsername: vi.fn().mockResolvedValue({ user: { id: "u1", username: "teacher-1", role: "teacher", mustChangePassword: false }, disabledAt: null, salt: "c2FsdA", sealed }) },
       challenges: { create: vi.fn(), consumeIfActive: vi.fn().mockResolvedValue({ ...challenge, nonce: "nonce-a" }) },
-      sessions: { create }, randomNonce: () => "bm9uY2U",
+      sessions: { create, findActiveByTokenHash: vi.fn(), revokeByTokenHash: vi.fn() }, randomNonce: () => "bm9uY2U",
     });
 
     expect(response?.status).toBe(200);
@@ -63,5 +63,18 @@ describe("worker auth routes", () => {
     expect(response?.headers.get("set-cookie")).toContain("HttpOnly");
     expect(response?.headers.get("set-cookie")).toContain("SameSite=Strict");
     expect(create).toHaveBeenCalledOnce();
+  });
+
+  it("returns the active user from the host-only session cookie", async () => {
+    const response = await handleWorkerAuth(new Request("https://grader.workers.dev/api/auth/me", {
+      headers: { cookie: "__Host-zuowen_session=token" },
+    }), {
+      appOrigin: "https://grader.workers.dev", ipHmacSecret: "secret",
+      proofs: { findByUsername: vi.fn() }, challenges: { create: vi.fn(), consumeIfActive: vi.fn() },
+      sessions: { create: vi.fn(), revokeByTokenHash: vi.fn(), findActiveByTokenHash: vi.fn().mockResolvedValue({ user: { id: "u1", username: "teacher-1", role: "teacher", mustChangePassword: false } }) },
+    });
+
+    expect(response?.status).toBe(200);
+    await expect(response?.json()).resolves.toMatchObject({ ok: true, data: { username: "teacher-1" } });
   });
 });
