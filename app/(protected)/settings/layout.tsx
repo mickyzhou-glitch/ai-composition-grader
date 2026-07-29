@@ -1,9 +1,5 @@
-import { notFound } from "next/navigation";
+import { RequireAuthenticatedUser } from "../../components/RequireAuthenticatedUser";
 
-import { requirePageUser } from "@/src/auth/request-auth";
-
-export default async function SettingsLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  const user = await requirePageUser();
-  if (user.role !== "admin" || user.mustChangePassword) notFound();
-  return children;
+export default function SettingsLayout({ children }: Readonly<{ children: React.ReactNode }>) {
+  return <RequireAuthenticatedUser requireAdmin>{children}</RequireAuthenticatedUser>;
 }
