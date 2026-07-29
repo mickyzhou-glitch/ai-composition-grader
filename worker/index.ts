@@ -5,9 +5,10 @@ import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
-import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
+import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
+import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
 
 function apiError(code: string, message: string, status: number): Response {
   return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
@@ -162,5 +163,26 @@ export default {
       return Response.json({ ok: false, error: { code: "NOT_FOUND", message: "接口不存在" } }, { status: 404 });
     }
     return env.ASSETS.fetch(request);
+  },
+  async queue(batch: MessageBatch<{ jobId: string }>, env: WorkerEnv): Promise<void> {
+    for (const message of batch.messages) {
+      const job = await env.DB.prepare("SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id, analysis_jobs.teacher_guidance, reviews.config FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id WHERE analysis_jobs.id = ? AND analysis_jobs.status = 'queued'").bind(message.body.jobId).first<{ id: string; review_id: string; owner_id: string; teacher_guidance: string | null; config: string }>();
+      if (!job) { message.ack(); continue; }
+      try {
+        await env.DB.prepare("UPDATE analysis_jobs SET status = 'running', progress_stage = 'reading_images', started_at = ? WHERE id = ?").bind(Date.now(), job.id).run();
+        const { results = [] } = await env.DB.prepare("SELECT id FROM review_images WHERE review_id = ? ORDER BY position").bind(job.review_id).all<{ id: number }>();
+        const settings = await env.DB.prepare("SELECT base_url, model FROM settings WHERE id = 1").first<{ base_url: string; model: string }>();
+        if (!settings) throw new Error("AI_SETTINGS_INCOMPLETE");
+        const urls = await Promise.all(results.map(({ id }) => createAiImageUrl({ origin: env.APP_ORIGIN, secret: env.AI_FILE_URL_SECRET, reviewId: job.review_id, imageId: id, variant: "ai", expiresAt: Date.now() + 600000 })));
+        const adapter = new OpenAIReviewAdapter({ getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey: env.AI_API_KEY }) });
+        const result = await adapter.analyzeImageUrls({ config: JSON.parse(job.config), imageUrls: urls, teacherGuidance: job.teacher_guidance ?? undefined });
+        const now = Date.now();
+        await env.DB.batch([env.DB.prepare("UPDATE reviews SET report = ?, status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND owner_id = ?").bind(result.readable ? JSON.stringify(result.report) : null, result.readable ? "ready_for_review" : "needs_better_images", now, job.review_id, job.owner_id), env.DB.prepare("DELETE FROM annotations WHERE review_id = ?").bind(job.review_id), ...result.annotations.map((annotation, position) => env.DB.prepare("INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(job.review_id, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)), env.DB.prepare("UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ? WHERE id = ?").bind(now, job.id)]);
+      } catch (error) {
+        const code = error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
+        await env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ?").bind(code, Date.now(), job.id).run();
+      }
+      message.ack();
+    }
   },
 };
