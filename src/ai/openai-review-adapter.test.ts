@@ -455,6 +455,18 @@ describe("OpenAIReviewAdapter", () => {
     );
   });
 
+  it("retains an upstream HTTP status without exposing provider details", async () => {
+    const harness = setup([Object.assign(new Error("provider detail"), { status: 400 })]);
+
+    await expect(
+      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
+    ).rejects.toEqual(expect.objectContaining({
+      code: "AI_REQUEST_FAILED",
+      upstreamStatus: 400,
+      message: "AI 服务请求失败",
+    }));
+  });
+
   it("拒绝 readable=false 携带 report 并尝试修复", async () => {
     const harness = setup([
       JSON.stringify({ ...successEnvelope, readable: false }),

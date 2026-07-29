@@ -81,6 +81,7 @@ export class AiAdapterError extends Error {
       | "AI_INVALID_RESPONSE",
     message: string,
     readonly status: number,
+    readonly upstreamStatus?: number,
   ) {
     super(message);
     this.name = "AiAdapterError";
@@ -235,7 +236,10 @@ async function completionContent(
     return content ?? "";
   } catch (error) {
     if (error instanceof AiAdapterError) throw error;
-    throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502);
+    const upstreamStatus = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
+      ? error.status
+      : undefined;
+    throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502, upstreamStatus);
   }
 }
 

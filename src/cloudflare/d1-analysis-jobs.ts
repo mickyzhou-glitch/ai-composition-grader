@@ -13,9 +13,18 @@ interface JobRow {
 
 function view(row: JobRow) {
   if (!statuses.has(row.status) || !stages.has(row.progress_stage)) throw new TypeError("Invalid analysis job");
+  const failedMessage = row.error_code === "AI_SETTINGS_INCOMPLETE"
+    ? "请联系管理员检查 AI 服务设置后再试"
+    : row.error_code === "AI_UPSTREAM_HTTP_400"
+      ? "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入"
+      : row.error_code === "AI_UPSTREAM_HTTP_401" || row.error_code === "AI_UPSTREAM_HTTP_403"
+        ? "AI 服务拒绝了访问密钥，请在设置中重新保存并测试"
+        : row.error_code?.startsWith("AI_UPSTREAM_HTTP_")
+          ? "AI 服务暂时拒绝了图片批改请求，请稍后重试"
+          : "AI 服务暂时不可用，请稍后重新分析";
   return {
     id: row.id, reviewId: row.review_id, status: row.status, progressStage: row.progress_stage,
-    message: row.status === "failed" ? row.error_code === "AI_SETTINGS_INCOMPLETE" ? "请联系管理员检查 AI 服务设置后再试" : "AI 服务暂时不可用，请稍后重新分析" : row.status === "canceled" ? "作文已删除或已到期，分析已取消" : null,
+    message: row.status === "failed" ? failedMessage : row.status === "canceled" ? "作文已删除或已到期，分析已取消" : null,
     createdAt: new Date(row.created_at).toISOString(), finishedAt: row.finished_at === null ? null : new Date(row.finished_at).toISOString(),
   };
 }

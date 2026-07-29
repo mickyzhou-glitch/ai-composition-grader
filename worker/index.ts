@@ -8,7 +8,7 @@ import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
-import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
+import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
 import { openSetting, sealSetting } from "../src/cloudflare/settings-secret";
 import type { ReviewView } from "../app/lib/types";
@@ -296,7 +296,9 @@ export default {
         const now = Date.now();
         await env.DB.batch([env.DB.prepare("UPDATE reviews SET report = ?, status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND owner_id = ?").bind(result.readable ? JSON.stringify(result.report) : null, result.readable ? "ready_for_review" : "needs_better_images", now, job.review_id, job.owner_id), env.DB.prepare("DELETE FROM annotations WHERE review_id = ?").bind(job.review_id), ...result.annotations.map((annotation, position) => env.DB.prepare("INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(job.review_id, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)), env.DB.prepare("UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ? WHERE id = ?").bind(now, job.id)]);
       } catch (error) {
-        const code = error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
+        const code = error instanceof AiAdapterError && error.upstreamStatus
+          ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}`
+          : error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
         await env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ?").bind(code, Date.now(), job.id).run();
       }
       message.ack();
