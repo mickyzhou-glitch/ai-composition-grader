@@ -1,6 +1,7 @@
 import type { WorkerEnv } from "../src/cloudflare/env";
 import { D1LoginChallengeRepository } from "../src/cloudflare/d1-login-challenge-repository";
 import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-repository";
+import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 
 export default {
@@ -11,6 +12,8 @@ export default {
       ipHmacSecret: env.AUTH_IP_HMAC_SECRET,
       proofs: new D1PasswordProofRepository(env.DB),
       challenges: new D1LoginChallengeRepository(env.DB),
+      sessions: new D1SessionRepository(env.DB),
+      proofEncryptionKey: env.AUTH_PROOF_ENCRYPTION_KEY,
     });
     if (authResponse) return authResponse;
     if (url.pathname === "/api/health") {

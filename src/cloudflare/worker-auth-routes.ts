@@ -1,7 +1,9 @@
 import type { LoginChallengeRepository } from "../auth/login-challenge-repository";
-import { toBase64Url } from "../auth/password-proof";
+import { fromBase64Url, toBase64Url } from "../auth/password-proof";
+import { verifyLoginProof } from "../auth/password-proof-worker";
 
 import type { D1PasswordProofRepository } from "./d1-password-proof-repository";
+import type { D1SessionRepository } from "./d1-session-repository";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
 const DUMMY_SALT = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -11,6 +13,8 @@ interface WorkerAuthDependencies {
   ipHmacSecret: string;
   proofs: Pick<D1PasswordProofRepository, "findByUsername">;
   challenges: LoginChallengeRepository;
+  sessions?: Pick<D1SessionRepository, "create">;
+  proofEncryptionKey?: string;
   randomNonce?: () => string;
 }
 
@@ -35,6 +39,14 @@ async function sourceIpHash(request: Request, secret: string): Promise<string | 
   return toHex(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(ip))));
 }
 
+async function hashSessionToken(token: string): Promise<string> {
+  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))));
+}
+
+function cookie(value: string): string {
+  return `__Host-zuowen_session=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=43200`;
+}
+
 function jsonError(code: string, message: string, status: number): Response {
   return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
 }
@@ -49,15 +61,32 @@ function sameOrigin(request: Request, origin: string): boolean {
 
 export async function handleWorkerAuth(request: Request, dependencies: WorkerAuthDependencies): Promise<Response | null> {
   const url = new URL(request.url);
-  if (url.pathname !== "/api/auth/login/challenge" || request.method !== "POST") return null;
+  if (!["/api/auth/login/challenge", "/api/auth/login/complete"].includes(url.pathname) || request.method !== "POST") return null;
   if (!sameOrigin(request, dependencies.appOrigin)) return jsonError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
   const ipHash = await sourceIpHash(request, dependencies.ipHmacSecret);
   if (!ipHash) return jsonError("AUTHENTICATION_UNAVAILABLE", "认证服务暂时不可用", 503);
-  let body: { username?: unknown };
+  let body: { username?: unknown; challengeId?: unknown; proof?: unknown };
   try {
     body = await request.json() as { username?: unknown };
   } catch {
     return jsonError("VALIDATION_ERROR", "请求参数无效", 400);
+  }
+  if (url.pathname === "/api/auth/login/complete") {
+    if (!dependencies.sessions || !dependencies.proofEncryptionKey || typeof body.challengeId !== "string" || typeof body.proof !== "string") {
+      return jsonError("VALIDATION_ERROR", "请求参数无效", 400);
+    }
+    const challenge = await dependencies.challenges.consumeIfActive(body.challengeId, ipHash);
+    if (!challenge) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+    const proof = await dependencies.proofs.findByUsername(challenge.normalizedUsername);
+    const valid = proof !== null && proof.disabledAt === null && await verifyLoginProof({
+      sealed: proof.sealed, challengeId: challenge.id, nonce: challenge.nonce, proof: body.proof,
+      encryptionKey: fromBase64Url(dependencies.proofEncryptionKey),
+    });
+    if (!valid) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+    const rawToken = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
+    const now = new Date();
+    await dependencies.sessions.create({ id: crypto.randomUUID(), userId: proof.user.id, tokenHash: await hashSessionToken(rawToken), expiresAt: new Date(now.getTime() + 12 * 60 * 60_000), now });
+    return Response.json({ ok: true, data: proof.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });
   }
   const normalizedUsername = normalizeUsername(body.username);
   const proof = await dependencies.proofs.findByUsername(normalizedUsername);
