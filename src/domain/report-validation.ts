@@ -1,19 +1,13 @@
 import type { EvaluationReport, TemplateType } from "./contracts";
-import { createEvaluationReportSchema } from "./contracts";
+import { createEvaluationReportSchema, gradeFromLegacyTotal } from "./contracts";
 
 export class ReportValidationError extends Error {
   readonly code = "VALIDATION_ERROR";
   readonly status = 400;
 }
 
-export function deriveLevel(total: number) {
-  if (!Number.isInteger(total) || total < 0 || total > 40) {
-    throw new RangeError("total must be an integer from 0 to 40");
-  }
-  if (total <= 29) return "重写" as const;
-  if (total <= 35) return "二类作文" as const;
-  return "优秀作文" as const;
-}
+/** @deprecated 仅用于把历史 40 分记录迁移为新等级。 */
+export const deriveLevel = gradeFromLegacyTotal;
 
 export interface ReportValidationOptions {
   templateType?: TemplateType;
@@ -27,33 +21,12 @@ export function validateReport(
   const report = createEvaluationReportSchema(
     options.templateType ?? "preset_self_applause",
   ).parse(input);
-  const { scores } = report;
-  const calculatedTotal =
-    scores.themeIntent +
-    scores.contentSelection +
-    scores.structure +
-    scores.languageExpression +
-    scores.writingConventions;
-
-  if (scores.total !== calculatedTotal) {
-    throw new ReportValidationError(
-      `scores.total must equal the sum of score items (${calculatedTotal})`,
-    );
-  }
-
-  const expectedLevel = deriveLevel(scores.total);
-  if (scores.level !== expectedLevel) {
-    throw new ReportValidationError(
-      `scores.level must be ${expectedLevel} when total is ${scores.total}`,
-    );
-  }
-
   if (
     (report.themeFit === "off_topic" || options.incompleteEvent === true) &&
-    scores.total > 29
+    report.grade !== "C"
   ) {
     throw new ReportValidationError(
-      "off_topic or incompleteEvent reports must have a total no greater than 29",
+      "off_topic or incompleteEvent reports must be assigned grade C",
     );
   }
 

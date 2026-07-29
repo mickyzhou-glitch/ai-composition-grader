@@ -5,20 +5,11 @@ import {
   assignmentConfigSchema,
   createEvaluationReportSchema,
   privacyUploadConsentSchema,
+  scoreLevelSchema,
 } from "./contracts";
 import { deriveLevel, validateReport } from "./report-validation";
 
-const validScores = {
-  themeIntent: 9,
-  contentSelection: 9,
-  structure: 7,
-  languageExpression: 7,
-  writingConventions: 4,
-  total: 36,
-  level: "优秀作文" as const,
-};
-
-const paragraph = "我".repeat(110);
+const paragraph = "我".repeat(120);
 
 const validReport = {
   themeFit: "fits" as const,
@@ -27,7 +18,13 @@ const validReport = {
   painPoints: ["结尾略快"],
   commonIssues: ["个别句子较长"],
   revisionSuggestions: ["补充结尾感受"],
-  scores: validScores,
+  grade: "A-" as const,
+  diagnostics: {
+    authenticityAndRelevance: { finding: "主题明确，事件真实。", action: "保留真实经历，补一处选择时的感受。" },
+    materialAndDetails: { finding: "关键动作还可以更具体。", action: "补写爸爸递水时的动作和自己的感受。" },
+    structure: { finding: "五段结构完整。", action: "让第四段的行动承接第三段的转折。" },
+    language: { finding: "句子基本流畅。", action: "把段首时间词改为承接情绪的句子。" },
+  },
   sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
     title: `第 ${index + 1} 段`,
     text: paragraph,
@@ -90,6 +87,41 @@ describe("annotationSchema", () => {
 });
 
 describe("evaluationReportSchema", () => {
+  it("接受无数值的七档等级和四维诊断", () => {
+    const result = createEvaluationReportSchema("preset_self_applause").safeParse({
+      ...validReport,
+      grade: "A-",
+      diagnostics: {
+        authenticityAndRelevance: {
+          finding: "结尾写出坚持，但第二段还缺少一次真实的选择。",
+          action: "在第二段补上你犹豫后仍坚持练习的具体经过。",
+        },
+        materialAndDetails: {
+          finding: "爸爸的关心停留在概括，缺少动作细节。",
+          action: "补写爸爸递水、停下脚步等一个连续动作。",
+        },
+        structure: {
+          finding: "五段结构完整，第三段转折明确。",
+          action: "保留第三段的转折句，并让第四段接着写自己的行动。",
+        },
+        language: {
+          finding: "段首反复使用时间词，衔接较单一。",
+          action: "把“第二天”改为承接上一段情绪或动作的句子。",
+        },
+      },
+      scores: undefined,
+      sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+        title: `第 ${index + 1} 段`,
+        text: "我".repeat(120),
+        suggestion: "补充动作细节。",
+      })),
+    });
+
+    expect(scoreLevelSchema.safeParse("A+").success).toBe(true);
+    expect(scoreLevelSchema.safeParse("C").success).toBe(true);
+    expect(result.success).toBe(true);
+  });
+
   it("示范段落是有标题、正文和修改建议的结构化对象", () => {
     const samples = Array.from({ length: 5 }, (_, index) => ({
       title: `第 ${index + 1} 段`,
@@ -108,7 +140,7 @@ describe("evaluationReportSchema", () => {
   it("预设模板只计算示范正文的中文字符数", () => {
     const samples = Array.from({ length: 5 }, (_, index) => ({
       title: "题".repeat(200),
-      text: "文".repeat(index === 4 ? 110 : 110),
+      text: "文".repeat(index === 4 ? 120 : 120),
       suggestion: "建议".repeat(200),
     }));
 
@@ -120,7 +152,7 @@ describe("evaluationReportSchema", () => {
     ).toMatchObject({ sampleParagraphs: samples });
   });
 
-  it("接受预设模板的5段、550个中文字范文", () => {
+  it("接受预设模板的5段、600个中文字范文", () => {
     expect(
       createEvaluationReportSchema("preset_self_applause").parse(validReport),
     ).toEqual(validReport);
@@ -135,10 +167,10 @@ describe("evaluationReportSchema", () => {
     ).toThrow();
   });
 
-  it.each([549, 651])(
+  it.each([599, 701])(
     "拒绝预设模板合计 %i 个中文字的范文",
     (totalCharacters) => {
-      const lengths = [110, 110, 110, 110, totalCharacters - 440];
+      const lengths = [120, 120, 120, 120, totalCharacters - 480];
       expect(() =>
         createEvaluationReportSchema("preset_self_applause").parse({
           ...validReport,
@@ -169,54 +201,29 @@ describe("evaluationReportSchema", () => {
   });
 });
 
-describe("deriveLevel", () => {
+describe("gradeFromLegacyTotal", () => {
   it.each([
-    [0, "重写"],
-    [29, "重写"],
-    [30, "二类作文"],
-    [35, "二类作文"],
-    [36, "优秀作文"],
-    [40, "优秀作文"],
-  ])("将 %i 分归类为 %s", (total, expected) => {
+    [0, "C"], [29, "C"], [30, "B-"], [32, "B"], [34, "B+"], [36, "A-"], [37, "A"], [40, "A+"],
+  ])("将历史 %i 分迁移为 %s", (total, expected) => {
     expect(deriveLevel(total)).toBe(expected);
   });
 
-  it.each([-1, 41])("拒绝越界总分 %i", (total) => {
+  it.each([-1, 41])("拒绝越界历史总分 %i", (total) => {
     expect(() => deriveLevel(total)).toThrow();
   });
 });
 
 describe("validateReport", () => {
-  it("要求分项和等于总分", () => {
+  it("偏题作文必须评为 C（重写）", () => {
     expect(() =>
       validateReport({
         ...validReport,
-        scores: { ...validScores, total: 35, level: "二类作文" },
+        themeFit: "off_topic",
       }),
-    ).toThrow(/total/i);
+    ).toThrow(/grade C/i);
   });
 
-  it("要求等级与总分边界一致", () => {
-    expect(() =>
-      validateReport({
-        ...validReport,
-        scores: { ...validScores, level: "二类作文" },
-      }),
-    ).toThrow(/level/i);
+  it("事件不完整时必须评为 C（重写）", () => {
+    expect(() => validateReport(validReport, { incompleteEvent: true })).toThrow(/grade C/i);
   });
-
-  it.each([
-    ["off_topic", false],
-    ["fits", true],
-  ] as const)(
-    "在 themeFit=%s、incompleteEvent=%s 时限制总分不高于29",
-    (themeFit, incompleteEvent) => {
-      expect(() =>
-        validateReport(
-          { ...validReport, themeFit },
-          { incompleteEvent, templateType: "preset_self_applause" },
-        ),
-      ).toThrow(/29/);
-    },
-  );
 });

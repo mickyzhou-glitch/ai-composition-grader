@@ -1,4 +1,5 @@
 import type { ReviewRecord } from "@/src/db/review-repository";
+import { gradeFromLegacyTotal } from "@/src/domain/contracts";
 
 import styles from "./print.module.css";
 
@@ -56,6 +57,7 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
   }
 
   const report = review.report;
+  const grade = report.grade ?? gradeFromLegacyTotal(report.scores?.total ?? 0);
   const personalized = splitLegacyComment(report.personalizedComment);
   const strengths = summaryItems(personalized.strengths);
   const improvements = summaryItems([personalized.improvement, ...report.painPoints]);
@@ -70,6 +72,7 @@ export function PrintReview({ review, imageSources }: { review: ReviewRecord; im
         data-summary-density={strengthsDensity}
       >
         <div className={styles.summaryContent}>
+          <p className={styles.gradeBadge}>等级评定 · {grade}{grade === "C" ? "（重写）" : ""}</p>
           <h1>优点</h1>
           <SummaryPoints items={strengths} />
         </div>

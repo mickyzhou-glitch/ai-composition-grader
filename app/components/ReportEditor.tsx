@@ -2,13 +2,8 @@
 
 import { useState } from "react";
 
-import type { EvaluationReport, ScoreBreakdown, ScoreLevel } from "@/src/domain/contracts";
+import { gradeFromLegacyTotal, type CompositionGrade, type Diagnostics, type EvaluationReport } from "@/src/domain/contracts";
 import { ScoreCard } from "./ScoreCard";
-
-export function scoreSummary(values: readonly number[]): { total: number; level: ScoreLevel } {
-  const total = values.reduce((sum, value) => sum + value, 0);
-  return { total, level: total <= 29 ? "重写" : total <= 35 ? "二类作文" : "优秀作文" };
-}
 
 interface ReportEditorProps {
   report: EvaluationReport;
@@ -23,29 +18,25 @@ interface ReportEditorProps {
 
 export type FeedbackSection = "strengths" | "improvements";
 
-const scoreFields = [
-  ["themeIntent", "主题立意", 10],
-  ["contentSelection", "选材内容", 10],
-  ["structure", "篇章结构", 8],
-  ["languageExpression", "语言表达", 8],
-  ["writingConventions", "书写规范", 4],
-] as const;
+const gradeOptions: Array<{ value: CompositionGrade; label: string }> = [
+  { value: "A+", label: "A+ 卓越" },
+  { value: "A", label: "A 优秀" },
+  { value: "A-", label: "A- 良好" },
+  { value: "B+", label: "B+ 有潜力" },
+  { value: "B", label: "B 基础达标" },
+  { value: "B-", label: "B- 需要重点修改" },
+  { value: "C", label: "C 重写" },
+];
+
+const diagnosticLabels: Array<[keyof Diagnostics, string, string]> = [
+  ["authenticityAndRelevance", "真实度与切题", "内容是否真实，是否围绕题目和结尾主题"],
+  ["materialAndDetails", "素材与细节", "素材是否恰当，关键场景是否写出动作、心理和画面"],
+  ["structure", "五段结构", "开篇、发展、转折、行动、感悟是否完整且衔接清楚"],
+  ["language", "语言流畅度", "句子和段落是否自然，是否摆脱时间词开头的流水账"],
+];
 
 const pointLabels = ["一", "二", "三", "四", "五", "六"] as const;
 const MAX_FEEDBACK_POINTS = pointLabels.length;
-
-function normalisedScores(scores: ScoreBreakdown, themeFit: EvaluationReport["themeFit"]): ScoreBreakdown {
-  const next = { ...scores };
-  if (themeFit === "off_topic") {
-    let excess = Math.max(0, scoreFields.reduce((sum, [field]) => sum + next[field], 0) - 29);
-    for (const [field] of [...scoreFields].reverse()) {
-      const deduction = Math.min(excess, next[field]);
-      next[field] -= deduction;
-      excess -= deduction;
-    }
-  }
-  return { ...next, ...scoreSummary(scoreFields.map(([field]) => next[field])) };
-}
 
 export function ReportEditor({
   report,
@@ -57,16 +48,17 @@ export function ReportEditor({
   onRewriteAllSamples,
   rewritingAllSamples = false,
 }: ReportEditorProps) {
+  const grade = report.grade ?? gradeFromLegacyTotal(report.scores?.total ?? 0);
+  const diagnostics: Diagnostics = report.diagnostics ?? {
+    authenticityAndRelevance: { finding: report.themeReason, action: "围绕题目补写一处真实经历，让正文能支撑结尾感悟。" },
+    materialAndDetails: { finding: "历史报告未保留细节诊断。", action: "选一个关键场景，补写动作、心理和环境中的具体细节。" },
+    structure: { finding: "历史报告未保留结构诊断。", action: "按五段式检查开篇、发展、转折、行动和感悟。" },
+    language: { finding: "历史报告未保留语言诊断。", action: "把段首时间词改成承接上一段动作或情绪的句子。" },
+  };
   const [rewriteInstructions, setRewriteInstructions] = useState<string[]>([]);
   const [rewriteAllInstruction, setRewriteAllInstruction] = useState("");
   function update<K extends keyof EvaluationReport>(key: K, value: EvaluationReport[K]) {
     onChange({ ...report, [key]: value });
-  }
-
-  function updateScore(key: (typeof scoreFields)[number][0], raw: string, maximum: number) {
-    const value = Math.max(0, Math.min(maximum, Math.trunc(Number(raw) || 0)));
-    const items = { ...report.scores, [key]: value };
-    onChange({ ...report, scores: normalisedScores(items, report.themeFit) });
   }
 
   function updateSample(index: number, change: Partial<EvaluationReport["sampleParagraphs"][number]>) {
@@ -77,7 +69,22 @@ export function ReportEditor({
   }
 
   function updateThemeFit(themeFit: EvaluationReport["themeFit"]) {
-    onChange({ ...report, themeFit, scores: normalisedScores(report.scores, themeFit) });
+    onChange({ ...report, themeFit, grade: themeFit === "off_topic" ? "C" : grade, diagnostics });
+  }
+
+  function updateGrade(grade: CompositionGrade) {
+    onChange({ ...report, grade: report.themeFit === "off_topic" ? "C" : grade, diagnostics });
+  }
+
+  function updateDiagnostic<K extends keyof Diagnostics>(key: K, field: "finding" | "action", value: string) {
+    onChange({
+      ...report,
+      grade,
+      diagnostics: {
+        ...diagnostics,
+        [key]: { ...diagnostics[key], [field]: value },
+      },
+    });
   }
 
   const strengths = report.personalizedComment.split(/\r?\n/u).slice(0, MAX_FEEDBACK_POINTS);
@@ -152,8 +159,11 @@ export function ReportEditor({
         <div className="summary-point-actions"><button type="button" aria-label="新增需要修改" disabled={improvements.length >= MAX_FEEDBACK_POINTS} onClick={() => updateImprovements([...improvements, ""])}>＋ 新增需要修改</button></div>
       </section>
 
-      <section className="report-section" aria-labelledby="score-heading">
-        <div className="score-layout"><div><p className="eyebrow">五项评分</p><h2 id="score-heading">分项得分</h2><div className="score-inputs">{scoreFields.map(([field, label, max]) => <label key={field}>{label}（0-{max}）<input aria-label={`${label}（0-${max}）`} type="number" min={0} max={max} value={report.scores[field]} onChange={(event) => updateScore(field, event.target.value, max)} /></label>)}</div></div><ScoreCard scores={report.scores} /></div>
+      <section className="report-section" aria-labelledby="grade-heading">
+        <div className="score-layout"><div><p className="eyebrow">等级评定</p><h2 id="grade-heading">最终等级</h2><label className="grade-select" htmlFor="composition-grade">根据四维诊断评定<select id="composition-grade" aria-label="作文等级" value={grade} onChange={(event) => updateGrade(event.target.value as CompositionGrade)}>{gradeOptions.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}</select></label></div><ScoreCard grade={grade} /></div>
+        <div className="diagnostic-grid">{diagnosticLabels.map(([key, label, hint]) => (
+          <fieldset className="diagnostic-card" key={key}><legend>{label}</legend><p className="muted">{hint}</p><label>精准定位<textarea aria-label={`${label}精准定位`} value={diagnostics[key].finding} onChange={(event) => updateDiagnostic(key, "finding", event.target.value)} /></label><label>学生下一步怎么改<textarea aria-label={`${label}修改动作`} value={diagnostics[key].action} onChange={(event) => updateDiagnostic(key, "action", event.target.value)} /></label></fieldset>
+        ))}</div>
       </section>
 
       <section className="report-section" aria-labelledby="samples-heading">

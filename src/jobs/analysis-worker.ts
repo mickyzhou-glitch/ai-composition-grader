@@ -29,7 +29,7 @@ export interface AnalysisExecutionService {
     config: AssignmentConfig;
     imageDataUrls: string[];
   }>;
-  analyze(input: { config: AssignmentConfig; imageDataUrls: string[] }): Promise<AiReviewEnvelope>;
+  analyze(input: { config: AssignmentConfig; imageDataUrls: string[]; teacherGuidance?: string }): Promise<AiReviewEnvelope>;
   save(
     ownerId: string,
     reviewId: string,
@@ -146,6 +146,7 @@ export class AnalysisWorker {
       const envelope = await this.execution.analyze({
         config: prepared.config,
         imageDataUrls: prepared.imageDataUrls,
+        teacherGuidance: claim.teacherGuidance ?? undefined,
       });
       this.assertClaimCurrent(claimLost, claim.id);
       claim = this.jobs.updateProgress(claim, "validating_result");

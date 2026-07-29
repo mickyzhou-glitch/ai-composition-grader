@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS analysis_jobs (
   ),
   error_code TEXT,
   message TEXT,
+  teacher_guidance TEXT,
   created_at INTEGER NOT NULL,
   started_at INTEGER,
   finished_at INTEGER
@@ -332,6 +333,12 @@ function migrateLegacyReviewImages(database: Database.Database): void {
   `);
 }
 
+function migrateAnalysisJobs(database: Database.Database): void {
+  if (!tableColumns(database, "analysis_jobs").has("teacher_guidance")) {
+    database.exec("ALTER TABLE analysis_jobs ADD COLUMN teacher_guidance TEXT");
+  }
+}
+
 function assertForeignKeys(database: Database.Database): void {
   const violations = database.prepare("PRAGMA foreign_key_check").all();
   if (violations.length > 0) {
@@ -371,6 +378,7 @@ export function initializeSchema(database: Database.Database): void {
       database.exec(CREATE_REVIEWS_SQL);
       migrateReviews(database);
       database.exec(CREATE_REMAINING_SCHEMA_SQL);
+      migrateAnalysisJobs(database);
       migrateLegacyReviewImages(database);
       assertForeignKeys(database);
     })();

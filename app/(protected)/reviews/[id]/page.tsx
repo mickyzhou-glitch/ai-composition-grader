@@ -62,6 +62,7 @@ export default function ReviewPage() {
   const reviewId = String(id);
   const [review, setReview] = useState<ReviewView | null>(null);
   const [studentName, setStudentName] = useState("");
+  const [teacherGuidance, setTeacherGuidance] = useState("");
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobView | null>(null);
@@ -379,7 +380,11 @@ export default function ReviewPage() {
     setError("");
     setNotice("");
     try {
-      const job = await apiFetch<AnalysisJobView>(`/api/reviews/${encodeURIComponent(reviewId)}/analyze`, { method: "POST" });
+      const job = await apiFetch<AnalysisJobView>(`/api/reviews/${encodeURIComponent(reviewId)}/analyze`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(teacherGuidance.trim() ? { teacherGuidance: teacherGuidance.trim() } : {}),
+      });
       setAnalysisJob(job);
       setDirty(false);
       setNotice(`AI 分析已提交：${stageLabels[job.progressStage]}`);
@@ -492,6 +497,7 @@ export default function ReviewPage() {
             <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
           </div>
           <div className="review-actions">
+            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>重新分析</AsyncButton>
             {review.status !== "needs_better_images" ? replacementControl() : null}
             {report ? (
@@ -519,7 +525,7 @@ export default function ReviewPage() {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、主题判断、五项评分和示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
         </section>
       </main>

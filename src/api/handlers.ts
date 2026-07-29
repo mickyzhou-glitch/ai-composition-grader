@@ -596,6 +596,11 @@ export function createAnalyzeRouteHandlers(dependencies: {
     async POST(_request: Request, context: RouteContext) {
       try {
         const id = (await context.params).id;
+        const input = z.object({
+          teacherGuidance: z.string().trim().max(1000).optional(),
+        }).parse(_request.headers.get("content-type")?.includes("application/json")
+          ? await readJson(_request)
+          : {});
         const review = dependencies.reviewService.get(dependencies.ownerId, id);
         if (review.images.length < 1 || review.images.length > MAX_REVIEW_IMAGES) {
           throw routeError(
@@ -604,7 +609,11 @@ export function createAnalyzeRouteHandlers(dependencies: {
             422,
           );
         }
-        return ok(dependencies.analysisJobService.enqueue(dependencies.ownerId, id), 202);
+        return ok(dependencies.analysisJobService.enqueue(
+          dependencies.ownerId,
+          id,
+          input.teacherGuidance,
+        ), 202);
       } catch (error) {
         return failure(error);
       }

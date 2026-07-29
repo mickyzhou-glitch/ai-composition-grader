@@ -240,6 +240,7 @@ describe("openAppDatabase", () => {
           "progress_stage",
           "error_code",
           "message",
+          "teacher_guidance",
           "created_at",
           "started_at",
           "finished_at",

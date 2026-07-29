@@ -29,6 +29,12 @@ describe("AppHeader", () => {
     navigation.refresh.mockReset();
   });
 
+  it("显示青藤未来作文批改助手品牌名", () => {
+    renderHeader();
+
+    expect(screen.getByText("青藤未来作文批改助手")).toBeInTheDocument();
+  });
+
   it("为教师和管理员提供退出入口并保留设置权限规则", () => {
     const teacher = renderHeader("teacher");
     expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument();

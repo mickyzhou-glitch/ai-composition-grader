@@ -44,18 +44,16 @@ const report = {
   painPoints: ["结尾略快"],
   commonIssues: ["长句较多"],
   revisionSuggestions: ["补充感受"],
-  scores: {
-    themeIntent: 9,
-    contentSelection: 9,
-    structure: 7,
-    languageExpression: 7,
-    writingConventions: 4,
-    total: 36,
-    level: "优秀作文" as const,
+  grade: "A-" as const,
+  diagnostics: {
+    authenticityAndRelevance: { finding: "主题紧扣真实事件。", action: "保留这件亲身经历。" },
+    materialAndDetails: { finding: "关键动作还可展开。", action: "补写一个动作和心理。" },
+    structure: { finding: "五段结构完整。", action: "让转折段承接前文。" },
+    language: { finding: "段首衔接自然。", action: "继续用动作承接段落。" },
   },
   sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
     title: `第 ${index + 1} 段`,
-    text: "我".repeat(110),
+    text: "我".repeat(120),
     suggestion: "补充细节。",
   })),
 };
@@ -767,14 +765,22 @@ describe("review route handlers", () => {
       ownerId: OWNER_ID,
     });
 
-    const response = await handlers.POST(new Request("http://localhost"), {
+    const response = await handlers.POST(new Request("http://localhost", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ teacherGuidance: "请重点看结尾是否真正扣题，并保留我认为有效的细节。" }),
+    }), {
       params: Promise.resolve({ id: "review-1" }),
     });
     expect(response.status).toBe(202);
     expect(await json(response)).toMatchObject({
       data: { id: "job-1", status: "queued", progressStage: "queued" },
     });
-    expect(analysisJobService.enqueue).toHaveBeenCalledWith(OWNER_ID, "review-1");
+    expect(analysisJobService.enqueue).toHaveBeenCalledWith(
+      OWNER_ID,
+      "review-1",
+      "请重点看结尾是否真正扣题，并保留我认为有效的细节。",
+    );
     expect(analyze).not.toHaveBeenCalled();
 
     const status = await handlers.GET_STATUS(new Request("http://localhost"), {

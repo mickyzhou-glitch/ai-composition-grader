@@ -26,6 +26,7 @@ export interface AiReviewer {
   analyze(input: {
     config: AssignmentConfig;
     imageDataUrls: string[];
+    teacherGuidance?: string;
   }): Promise<AiReviewEnvelope>;
   rewriteSample?(input: RewriteSampleInput): Promise<{ text: string }>;
   rewriteFeedback?(input: RewriteFeedbackInput): Promise<{ items: string[] }>;
@@ -357,11 +358,12 @@ export class ReviewService {
   }
 
   async analyzePrepared(
-    prepared: Pick<PreparedReviewAnalysis, "config" | "imageDataUrls">,
+    prepared: Pick<PreparedReviewAnalysis, "config" | "imageDataUrls"> & { teacherGuidance?: string },
   ): Promise<AiReviewEnvelope> {
     return this.aiReviewer.analyze({
       config: prepared.config,
       imageDataUrls: prepared.imageDataUrls,
+      teacherGuidance: prepared.teacherGuidance,
     });
   }
 

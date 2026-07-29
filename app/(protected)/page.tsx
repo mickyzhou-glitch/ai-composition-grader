@@ -9,6 +9,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadReviewPdf, downloadReviewPdfArchive } from "../lib/pdf-download";
 import type { ReviewView } from "../lib/types";
+import { gradeFromLegacyTotal } from "@/src/domain/contracts";
 
 function reviewDate(value: string) {
   const date = new Date(value);
@@ -188,7 +189,7 @@ export default function Home() {
                     <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
                   </div>
                   <h3><Link href={`/reviews/${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
-                  <p>{review.report ? `${review.report.scores.total} 分 · ${review.report.scores.level}` : "尚未生成评分"}</p>
+                  <p>{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
                   <p className={expiresSoon(review.expiresAt) ? "expiry-notice expiry-notice--urgent" : "muted"}>{expiryNotice(review.expiresAt ?? null)}</p>
                 </div>
                 <div className="card-actions">

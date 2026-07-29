@@ -62,12 +62,12 @@ describe("历史首页", () => {
     expect(await screen.findByRole("heading", { name: "为自己鼓掌" })).toBeInTheDocument();
     expect(screen.getByText("学生：张小明")).toBeInTheDocument();
     expect(screen.getByText("待复核", { selector: "dt" })).toBeInTheDocument();
-    expect(screen.getByText("36 分 · 优秀作文")).toBeInTheDocument();
+    expect(screen.getByText("A- · 已完成四维诊断")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "删除《为自己鼓掌》" }));
 
     expect(window.confirm).toHaveBeenCalledWith("确认永久删除《为自己鼓掌》？删除后不可恢复。");
-    await waitFor(() => expect(screen.queryByText("36 分 · 优秀作文")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("A- · 已完成四维诊断")).not.toBeInTheDocument());
     expect(fetchMock).toHaveBeenLastCalledWith("/api/reviews/review-1", { method: "DELETE" });
   });
 

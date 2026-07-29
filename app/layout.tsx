@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "朱批 · AI作文批改助手",
+  title: "青藤未来作文批改助手",
   description: "面向教师的本地 AI 作文批改与复核工作台",
 };
 

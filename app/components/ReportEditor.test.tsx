@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { ReportEditor, scoreSummary } from "./ReportEditor";
+import { ReportEditor } from "./ReportEditor";
 
 const report = {
   themeFit: "fits" as const,
@@ -91,51 +91,14 @@ describe("ReportEditor", () => {
     expect(onRewriteFeedback).toHaveBeenNthCalledWith(2, "improvements");
   });
 
-  it.each([
-    [29, "重写"], [30, "二类作文"], [35, "二类作文"], [36, "优秀作文"], [40, "优秀作文"],
-  ] as const)("总分 %i 对应 %s", (total, level) => {
-    expect(scoreSummary([total, 0, 0, 0, 0])).toEqual({ total, level });
-  });
-
-  it("编辑分数时确定性更新 total 和 level", async () => {
+  it("显示七档等级与四维诊断，偏题时自动改为 C", () => {
     const onChange = vi.fn();
     render(<ReportEditor report={report} onChange={onChange} />);
 
-    fireEvent.change(screen.getByLabelText("主题立意（0-10）"), { target: { value: "9" } });
-
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ scores: expect.objectContaining({ total: 30, level: "二类作文" }) }),
-    );
-  });
-
-  it("分数截断为整数并在偏题时将总分压到重写区间", () => {
-    const onChange = vi.fn();
-    const highReport = {
-      ...report,
-      scores: {
-        themeIntent: 10,
-        contentSelection: 10,
-        structure: 8,
-        languageExpression: 8,
-        writingConventions: 4,
-        total: 40,
-        level: "优秀作文" as const,
-      },
-    };
-    render(<ReportEditor report={highReport} onChange={onChange} />);
-
-    fireEvent.change(screen.getByLabelText("主题立意（0-10）"), { target: { value: "8.9" } });
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({ scores: expect.objectContaining({ themeIntent: 8 }) }),
-    );
-
+    expect(screen.getByRole("combobox", { name: "作文等级" })).toHaveValue("C");
+    expect(screen.getByLabelText("素材与细节精准定位")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "主题判断" }), { target: { value: "off_topic" } });
-    expect(onChange).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        themeFit: "off_topic",
-        scores: expect.objectContaining({ total: 29, level: "重写" }),
-      }),
-    );
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ themeFit: "off_topic", grade: "C" }));
   });
 
   it("提供整篇 AI 重写与按整体要求修改入口", () => {

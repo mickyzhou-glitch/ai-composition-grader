@@ -33,7 +33,7 @@ export default function LoginPage() {
   return (
     <main className="auth-page">
       <section className="paper-card auth-card" aria-labelledby="login-title">
-        <p className="eyebrow">朱批 · 工作台</p>
+        <p className="eyebrow">青藤未来作文批改助手 · 工作台</p>
         <h1 id="login-title">登录</h1>
         <p className="muted">使用管理员为你创建的账号进入批改工作台。</p>
         {error ? <p className="error-banner" role="alert">{error}</p> : null}

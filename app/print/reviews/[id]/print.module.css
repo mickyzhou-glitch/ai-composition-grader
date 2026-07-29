@@ -5,11 +5,11 @@
 
 .document {
   --ink: #202020;
-  --muted: #756a60;
-  --paper: #fffdf8;
-  --line: #ded3c6;
-  --red: #b42318;
-  --red-soft: #fff0ed;
+  --muted: #53645e;
+  --paper: #fbfefc;
+  --line: #d5e3de;
+  --teal: #01654b;
+  --teal-soft: #e2f1ec;
   min-height: 100%;
   background: #fff;
   color: var(--ink);
@@ -47,6 +47,7 @@
   break-inside: avoid-page;
 }
 .summaryContent { color: #c90000; font-size: 31pt; line-height: 1.38; }
+.gradeBadge { margin: 0 0 .12in; color: var(--teal); font-size: 12pt; font-weight: 700; }
 .summaryContent h1 { margin: 0 0 .24in; font-size: 39pt; font-weight: 500; }
 .summaryContent p { margin: 0; }
 .summaryPoints { display: grid; gap: .22in; margin: .38in 0 0; padding: 0; list-style: none; }
@@ -60,7 +61,7 @@
 .summaryDense .summaryContent { font-size: 15pt; line-height: 1.22; }
 .summaryDense .summaryContent h1 { margin-bottom: .12in; font-size: 26pt; }
 .summaryDense .summaryPoints { gap: .08in; margin-top: .13in; }
-.eyebrow { margin-bottom: 2mm; color: var(--red); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
+.eyebrow { margin-bottom: 2mm; color: var(--teal); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
 .summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
 .summaryGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8mm; margin-bottom: 12mm; }
 .levelBadge, .overallComment, .assignmentInfo, .card, .sampleParagraph {
@@ -68,10 +69,10 @@
   background: var(--paper);
   break-inside: avoid;
 }
-.levelBadge { display: grid; min-height: 48mm; padding: 6mm; place-content: center; border-top: 1.2mm solid var(--red); text-align: center; }
+.levelBadge { display: grid; min-height: 48mm; padding: 6mm; place-content: center; border-top: 1.2mm solid var(--teal); text-align: center; }
 .levelBadge span { color: var(--muted); font-size: 8pt; }
 .levelBadge b { margin-top: 2mm; color: var(--ink); font: 700 19pt/1.2 STKaiti, KaiTi, serif; }
-.overallComment { padding: 10mm; border-left: 1.2mm solid var(--red); }
+.overallComment { padding: 10mm; border-left: 1.2mm solid var(--teal); }
 .overallComment h2 { margin-bottom: 3mm; }
 .overallComment p { margin-bottom: 0; font-size: 15pt; }
 .assignmentInfo { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 0; }
@@ -103,20 +104,20 @@
 .analysisPages { break-before: page; }
 .card, .samples { margin-bottom: 5mm; padding: 6mm; }
 .card h2, .samples h2 { margin-bottom: 3mm; }
-.themeCard { display: grid; grid-template-columns: 42mm 1fr; align-items: center; border-top: 1.2mm solid var(--red); }
-.themeCard h2 { margin-bottom: 0; color: var(--red); font-size: 18pt; }
+.themeCard { display: grid; grid-template-columns: 42mm 1fr; align-items: center; border-top: 1.2mm solid var(--teal); }
+.themeCard h2 { margin-bottom: 0; color: var(--teal); font-size: 18pt; }
 .themeCard > p { margin-bottom: 0; }
 .textList { display: grid; gap: 2mm; margin: 0; padding-left: 5mm; }
 .scoreTable { width: 100%; border-collapse: collapse; }
 .scoreTable th, .scoreTable td { padding: 2.5mm 3mm; border-bottom: .2mm solid var(--line); text-align: left; }
 .scoreTable td { text-align: right; }
-.totalRow { color: var(--red); font-weight: 800; }
+.totalRow { color: var(--teal); font-weight: 800; }
 .samples { padding: 0; }
 .sampleParagraph { margin: 0 0 4mm; padding: 0 0 3mm; border: 0; border-bottom: .2mm solid var(--line); background: transparent; }
 .sampleParagraph:last-child { margin-bottom: 0; border-bottom: 0; }
 .sampleParagraph h4 { margin: 0 0 2mm; color: #9b6a1c; font-size: 9pt; }
 .sampleText { margin-bottom: 0; white-space: pre-wrap; }
-.sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--line); background: #faf7f1; color: var(--ink); break-before: avoid; }
+.sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--line); background: #f4f9f7; color: var(--ink); break-before: avoid; }
 .sampleSuggestion b { margin-right: 1mm; }
 
 @media print {

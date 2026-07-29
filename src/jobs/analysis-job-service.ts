@@ -44,8 +44,8 @@ function toView(job: AnalysisJobRecord): AnalysisJobView {
 export class AnalysisJobService {
   constructor(private readonly repository: AnalysisJobRepository) {}
 
-  enqueue(ownerId: string, reviewId: string): AnalysisJobView {
-    return toView(this.repository.createOrGet(ownerId, reviewId));
+  enqueue(ownerId: string, reviewId: string, teacherGuidance?: string): AnalysisJobView {
+    return toView(this.repository.createOrGet(ownerId, reviewId, teacherGuidance));
   }
 
   get(ownerId: string, jobId: string): AnalysisJobView {

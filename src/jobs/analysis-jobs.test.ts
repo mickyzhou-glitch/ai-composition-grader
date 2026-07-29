@@ -121,6 +121,14 @@ describe("AnalysisJobService", () => {
     expect(sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 1 });
   });
 
+  it("将本次老师补充观点随任务保存，供 Worker 传给 AI", () => {
+    service.enqueue(ownerA, "review-a", "请重点核对结尾主题是否由正文支撑。");
+
+    expect(repository.findLatestByReview(ownerA, "review-a")).toMatchObject({
+      teacherGuidance: "请重点核对结尾主题是否由正文支撑。",
+    });
+  });
+
   it("不同教师可以排队，但全局一次只领取一篇作文", () => {
     service.enqueue(ownerA, "review-a");
     service.enqueue(ownerB, "review-b");

@@ -1,10 +1,11 @@
-import type { ScoreBreakdown } from "@/src/domain/contracts";
+import type { CompositionGrade } from "@/src/domain/contracts";
 
-export function ScoreCard({ scores }: { scores: ScoreBreakdown }) {
+export function ScoreCard({ grade }: { grade: CompositionGrade }) {
+  const tone = grade === "C" ? "rewrite" : grade.startsWith("A") ? "excellent" : "second";
   return (
-    <aside className={`score-card score-card--${scores.level === "优秀作文" ? "excellent" : scores.level === "二类作文" ? "second" : "rewrite"}`} aria-label="作文总分">
-      <div><strong>{scores.total}</strong><span>/ 40 分</span></div>
-      <b>{scores.level}</b>
+    <aside className={`score-card score-card--${tone}`} aria-label="作文等级">
+      <div><strong>{grade}</strong><span>{grade === "C" ? "需要重写" : "作文等级"}</span></div>
+      <b>{grade === "C" ? "重写后再评" : "已完成诊断"}</b>
     </aside>
   );
 }

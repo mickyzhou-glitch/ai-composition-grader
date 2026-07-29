@@ -23,6 +23,7 @@ export interface AnalysisJobRecord {
   progressStage: AnalysisProgressStage;
   errorCode: string | null;
   message: string | null;
+  teacherGuidance: string | null;
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
@@ -129,6 +130,7 @@ function toRecord(row: typeof analysisJobs.$inferSelect): AnalysisJobRecord {
     progressStage: row.progressStage,
     errorCode: row.errorCode,
     message: row.message,
+    teacherGuidance: row.teacherGuidance,
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
@@ -156,9 +158,13 @@ export class AnalysisJobRepository {
     this.leaseMs = assertPositiveInteger(options.leaseMs ?? 180_000, "leaseMs");
   }
 
-  createOrGet(ownerId: string, reviewId: string): AnalysisJobRecord {
+  createOrGet(ownerId: string, reviewId: string, teacherGuidance?: string): AnalysisJobRecord {
     assertId(ownerId, "ownerId");
     assertId(reviewId, "reviewId");
+    const normalizedGuidance = teacherGuidance?.trim() || null;
+    if (normalizedGuidance && normalizedGuidance.length > 1000) {
+      throw new TypeError("teacherGuidance must be at most 1000 characters");
+    }
     const now = assertDate(this.now(), "now");
 
     const outcome = this.database.transaction((transaction): AnalysisJobRecord | "unavailable" => {
@@ -207,6 +213,7 @@ export class AnalysisJobRepository {
           progressStage: "queued",
           errorCode: null,
           message: null,
+          teacherGuidance: normalizedGuidance,
           createdAt: now,
           startedAt: null,
           finishedAt: null,

@@ -216,6 +216,7 @@ export const analysisJobs = sqliteTable(
     progressStage: text("progress_stage").$type<AnalysisProgressStage>().notNull(),
     errorCode: text("error_code"),
     message: text("message"),
+    teacherGuidance: text("teacher_guidance"),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     startedAt: integer("started_at", { mode: "timestamp_ms" }),
     finishedAt: integer("finished_at", { mode: "timestamp_ms" }),

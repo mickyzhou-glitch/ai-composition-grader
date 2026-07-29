@@ -76,6 +76,23 @@ describe("复核页", () => {
     expect(await screen.findByRole("note")).toHaveTextContent("导出 PDF 不会延长保存期限");
   });
 
+  it("重新分析时把老师观点一并提交", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({ id: "job-1", status: "queued", progressStage: "queued", message: null }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.type(await screen.findByLabelText("老师补充观点"), "请重点看结尾是否扣题");
+    await user.click(screen.getByRole("button", { name: "重新分析" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
+      teacherGuidance: "请重点看结尾是否扣题",
+    });
+  });
+
   it("保存时 PATCH 完整 report 与 annotations", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))

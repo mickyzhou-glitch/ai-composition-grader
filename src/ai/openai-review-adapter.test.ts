@@ -37,18 +37,16 @@ const report: EvaluationReport = {
   ],
   commonIssues: [],
   revisionSuggestions: [],
-  scores: {
-    themeIntent: 9,
-    contentSelection: 9,
-    structure: 7,
-    languageExpression: 7,
-    writingConventions: 4,
-    total: 36,
-    level: "优秀作文",
+  grade: "A-" as const,
+  diagnostics: {
+    authenticityAndRelevance: { finding: "主题与事件基本一致。", action: "补写一次能体现坚持的真实选择。" },
+    materialAndDetails: { finding: "关键动作有待展开。", action: "补写递水时的动作和自己的心理。" },
+    structure: { finding: "五段结构完整。", action: "让第四段承接第三段的转折。" },
+    language: { finding: "段首时间词较多。", action: "用动作或情绪承接上一段。" },
   },
   sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
     title: `第 ${index + 1} 段`,
-    text: "我".repeat(110),
+    text: "我".repeat(120),
     suggestion: "补充细节。",
   })),
 };
@@ -114,7 +112,7 @@ describe("OpenAIReviewAdapter", () => {
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("重写整篇五段考场范文");
     expect(serialized).toContain("删去无关人物");
-    expect(serialized).toContain("550-650");
+    expect(serialized).toContain("600-700");
     expect(serialized).toContain("第一段不得以时间词开头");
     expect(serialized).toContain("生日那天");
     expect(serialized).toContain("对比、照应、因果");
@@ -202,14 +200,16 @@ describe("OpenAIReviewAdapter", () => {
     const serialized = JSON.stringify(request.messages);
     for (const image of images) expect(serialized).toContain(image);
     expect(serialized).toContain(config.writingRequirements);
-    expect(serialized).toContain("40");
-    expect(serialized).toContain("themeIntent");
+    expect(serialized).toContain("grade:A+|A|A-|B+|B|B-|C");
+    expect(serialized).toContain("authenticityAndRelevance");
+    expect(serialized).not.toContain("themeIntent");
+    expect(serialized).not.toContain("total:0..40");
     expect(serialized).toContain("typo");
     expect(serialized).toContain("0..1");
-    expect(serialized).toContain("不可猜测");
-    expect(serialized).toContain("学生友好");
+    expect(serialized).toContain("尽最大努力完成批改");
+    expect(serialized).toContain("六年级学生能直接看懂");
     expect(serialized).toContain("五段");
-    expect(serialized).toContain("550-650");
+    expect(serialized).toContain("600-700");
     expect(serialized).toContain("人物关系");
     expect(serialized).toContain("多余人物");
     expect(serialized).toContain("personalizedComment 包含 2-4 条优点");
@@ -227,6 +227,20 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("对比、照应、因果");
     expect(serialized).toContain("坐标拿不准时不要生成 annotation");
     expect(serialized).toContain("sampleParagraphs:{title:string,text:string,suggestion:string}[]");
+  });
+
+  it("将老师补充观点作为重新分析的明确依据", async () => {
+    const harness = setup([JSON.stringify(successEnvelope)]);
+
+    await harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+      teacherGuidance: "请重点核对正文是否支撑“学会坚持”的结尾主题。",
+    } as AnalyzeCompositionInput & { teacherGuidance: string });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("老师补充观点");
+    expect(serialized).toContain("请重点核对正文是否支撑“学会坚持”的结尾主题。");
   });
 
   it("兼容 ```json fenced JSON", async () => {
@@ -310,11 +324,30 @@ describe("OpenAIReviewAdapter", () => {
       pageWarnings: ["第 1 页过暗，请在明亮环境下重拍。"],
       annotations: [],
     };
-    const harness = setup([JSON.stringify(unreadable)]);
+    const harness = setup([JSON.stringify(unreadable), JSON.stringify(unreadable)]);
 
     await expect(
       harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
     ).resolves.toEqual(unreadable);
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("首轮误判图片不清晰时携带原图继续完成批改", async () => {
+    const unreadable = {
+      readable: false,
+      pageWarnings: ["第 1 页过暗，请在明亮环境下重拍。"],
+      annotations: [],
+    };
+    const harness = setup([JSON.stringify(unreadable), JSON.stringify(successEnvelope)]);
+
+    await expect(
+      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
+    ).resolves.toEqual(successEnvelope);
+
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    const continuation = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(continuation).toContain("继续完成批改");
+    expect(continuation).toContain("data:image/jpeg;base64,eA==");
   });
 
   it("首个结构无效时只带无效文本和 schema 摘要修复一次", async () => {
@@ -335,13 +368,13 @@ describe("OpenAIReviewAdapter", () => {
     expect(JSON.stringify(repair.messages)).not.toContain("data:image");
   });
 
-  it("语义校验失败时修复提示包含动态页数、当前配置和全部评分不变量", async () => {
-    const offTopicHighScore = {
+  it("语义校验失败时修复提示包含动态页数、当前配置和等级规则", async () => {
+    const offTopicNonC = {
       ...successEnvelope,
-      report: { ...report, themeFit: "off_topic" },
+      report: { ...report, themeFit: "off_topic", grade: "A-" as const },
     };
     const harness = setup([
-      JSON.stringify(offTopicHighScore),
+      JSON.stringify(offTopicNonC),
       JSON.stringify(successEnvelope),
     ]);
 
@@ -357,24 +390,22 @@ describe("OpenAIReviewAdapter", () => {
     expect(prompt).toContain("pageIndex");
     expect(prompt).toContain("0..0");
     expect(prompt).toContain(JSON.stringify(config));
-    expect(prompt).toContain("themeIntent");
-    expect(prompt).toContain("total 必须等于");
-    expect(prompt).toContain("0-29");
+    expect(prompt).toContain("A+");
+    expect(prompt).toContain("C");
     expect(prompt).toContain("偏题");
-    expect(prompt).toContain("29");
     expect(prompt).toContain("五段");
-    expect(prompt).toContain("550-650");
+    expect(prompt).toContain("600-700");
   });
 
-  it("五项分数有效时本地重算 total/level 后校验，不浪费修复请求", async () => {
-    const deterministicMistake = {
+  it("等级与四维诊断有效时不浪费修复请求", async () => {
+    const validGrade = {
       ...successEnvelope,
       report: {
         ...report,
-        scores: { ...report.scores, total: 1, level: "重写" },
+        grade: "A-" as const,
       },
     };
-    const harness = setup([JSON.stringify(deterministicMistake)]);
+    const harness = setup([JSON.stringify(validGrade)]);
 
     const result = await harness.adapter.analyze({
       config,
@@ -383,7 +414,7 @@ describe("OpenAIReviewAdapter", () => {
 
     expect(result).toMatchObject({
       readable: true,
-      report: { scores: { total: 36, level: "优秀作文" } },
+      report: { grade: "A-" },
     });
     expect(harness.create).toHaveBeenCalledOnce();
   });

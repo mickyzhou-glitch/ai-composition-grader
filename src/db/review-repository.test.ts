@@ -35,18 +35,16 @@ const report: EvaluationReport = {
   painPoints: ["结尾略快"],
   commonIssues: ["长句较多"],
   revisionSuggestions: ["补充感受"],
-  scores: {
-    themeIntent: 9,
-    contentSelection: 9,
-    structure: 7,
-    languageExpression: 7,
-    writingConventions: 4,
-    total: 36,
-    level: "优秀作文",
+  grade: "A-",
+  diagnostics: {
+    authenticityAndRelevance: { finding: "主题紧扣真实事件。", action: "保留这件亲身经历。" },
+    materialAndDetails: { finding: "关键动作还可展开。", action: "补写一个动作和心理。" },
+    structure: { finding: "五段结构完整。", action: "让转折段承接前文。" },
+    language: { finding: "段首衔接自然。", action: "继续用动作承接段落。" },
   },
   sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
     title: `第 ${index + 1} 段`,
-    text: "我".repeat(110),
+    text: "我".repeat(120),
     suggestion: "补充细节。",
   })),
 };
@@ -191,7 +189,7 @@ describe("ReviewRepository", () => {
 
     expect(() =>
       repository.updateReport(OWNER_ID, "review-1", report, { incompleteEvent: true }),
-    ).toThrow(/29/);
+    ).toThrow(/grade C/);
   });
 
   it("从 custom 改为 preset 时清理不合规报告与批注并降级为 draft", () => {
@@ -239,7 +237,7 @@ describe("ReviewRepository", () => {
       "report",
       JSON.stringify({
         ...report,
-        scores: { ...report.scores, total: 35 },
+        grade: "D",
       }),
     ],
   ])("读取损坏的 %s JSON 时抛出明确错误", (field, value) => {
