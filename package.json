@@ -21,7 +21,8 @@
     "test:e2e": "playwright test",
     "cf:dev": "wrangler dev",
     "cf:test": "vitest run src/cloudflare",
-    "cf:deploy": "wrangler deploy"
+    "cf:deploy": "wrangler deploy",
+    "cf:audit-migration": "tsx scripts/cloudflare-migration-audit.mts"
   },
   "dependencies": {
     "argon2": "^0.45.0",
