@@ -216,4 +216,17 @@ describe("新建作文批改", () => {
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews?id=review-versioned"));
   });
+
+  it("提供后置相机入口，并将连续拍摄的页面追加到图片列表", async () => {
+    render(<NewReviewPage />);
+
+    await userEvent.click(screen.getByRole("button", { name: /为自己鼓掌/ }));
+    await userEvent.click(screen.getByRole("button", { name: "下一步：上传作文" }));
+    const camera = screen.getByLabelText("使用手机相机拍照");
+    expect(camera).toHaveAttribute("capture", "environment");
+    await userEvent.upload(camera, new File(["camera"], "camera.jpg", { type: "image/jpeg" }));
+
+    expect(screen.getByText("1/4 张")).toBeInTheDocument();
+    expect(screen.getByText("第 1 页 · camera.jpg")).toBeInTheDocument();
+  });
 });

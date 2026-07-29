@@ -219,6 +219,9 @@ textarea { min-height: 100px; resize: vertical; }
 .ai-guidance-action small { color: var(--muted); font-size: .82rem; font-weight: 400; }
 .upload-student-name { display: grid; max-width: 360px; gap: 7px; margin-bottom: 18px; font-size: .88rem; font-weight: 700; }
 .upload-zone { display: grid; min-height: 148px; margin-bottom: 22px; padding: 28px; place-items: center; align-content: center; gap: 6px; border: 1px dashed #a9c8bd; border-radius: 12px; background: #f2f8f6; color: var(--teal); cursor: pointer; text-align: center; font-weight: 800; }
+.upload-choices { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 22px; }
+.upload-choices .upload-zone { min-height: 148px; margin-bottom: 0; }
+.upload-zone--camera { border-color: var(--teal); background: var(--teal-soft); }
 .upload-zone:focus-within { outline: 3px solid rgb(1 101 75 / 38%); outline-offset: 3px; }
 .file-label:focus-within { outline: 3px solid rgb(1 101 75 / 38%); outline-offset: 3px; }
 .upload-zone small { color: var(--muted); font-weight: 400; }
@@ -370,6 +373,7 @@ textarea { min-height: 100px; resize: vertical; }
   .card-actions .button { flex: 1; }
   .flow-page { width: calc(100% - 32px); padding-top: 30px; }
   .template-grid, .form-grid { grid-template-columns: 1fr; }
+  .upload-choices { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
   .ai-guidance-action { align-items: flex-start; flex-direction: column; }
   .image-sort-card { grid-template-columns: 1fr; }

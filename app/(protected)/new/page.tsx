@@ -169,6 +169,27 @@ export default function NewReviewPage() {
     setUploaded(null);
   }
 
+  function addCameraFiles(files: File[]) {
+    setError("");
+    if (files.length !== 1) {
+      setError("请一次拍摄一张作文图片");
+      return;
+    }
+    if (images.length >= MAX_REVIEW_IMAGES) {
+      setError(`最多上传 ${MAX_REVIEW_IMAGES} 张作文图片`);
+      return;
+    }
+    const [file] = files;
+    setImages((current) => [...current, {
+      key: `${file.name}-${file.lastModified}-${current.length}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+      rotation: 0,
+      crop: { left: 0, top: 0, right: 0, bottom: 0 },
+    }]);
+    setUploaded(null);
+  }
+
   function move(index: number, direction: -1 | 1) {
     const destination = index + direction;
     if (destination < 0 || destination >= images.length) return;
@@ -321,7 +342,10 @@ export default function NewReviewPage() {
           <section className="paper-card flow-card" aria-labelledby="upload-heading">
             <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">整理作文图片</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
             <label className="upload-student-name">学生姓名<input aria-label="学生姓名" maxLength={50} placeholder="请输入学生姓名" value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label>
-            <label className="upload-zone">选择作文图片<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>点击选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP、HEIC / HEIF，单张不超过 20MB</small></label>
+            <div className="upload-choices">
+              <label className="upload-zone upload-zone--camera">使用手机相机拍照<input className="visually-hidden" aria-label="使用手机相机拍照" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { addCameraFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /><span>拍摄一页后可继续拍下一页</span><small>将优先打开后置相机</small></label>
+              <label className="upload-zone">从相册或文件选择<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP，单张不超过 20MB</small></label>
+            </div>
             <div className="image-sort-list">
               {images.map((image, index) => (
                 <article className="image-sort-card" key={image.key}>

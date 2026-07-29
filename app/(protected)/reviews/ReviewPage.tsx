@@ -459,7 +459,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         className="visually-hidden"
         aria-label="替换/重拍作文图片"
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        accept="image/jpeg,image/png,image/webp"
         multiple
         disabled={busy !== null || analysisActive}
         onChange={(event) => {
