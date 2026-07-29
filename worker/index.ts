@@ -7,6 +7,7 @@ import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
+import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
@@ -122,7 +123,7 @@ export default {
     if (url.pathname === "/api/assignment-guidance" && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
-        return Response.json({ ok: true, data: await new AssignmentGuidanceAdapter(workerAiSettings(env)).generate(await request.json()) });
+        return Response.json({ ok: true, data: await new AssignmentGuidanceAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).generate(await request.json()) });
       } catch {
         return apiError("AI_REQUEST_FAILED", "AI 服务请求失败，请检查设置后重试", 502);
       }
@@ -254,7 +255,7 @@ export default {
         if (!review?.report) return apiError("IMAGES_REQUIRED", "请先完成作文分析", 422);
         const body = await request.json() as { instruction?: unknown };
         const instruction = typeof body.instruction === "string" && body.instruction.trim() ? body.instruction.trim().slice(0, 1000) : undefined;
-        return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env)).rewriteSample({ config: review.config, sampleParagraphs: review.report.sampleParagraphs, index, instruction }) });
+        return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).rewriteSample({ config: review.config, sampleParagraphs: review.report.sampleParagraphs, index, instruction }) });
       } catch { return apiError("AI_REQUEST_FAILED", "示范段落重写失败", 502); }
     }
     if (feedbackRewriteMatch && request.method === "POST") {
@@ -262,7 +263,7 @@ export default {
       try {
         const review = await new D1ReviewReader(env.DB).get(user.id, decodeURIComponent(feedbackRewriteMatch[1])) as ReviewView | null;
         if (!review?.report) return apiError("IMAGES_REQUIRED", "请先完成作文分析", 422);
-        return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env)).rewriteFeedback({ config: review.config, report: review.report, section: feedbackRewriteMatch[2] as "strengths" | "improvements" }) });
+        return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).rewriteFeedback({ config: review.config, report: review.report, section: feedbackRewriteMatch[2] as "strengths" | "improvements" }) });
       } catch { return apiError("AI_REQUEST_FAILED", "评语重新生成失败", 502); }
     }
     if (samplesRewriteMatch && request.method === "POST") {
@@ -272,7 +273,7 @@ export default {
         if (!review?.report) return apiError("IMAGES_REQUIRED", "请先完成作文分析", 422);
         const body = await request.json() as { instruction?: unknown };
         const instruction = typeof body.instruction === "string" && body.instruction.trim() ? body.instruction.trim().slice(0, 1000) : undefined;
-        return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env)).rewriteAllSamples({ config: review.config, sampleParagraphs: review.report.sampleParagraphs, instruction }) });
+        return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).rewriteAllSamples({ config: review.config, sampleParagraphs: review.report.sampleParagraphs, instruction }) });
       } catch { return apiError("AI_REQUEST_FAILED", "整篇示范文重写失败", 502); }
     }
     if (url.pathname.startsWith("/api/")) {
@@ -294,9 +295,7 @@ export default {
         const urls = await Promise.all(results.map(({ id }) => createAiImageUrl({ origin: env.APP_ORIGIN, secret: env.AI_FILE_URL_SECRET, reviewId: job.review_id, imageId: id, variant: "ai", expiresAt: Date.now() + 600000 })));
         const adapter = new OpenAIReviewAdapter(
           { getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey }) },
-          // This code executes in a Worker, never in the browser. The API key
-          // remains encrypted in D1 and is not included in static assets.
-          { dangerouslyAllowBrowser: true },
+          { clientFactory: createWorkerOpenAIClient },
         );
         const analysisInput = { config: JSON.parse(job.config), teacherGuidance: job.teacher_guidance ?? undefined };
         let result;
@@ -319,7 +318,7 @@ export default {
         await env.DB.batch([env.DB.prepare("UPDATE reviews SET report = ?, status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND owner_id = ?").bind(result.readable ? JSON.stringify(result.report) : null, result.readable ? "ready_for_review" : "needs_better_images", now, job.review_id, job.owner_id), env.DB.prepare("DELETE FROM annotations WHERE review_id = ?").bind(job.review_id), ...result.annotations.map((annotation, position) => env.DB.prepare("INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(job.review_id, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)), env.DB.prepare("UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ? WHERE id = ?").bind(now, job.id)]);
       } catch (error) {
         const code = error instanceof AiAdapterError && error.upstreamStatus
-          ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}`
+          ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
           : error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
         await env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ?").bind(code, Date.now(), job.id).run();
       }
