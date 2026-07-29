@@ -1,6 +1,11 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  output: "export",
+  distDir: "dist",
+  images: {
+    unoptimized: true,
+  },
   async headers() {
     const productionHeaders = process.env.NODE_ENV === "production" && process.env.APP_ORIGIN?.startsWith("https://")
       ? [{ key: "Strict-Transport-Security", value: "max-age=31536000; includeSubDomains" }]
