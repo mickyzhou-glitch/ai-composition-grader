@@ -18,6 +18,12 @@ export interface UserPasswordProof {
   sealed: SealedPasswordVerifier;
 }
 
+export interface LegacyPasswordUser {
+  user: AuthenticatedUser;
+  disabledAt: Date | null;
+  passwordHash: string;
+}
+
 function asProof(row: UserProofRow): UserPasswordProof {
   return {
     user: {
@@ -43,6 +49,20 @@ export class D1PasswordProofRepository {
       WHERE users.username = ?
     `).bind(username).first<UserProofRow>();
     return row ? asProof(row) : null;
+  }
+
+  async findLegacyByUsername(username: string): Promise<LegacyPasswordUser | null> {
+    const row = await this.database.prepare(`
+      SELECT id, username, role, must_change_password, disabled_at, password_hash
+      FROM users WHERE username = ?
+    `).bind(username).first<{
+      id: string; username: string; role: UserRole; must_change_password: number; disabled_at: number | null; password_hash: string;
+    }>();
+    return row ? {
+      user: { id: row.id, username: row.username, role: row.role, mustChangePassword: row.must_change_password === 1 },
+      disabledAt: row.disabled_at === null ? null : new Date(row.disabled_at),
+      passwordHash: row.password_hash,
+    } : null;
   }
 
   async save(userId: string, salt: string, sealed: SealedPasswordVerifier, now: Date): Promise<void> {

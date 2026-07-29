@@ -3,8 +3,9 @@
 import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
-import { apiFetch, errorMessage } from "../lib/api";
+import { ApiError, apiFetch, errorMessage } from "../lib/api";
 import { createBrowserLoginProof } from "../../src/auth/password-proof-browser";
+import { createLegacyPasswordLogin, type LegacyPasswordParameters } from "../../src/auth/legacy-password-proof-browser";
 
 import { shouldUsePasswordProofLogin } from "./login-mode";
 
@@ -57,7 +58,22 @@ async function loginWithProof(username: string, password: string): Promise<{ mus
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username }),
   });
   const proof = await createBrowserLoginProof({ password, salt: challenge.salt, challengeId: challenge.id, nonce: challenge.nonce });
-  return apiFetch<{ mustChangePassword: boolean }>("/api/auth/login/complete", {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ challengeId: challenge.id, proof }),
+  try {
+    return await apiFetch<{ mustChangePassword: boolean }>("/api/auth/login/complete", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ challengeId: challenge.id, proof }),
+    });
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 401) throw error;
+    return loginWithLegacyPassword(username, password);
+  }
+}
+
+async function loginWithLegacyPassword(username: string, password: string): Promise<{ mustChangePassword: boolean }> {
+  const challenge = await apiFetch<{ id: string; nonce: string; legacy: LegacyPasswordParameters }>("/api/auth/login/legacy/challenge", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username }),
+  });
+  const login = await createLegacyPasswordLogin({ password, challengeId: challenge.id, nonce: challenge.nonce, legacy: challenge.legacy });
+  return apiFetch<{ mustChangePassword: boolean }>("/api/auth/login/legacy/complete", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ challengeId: challenge.id, ...login }),
   });
 }

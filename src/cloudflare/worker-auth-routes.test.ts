@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { handleWorkerAuth } from "./worker-auth-routes";
 import { createLoginProof, sealPasswordVerifier } from "../auth/password-proof-worker";
 import { toBase64Url } from "../auth/password-proof";
+import { hashPassword } from "../auth/password";
 
 const challenge = {
   id: "login-1", normalizedUsername: "teacher-1", salt: "c2FsdA", nonce: "bm9uY2U",
@@ -76,5 +77,38 @@ describe("worker auth routes", () => {
 
     expect(response?.status).toBe(200);
     await expect(response?.json()).resolves.toMatchObject({ ok: true, data: { username: "teacher-1" } });
+  });
+
+  it("upgrades a valid legacy password login to a sealed browser proof", async () => {
+    const passwordHash = await hashPassword("legacy-password");
+    const digest = passwordHash.split("$").at(-1)!;
+    const digestBytes = Uint8Array.from(atob(digest), (character) => character.charCodeAt(0));
+    const legacyUser = { user: { id: "u1", username: "teacher-1", role: "teacher" as const, mustChangePassword: false }, disabledAt: null, passwordHash };
+    const create = vi.fn();
+    const save = vi.fn();
+    const encryptionKey = new Uint8Array(32).fill(3);
+    const challengeResponse = await handleWorkerAuth(new Request("https://grader.workers.dev/api/auth/login/legacy/challenge", {
+      method: "POST", headers: { origin: "https://grader.workers.dev", "cf-connecting-ip": "203.0.113.7" }, body: JSON.stringify({ username: "teacher-1" }),
+    }), {
+      appOrigin: "https://grader.workers.dev", ipHmacSecret: "secret", proofEncryptionKey: toBase64Url(encryptionKey),
+      proofs: { findByUsername: vi.fn(), findLegacyByUsername: vi.fn().mockResolvedValue(legacyUser), save },
+      challenges: { create: vi.fn().mockResolvedValue(challenge), consumeIfActive: vi.fn().mockResolvedValue(challenge) },
+      sessions: { create, findActiveByTokenHash: vi.fn(), revokeByTokenHash: vi.fn() },
+    });
+    expect(challengeResponse?.status).toBe(200);
+    const newVerifier = new Uint8Array(32).fill(8);
+    const completeResponse = await handleWorkerAuth(new Request("https://grader.workers.dev/api/auth/login/legacy/complete", {
+      method: "POST", headers: { origin: "https://grader.workers.dev", "cf-connecting-ip": "203.0.113.7" },
+      body: JSON.stringify({ challengeId: challenge.id, proof: await createLoginProof(digestBytes, challenge.id, challenge.nonce), verifier: toBase64Url(newVerifier) }),
+    }), {
+      appOrigin: "https://grader.workers.dev", ipHmacSecret: "secret", proofEncryptionKey: toBase64Url(encryptionKey),
+      proofs: { findByUsername: vi.fn(), findLegacyByUsername: vi.fn().mockResolvedValue(legacyUser), save },
+      challenges: { create: vi.fn(), consumeIfActive: vi.fn().mockResolvedValue(challenge) },
+      sessions: { create, findActiveByTokenHash: vi.fn(), revokeByTokenHash: vi.fn() },
+    });
+
+    expect(completeResponse?.status).toBe(200);
+    expect(save).toHaveBeenCalledWith("u1", challenge.salt, expect.any(Object), expect.any(Date));
+    expect(create).toHaveBeenCalledOnce();
   });
 });

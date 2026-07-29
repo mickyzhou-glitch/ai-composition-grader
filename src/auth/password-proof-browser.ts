@@ -10,16 +10,20 @@ const ARGON2ID_OPTIONS = {
   outputType: "binary" as const,
 };
 
+export async function deriveBrowserPasswordVerifier(password: string, salt: string): Promise<Uint8Array> {
+  return argon2id({
+    password,
+    salt: fromBase64Url(salt),
+    ...ARGON2ID_OPTIONS,
+  });
+}
+
 export async function createBrowserLoginProof(input: {
   password: string;
   salt: string;
   challengeId: string;
   nonce: string;
 }): Promise<string> {
-  const verifier = await argon2id({
-    password: input.password,
-    salt: fromBase64Url(input.salt),
-    ...ARGON2ID_OPTIONS,
-  });
+  const verifier = await deriveBrowserPasswordVerifier(input.password, input.salt);
   return createLoginProof(verifier, input.challengeId, input.nonce);
 }
