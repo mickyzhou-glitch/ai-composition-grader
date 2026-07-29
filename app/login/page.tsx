@@ -41,7 +41,7 @@ export default function LoginPage() {
       <section className="paper-card auth-card" aria-labelledby="login-title">
         <p className="eyebrow">青藤未来作文批改助手 · 工作台</p>
         <h1 id="login-title">登录</h1>
-        <p className="muted">使用管理员为你创建的账号进入批改工作台。</p>
+        <p className="muted">使用管理员为你创建的账号进入批改工作台。首次云端登录会安全升级登录验证。</p>
         {error ? <p className="error-banner" role="alert">{error}</p> : null}
         <form className="form-stack" onSubmit={(event) => void submit(event)}>
           <label className="field" htmlFor="username">用户名<input id="username" name="username" autoComplete="username" required value={username} onChange={(event) => setUsername(event.target.value)} /></label>
