@@ -392,3 +392,78 @@ textarea { min-height: 100px; resize: vertical; }
   .report-section-heading { align-items: stretch; flex-direction: column; }
   .report-section-heading select { width: 100%; }
 }
+
+@media (max-width: 560px) {
+  body { font-size: 15px; }
+  .app-header { gap: 10px; align-items: stretch; flex-direction: column; }
+  .app-header--compact { min-height: 0; }
+  .wordmark { font-size: .95rem; }
+  .header-actions { width: 100%; justify-content: stretch; }
+  .header-actions .button { flex: 1 1 auto; min-width: 0; }
+  .header-action-error { text-align: left; }
+  .page-container, .narrow-page, .flow-page { width: calc(100% - 24px); }
+  .page-container, .narrow-page { padding: 26px 0 56px; }
+  .page-title { margin-bottom: 20px; }
+  .page-title h1 { font-size: 2.15rem; }
+  .hero { padding: 28px 20px; border-radius: 14px; }
+  .hero h1 { font-size: 2.7rem; }
+  .stats-grid { grid-template-columns: 1fr; gap: 8px; margin: 16px 0 34px; }
+  .stats-grid > div { flex-direction: row; align-items: center; padding: 13px 16px; }
+  .section-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .history-batch-actions { align-items: stretch; flex-direction: column; }
+  .history-batch-actions .button { width: 100%; }
+  .history-card { padding: 18px; gap: 14px; }
+  .history-meta { align-items: flex-start; flex-wrap: wrap; gap: 6px 9px; }
+  .card-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .card-actions .button { width: 100%; }
+  .card-actions .button--danger-quiet { grid-column: 1 / -1; }
+  .paper-card, .flow-card { padding: 20px; }
+  .auth-page { padding: 18px 12px; align-items: start; }
+  .auth-card { margin-top: 5vh; padding: 24px 20px; }
+  .form-actions { display: grid; grid-template-columns: 1fr; }
+  .form-actions .button { width: 100%; }
+  .stepper { margin-bottom: 18px; }
+  .stepper li { gap: 4px; font-size: .72rem; text-align: center; }
+  .stepper li:not(:last-child)::after { left: 64%; width: 72%; }
+  .stepper li span { width: 25px; height: 25px; }
+  .saved-assignment-heading { align-items: flex-start; flex-direction: column; gap: 4px; }
+  .saved-assignment-card { grid-template-columns: 1fr; }
+  .saved-assignment-delete { justify-self: end; margin: 0 8px 8px; }
+  .ai-guidance-action .button { width: 100%; }
+  .upload-zone { min-height: 130px; padding: 20px 14px; }
+  .confirm-assignment { padding: 16px; }
+  .review-page { width: calc(100% - 20px); padding-bottom: 56px; }
+  .review-heading h1 { font-size: 2.15rem; }
+  .review-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .review-actions .analysis-guidance { grid-column: 1 / -1; }
+  .review-actions .button { width: 100%; }
+  .page-tabs { overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
+  .page-tabs button { flex: 0 0 auto; }
+  .canvas-hint { max-width: calc(100% - 20px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .annotation-card { padding: 14px; }
+  .annotation-fields { grid-template-columns: 1fr; }
+  .annotation-fields .wide { grid-column: auto; }
+  .annotation-card-actions { align-items: stretch; flex-direction: column; }
+  .annotation-card-actions .button { width: 100%; }
+  .report-section { padding: 16px; }
+  .summary-editor-heading { align-items: stretch; flex-direction: column; }
+  .summary-editor-heading button, .summary-point-actions button { width: 100%; }
+  .summary-point-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+  .summary-point-actions { padding-left: 0; }
+  .score-inputs { grid-template-columns: 1fr; }
+  .sample-ai-all-buttons, .sample-ai-actions > div { display: grid; grid-template-columns: 1fr; }
+  .sample-ai-all-buttons button, .sample-ai-actions button { width: 100%; }
+  input, textarea, select { font-size: 16px; }
+}
+
+@media (max-width: 390px) {
+  .header-actions { gap: 6px; }
+  .header-actions .button { padding: 7px 6px; font-size: .73rem; }
+  .wordmark { gap: 8px; font-size: .86rem; }
+  .seal { width: 29px; height: 29px; }
+  .card-actions, .review-actions { grid-template-columns: 1fr; }
+  .review-actions .analysis-guidance { grid-column: auto; }
+  .image-sort-card { padding: 11px; }
+  .compact-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .compact-actions button { width: 100%; }
+}

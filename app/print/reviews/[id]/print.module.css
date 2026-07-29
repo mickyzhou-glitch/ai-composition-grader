@@ -120,6 +120,21 @@
 .sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--line); background: #f4f9f7; color: var(--ink); break-before: avoid; }
 .sampleSuggestion b { margin-right: 1mm; }
 
+@media screen and (max-width: 768px) {
+  .document { font-size: 16px; line-height: 1.55; }
+  .sheet, .summary { width: 100%; min-height: 0; height: auto; max-height: none; padding: 28px 18px; }
+  .summaryContent { font-size: 1.2rem; line-height: 1.5; }
+  .summaryContent h1 { font-size: 2rem; }
+  .summaryPoints { gap: 12px; margin-top: 18px; }
+  .feedbackLayout { min-height: 0; grid-template-columns: 1fr; }
+  .suggestionColumn, .modelColumn { padding: 22px 18px; font-size: 1rem; line-height: 1.55; }
+  .suggestionParagraph { margin-bottom: 20px; }
+  .suggestionParagraph h3, .modelParagraph h4 { font-size: 1.1rem; }
+  .modelColumn > h2 { font-size: 1.45rem; }
+  .imageFigure, .imageFigure img { height: auto; min-height: 0; }
+  .imageFigure img { max-height: none; object-fit: contain; }
+}
+
 @media print {
   .runningHeader { display: flex; }
   .sheet, .card, .sampleParagraph, .annotationNotes li { break-inside: avoid; }
