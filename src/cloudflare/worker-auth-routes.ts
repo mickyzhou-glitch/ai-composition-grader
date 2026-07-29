@@ -111,6 +111,15 @@ function sessionToken(request: Request): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+export async function authenticatedWorkerUser(
+  request: Request,
+  sessions: Pick<D1SessionRepository, "findActiveByTokenHash">,
+) {
+  const token = sessionToken(request);
+  if (!token) return null;
+  return (await sessions.findActiveByTokenHash(await hashSessionToken(token), new Date()))?.user ?? null;
+}
+
 function jsonError(code: string, message: string, status: number): Response {
   return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
 }
@@ -127,10 +136,8 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
   const url = new URL(request.url);
   if (url.pathname === "/api/auth/me" && request.method === "GET") {
     if (!dependencies.sessions) return jsonError("AUTHENTICATION_UNAVAILABLE", "认证服务暂时不可用", 503);
-    const token = sessionToken(request);
-    if (!token) return jsonError("UNAUTHENTICATED", "Authentication required", 401);
-    const session = await dependencies.sessions.findActiveByTokenHash(await hashSessionToken(token), new Date());
-    return session ? Response.json({ ok: true, data: session.user }, { headers: { "cache-control": "no-store" } }) : jsonError("UNAUTHENTICATED", "Authentication required", 401);
+    const user = await authenticatedWorkerUser(request, dependencies.sessions);
+    return user ? Response.json({ ok: true, data: user }, { headers: { "cache-control": "no-store" } }) : jsonError("UNAUTHENTICATED", "Authentication required", 401);
   }
   if (url.pathname === "/api/auth/logout" && request.method === "POST") {
     if (!sameOrigin(request, dependencies.appOrigin) || !dependencies.sessions) return jsonError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
