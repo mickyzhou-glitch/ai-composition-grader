@@ -5,6 +5,7 @@ import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
+import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 
 function apiError(code: string, message: string, status: number): Response {
@@ -25,6 +26,18 @@ export default {
     if (authResponse) return authResponse;
     if (url.pathname === "/api/health") {
       return Response.json({ ok: true, data: { status: "ok" } });
+    }
+    const aiImageMatch = /^\/api\/ai-images\/([^/]+)\/(\d+)$/u.exec(url.pathname);
+    if (aiImageMatch && request.method === "GET") {
+      const reviewId = decodeURIComponent(aiImageMatch[1]);
+      const imageId = Number(aiImageMatch[2]);
+      const variant = await verifyAiImageUrl({ secret: env.AI_FILE_URL_SECRET, reviewId, imageId, variant: url.searchParams.get("variant"), expires: url.searchParams.get("expires"), signature: url.searchParams.get("signature") });
+      if (!variant) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const file = await new D1ReviewReader(env.DB).imageObjectKeyForAi(reviewId, imageId, variant);
+      if (!file) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
+      const object = await env.FILES.get(file.key);
+      if (!object) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
+      return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? file.contentType, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
     }
     const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);

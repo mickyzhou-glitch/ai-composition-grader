@@ -83,6 +83,18 @@ export class D1ReviewReader {
     return { key: `users/${ownerId}/reviews/${reviewId}/${storedPath}`, contentType: row.mime_type };
   }
 
+  async imageObjectKeyForAi(reviewId: string, imageId: number, variant: "original" | "annotation" | "ai"): Promise<{ key: string; contentType: string } | null> {
+    const row = await this.database.prepare(`
+      SELECT reviews.owner_id, review_images.original_path, review_images.annotation_path, review_images.ai_path, review_images.mime_type
+      FROM review_images INNER JOIN reviews ON reviews.id = review_images.review_id
+      WHERE review_images.id = ? AND review_images.review_id = ? AND reviews.deleting_at IS NULL
+    `).bind(imageId, reviewId).first<{ owner_id: string; original_path: string; annotation_path: string; ai_path: string; mime_type: string }>();
+    if (!row) return null;
+    const storedPath = row[`${variant}_path`];
+    if (!/^images\/[^/\\\0]+$/u.test(storedPath)) return null;
+    return { key: `users/${row.owner_id}/reviews/${reviewId}/${storedPath}`, contentType: row.mime_type };
+  }
+
   async savedAssignments(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
       SELECT id, config, created_at, updated_at FROM saved_assignments WHERE owner_id = ? ORDER BY updated_at DESC

@@ -8,10 +8,11 @@ export interface WorkerEnv {
   AUTH_PROOF_ENCRYPTION_KEY: string;
   AUTH_IP_HMAC_SECRET: string;
   AI_API_KEY: string;
+  AI_FILE_URL_SECRET: string;
 }
 
 export function readWorkerEnv(env: WorkerEnv): WorkerEnv {
-  for (const key of ["AUTH_PROOF_ENCRYPTION_KEY", "AUTH_IP_HMAC_SECRET", "AI_API_KEY"] as const) {
+  for (const key of ["AUTH_PROOF_ENCRYPTION_KEY", "AUTH_IP_HMAC_SECRET", "AI_API_KEY", "AI_FILE_URL_SECRET"] as const) {
     if (!env[key]) throw new Error(`${key} is required`);
   }
   return env;
