@@ -68,6 +68,15 @@ export default {
         return apiError(error instanceof Error && error.name === "RevisionConflictError" ? "REVISION_CONFLICT" : "VALIDATION_ERROR", error instanceof Error && error.name === "RevisionConflictError" ? "批改记录已更新，请刷新后重试" : "请求参数无效", error instanceof Error && error.name === "RevisionConflictError" ? 409 : 400);
       }
     }
+    if (reviewMatch && request.method === "DELETE") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const reviewId = decodeURIComponent(reviewMatch[1]);
+      const paths = await new D1ReviewWriter(env.DB).deleteReview(user.id, reviewId);
+      if (!paths) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+      const keys = paths.filter((path) => /^images\/[^/\\\0]+$/u.test(path)).map((path) => `users/${user.id}/reviews/${reviewId}/${path}`);
+      if (keys.length > 0) await env.FILES.delete(keys);
+      return Response.json({ ok: true, data: { deleted: true } });
+    }
     const fileMatch = /^\/api\/reviews\/([^/]+)\/files$/u.exec(url.pathname);
     if (fileMatch && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);

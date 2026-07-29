@@ -66,6 +66,22 @@ export class D1ReviewWriter {
     }
     return { revision: parsed.expectedRevision + 1 };
   }
+
+  async deleteReview(ownerId: string, reviewId: string): Promise<string[] | null> {
+    const images = await this.database.prepare(`
+      SELECT original_path, annotation_path, ai_path FROM review_images
+      WHERE review_id = ? AND EXISTS (SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL)
+    `).bind(reviewId, reviewId, ownerId).all<{ original_path: string; annotation_path: string; ai_path: string }>();
+    const exists = await this.database.prepare("SELECT id FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ id: string }>();
+    if (!exists) return null;
+    await this.database.batch([
+      this.database.prepare("DELETE FROM annotations WHERE review_id = ?").bind(reviewId),
+      this.database.prepare("DELETE FROM analysis_jobs WHERE review_id = ? AND owner_id = ?").bind(reviewId, ownerId),
+      this.database.prepare("DELETE FROM review_images WHERE review_id = ?").bind(reviewId),
+      this.database.prepare("DELETE FROM reviews WHERE id = ? AND owner_id = ?").bind(reviewId, ownerId),
+    ]);
+    return (images.results ?? []).flatMap((image) => [image.original_path, image.annotation_path, image.ai_path]);
+  }
 }
 
 class RevisionConflictError extends Error {}

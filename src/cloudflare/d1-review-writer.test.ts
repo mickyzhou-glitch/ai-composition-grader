@@ -51,4 +51,20 @@ describe("D1ReviewWriter", () => {
     })).resolves.toEqual({ revision: 5 });
     expect(run).toHaveBeenCalledOnce();
   });
+
+  it("returns only the deleted review's stored image paths", async () => {
+    const database = {
+      prepare: vi.fn((query: string) => ({
+        bind: vi.fn(() => ({
+          all: vi.fn().mockResolvedValue({ results: query.includes("original_path") ? [{ original_path: "images/original.jpg", annotation_path: "images/annotation.jpg", ai_path: "images/ai.jpg" }] : [] }),
+          first: vi.fn().mockResolvedValue(query.startsWith("SELECT id") ? { id: "review-1" } : null),
+        })),
+      })),
+      batch: vi.fn().mockResolvedValue([]),
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).deleteReview("teacher-1", "review-1")).resolves.toEqual([
+      "images/original.jpg", "images/annotation.jpg", "images/ai.jpg",
+    ]);
+  });
 });
