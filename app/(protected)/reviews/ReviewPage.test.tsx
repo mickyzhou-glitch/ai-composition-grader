@@ -12,7 +12,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => navigation.router,
 }));
 
-import ReviewPage from "./page";
+import ReviewPage from "./ReviewPage";
 
 const review = {
   id: "review-1",

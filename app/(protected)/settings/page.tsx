@@ -76,7 +76,7 @@ export default function SettingsPage() {
     <div className="app-shell">
       <AppHeader compact />
       <main className="narrow-page">
-        <div className="page-title"><p className="eyebrow">模型连接</p><h1>设置</h1><p>密钥只保存在本机系统钥匙串中，页面不会读取或回显。</p></div>
+        <div className="page-title"><p className="eyebrow">模型连接</p><h1>设置</h1><p>密钥经加密后存入你的 Cloudflare 数据库，页面不会读取或回显。</p></div>
         {error ? <ErrorBanner message={error} onRetry={loading ? undefined : load} /> : null}
         {success ? <div className="success-banner" role="status">{success}</div> : null}
         <form className="paper-card form-stack" onSubmit={(event) => { event.preventDefault(); void submit("save"); }}>

@@ -72,4 +72,8 @@ export class D1PasswordProofRepository {
       ON CONFLICT(user_id) DO UPDATE SET salt = excluded.salt, sealed_verifier = excluded.sealed_verifier, updated_at = excluded.updated_at
     `).bind(userId, salt, JSON.stringify(sealed), now.getTime(), now.getTime()).run();
   }
+
+  async clearMustChangePassword(userId: string): Promise<void> {
+    await this.database.prepare("UPDATE users SET must_change_password = 0 WHERE id = ?").bind(userId).run();
+  }
 }

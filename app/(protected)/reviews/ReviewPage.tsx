@@ -8,15 +8,15 @@ import {
   type Annotation,
   type EvaluationReport,
 } from "@/src/domain/contracts";
-import { AppHeader } from "../../../components/AppHeader";
-import { AsyncButton } from "../../../components/AsyncButton";
-import { ErrorBanner } from "../../../components/ErrorBanner";
-import { PhotoAnnotationEditor } from "../../../components/PhotoAnnotationEditor";
-import { ReportEditor, type FeedbackSection } from "../../../components/ReportEditor";
-import { StatusBadge } from "../../../components/StatusBadge";
-import { ApiError, apiFetch, errorMessage } from "../../../lib/api";
-import { downloadReviewPdf } from "../../../lib/pdf-download";
-import type { ReviewView } from "../../../lib/types";
+import { AppHeader } from "../../components/AppHeader";
+import { AsyncButton } from "../../components/AsyncButton";
+import { ErrorBanner } from "../../components/ErrorBanner";
+import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
+import { ReportEditor, type FeedbackSection } from "../../components/ReportEditor";
+import { StatusBadge } from "../../components/StatusBadge";
+import { ApiError, apiFetch, errorMessage } from "../../lib/api";
+import { downloadReviewPdf } from "../../lib/pdf-download";
+import type { ReviewView } from "../../lib/types";
 
 interface AnalysisJobView {
   id: string;
@@ -57,9 +57,7 @@ function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
 }
 
-export default function ReviewPage() {
-  const { id } = useParams<{ id: string }>();
-  const reviewId = String(id);
+export function ReviewPage({ reviewId }: { reviewId: string }) {
   const [review, setReview] = useState<ReviewView | null>(null);
   const [studentName, setStudentName] = useState("");
   const [teacherGuidance, setTeacherGuidance] = useState("");
@@ -531,4 +529,9 @@ export default function ReviewPage() {
       </main>
     </div>
   );
+}
+
+export default function LegacyReviewPage() {
+  const { id } = useParams<{ id: string }>();
+  return <ReviewPage reviewId={String(id)} />;
 }

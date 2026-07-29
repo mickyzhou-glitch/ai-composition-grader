@@ -188,12 +188,12 @@ export default function Home() {
                     <span>学生：{review.studentName || "未填写"}</span>
                     <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
                   </div>
-                  <h3><Link href={`/reviews/${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
+                  <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
                   <p>{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
                   <p className={expiresSoon(review.expiresAt) ? "expiry-notice expiry-notice--urgent" : "muted"}>{expiryNotice(review.expiresAt ?? null)}</p>
                 </div>
                 <div className="card-actions">
-                  <Link className="button button--quiet" href={`/reviews/${encodeURIComponent(review.id)}`}>进入复核</Link>
+                  <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>进入复核</Link>
                   <button
                     className="button button--quiet"
                     type="button"
@@ -202,8 +202,8 @@ export default function Home() {
                     onClick={() => void exportPdf(review)}
                   >
                     {exporting === review.id
-                      ? review.hasPdf ? "正在下载…" : "正在导出…"
-                      : review.hasPdf ? "下载 PDF" : "重新导出"}
+                      ? "正在打开打印页…"
+                      : "打印 / 另存 PDF"}
                   </button>
                   <button className="button button--danger-quiet" type="button" disabled={deleting === review.id || batchExporting} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
                     {deleting === review.id ? "删除中…" : "删除"}

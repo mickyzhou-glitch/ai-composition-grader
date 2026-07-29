@@ -11,7 +11,7 @@ const DUMMY_SALT = "AAAAAAAAAAAAAAAAAAAAAA";
 interface WorkerAuthDependencies {
   appOrigin: string;
   ipHmacSecret: string;
-  proofs: Pick<D1PasswordProofRepository, "findByUsername"> & Partial<Pick<D1PasswordProofRepository, "findLegacyByUsername" | "save">>;
+  proofs: Pick<D1PasswordProofRepository, "findByUsername"> & Partial<Pick<D1PasswordProofRepository, "findLegacyByUsername" | "save" | "clearMustChangePassword">>;
   challenges: LoginChallengeRepository;
   sessions?: Pick<D1SessionRepository, "create" | "findActiveByTokenHash" | "revokeByTokenHash">;
   proofEncryptionKey?: string;
@@ -144,6 +144,20 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
     const token = sessionToken(request);
     if (token) await dependencies.sessions.revokeByTokenHash(await hashSessionToken(token), new Date());
     return Response.json({ ok: true, data: {} }, { headers: { "set-cookie": "__Host-zuowen_session=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0" } });
+  }
+  if (url.pathname === "/api/auth/change-password" && request.method === "POST") {
+    if (!sameOrigin(request, dependencies.appOrigin) || !dependencies.sessions || !dependencies.proofs.save || !dependencies.proofEncryptionKey) return jsonError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
+    const user = await authenticatedWorkerUser(request, dependencies.sessions);
+    if (!user) return jsonError("UNAUTHENTICATED", "需要登录", 401);
+    try {
+      const body = await request.json() as { salt?: unknown; verifier?: unknown };
+      if (typeof body.salt !== "string" || typeof body.verifier !== "string") throw new Error();
+      const verifier = fromBase64Url(body.verifier);
+      if (fromBase64Url(body.salt).length < 16 || verifier.length !== 32) throw new Error();
+      await dependencies.proofs.save(user.id, body.salt, await sealPasswordVerifier(verifier, fromBase64Url(dependencies.proofEncryptionKey)), new Date());
+      await dependencies.proofs.clearMustChangePassword?.(user.id);
+      return Response.json({ ok: true, data: { user: { ...user, mustChangePassword: false } } });
+    } catch { return jsonError("VALIDATION_ERROR", "请求参数无效", 400); }
   }
   if (["/api/auth/login/legacy/challenge", "/api/auth/login/legacy/complete"].includes(url.pathname)) {
     return handleLegacyPasswordLogin(request, dependencies);

@@ -4,10 +4,11 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useState } from "react";
 
 import { apiFetch, errorMessage } from "../lib/api";
+import { deriveBrowserPasswordVerifier } from "../../src/auth/password-proof-browser";
+import { toBase64Url } from "../../src/auth/password-proof";
 
 export default function ChangePasswordPage() {
   const router = useRouter();
-  const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [error, setError] = useState("");
@@ -23,10 +24,12 @@ export default function ChangePasswordPage() {
     setBusy(true);
     setError("");
     try {
+      const salt = toBase64Url(crypto.getRandomValues(new Uint8Array(16)));
+      const verifier = toBase64Url(await deriveBrowserPasswordVerifier(newPassword, salt));
       await apiFetch("/api/auth/change-password", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ currentPassword, newPassword }),
+        body: JSON.stringify({ salt, verifier }),
       });
       router.replace("/");
     } catch (caught) {
@@ -44,7 +47,6 @@ export default function ChangePasswordPage() {
         <p className="muted">为了保护批改记录，请先设置一个新的登录密码。</p>
         {error ? <p className="error-banner" role="alert">{error}</p> : null}
         <form className="form-stack" onSubmit={(event) => void submit(event)}>
-          <label className="field" htmlFor="current-password">当前密码<input id="current-password" type="password" autoComplete="current-password" required value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
           <label className="field" htmlFor="new-password">新密码<input id="new-password" type="password" autoComplete="new-password" minLength={8} required value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
           <label className="field" htmlFor="confirm-password">确认新密码<input id="confirm-password" type="password" autoComplete="new-password" minLength={8} required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
           <button className="button button--primary" type="submit" disabled={busy}>{busy ? "保存中…" : "保存新密码"}</button>

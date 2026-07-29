@@ -232,7 +232,7 @@ export default function NewReviewPage() {
         setUploaded(serverImages);
         currentReview = { ...currentReview, revision: uploadResult.revision };
         setReview(currentReview);
-        router.push(`/reviews/${encodeURIComponent(currentReview.id)}`);
+        router.push(`/reviews?id=${encodeURIComponent(currentReview.id)}`);
         return;
       }
       const transformed = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
@@ -249,7 +249,7 @@ export default function NewReviewPage() {
         }),
       });
       setReview({ ...currentReview, revision: transformed.revision });
-      router.push(`/reviews/${encodeURIComponent(currentReview.id)}`);
+      router.push(`/reviews?id=${encodeURIComponent(currentReview.id)}`);
     } catch (caught) {
       setError(`${errorMessage(caught)}。已保留当前内容，可直接重试。`);
     } finally {
