@@ -4,6 +4,9 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 import { apiFetch, errorMessage } from "../lib/api";
+import { createBrowserLoginProof } from "../../src/auth/password-proof-browser";
+
+import { shouldUsePasswordProofLogin } from "./login-mode";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,11 +20,13 @@ export default function LoginPage() {
     setBusy(true);
     setError("");
     try {
-      const user = await apiFetch<{ mustChangePassword: boolean }>("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
+      const user = shouldUsePasswordProofLogin(window.location.hostname)
+        ? await loginWithProof(username, password)
+        : await apiFetch<{ mustChangePassword: boolean }>("/api/auth/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ username, password }),
+        });
       router.replace(user.mustChangePassword ? "/change-password" : "/");
     } catch (caught) {
       setError(errorMessage(caught));
@@ -45,4 +50,14 @@ export default function LoginPage() {
       </section>
     </main>
   );
+}
+
+async function loginWithProof(username: string, password: string): Promise<{ mustChangePassword: boolean }> {
+  const challenge = await apiFetch<{ id: string; salt: string; nonce: string }>("/api/auth/login/challenge", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ username }),
+  });
+  const proof = await createBrowserLoginProof({ password, salt: challenge.salt, challengeId: challenge.id, nonce: challenge.nonce });
+  return apiFetch<{ mustChangePassword: boolean }>("/api/auth/login/complete", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ challengeId: challenge.id, proof }),
+  });
 }
