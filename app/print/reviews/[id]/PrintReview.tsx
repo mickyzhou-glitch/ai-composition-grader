@@ -1,4 +1,4 @@
-import type { ReviewRecord } from "@/src/db/review-repository";
+import type { ReviewView } from "@/app/lib/types";
 import { gradeFromLegacyTotal } from "@/src/domain/contracts";
 
 import styles from "./print.module.css";
@@ -51,7 +51,9 @@ function sampleParagraphsForPage<T>(paragraphs: T[], pageIndex: number, pageCoun
   return paragraphs.filter((_, index) => Math.floor((index * pageCount) / paragraphs.length) === pageIndex);
 }
 
-export function PrintReview({ review, imageSources }: { review: ReviewRecord; imageSources: string[] }) {
+type PrintableReview = Pick<ReviewView, "images" | "report">;
+
+export function PrintReview({ review, imageSources }: { review: PrintableReview; imageSources: string[] }) {
   if (!review.report || review.images.length === 0) {
     throw new TypeError("print review requires report and images");
   }
