@@ -12,7 +12,7 @@
   "d1_databases": [{
     "binding": "DB",
     "database_name": "ai-composition-grader",
-    "database_id": "00000000-0000-0000-0000-000000000000",
+    "database_id": "3587491a-0c64-4c87-84ec-1974689da694",
     "migrations_dir": "migrations"
   }],
   "r2_buckets": [{ "binding": "FILES", "bucket_name": "ai-composition-grader-files" }],
