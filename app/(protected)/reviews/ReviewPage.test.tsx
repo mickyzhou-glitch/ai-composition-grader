@@ -55,16 +55,8 @@ describe("复核页", () => {
     delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
   });
 
-  function mockBrowserDownload() {
-    Object.defineProperty(URL, "createObjectURL", {
-      configurable: true,
-      value: vi.fn(() => "blob:pdf"),
-    });
-    Object.defineProperty(URL, "revokeObjectURL", {
-      configurable: true,
-      value: vi.fn(),
-    });
-    return vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  function mockPrintWindow() {
+    return vi.spyOn(window, "open").mockReturnValue({} as Window);
   }
 
   it("复核与导出入口持续显示自动删除期限", async () => {
@@ -188,54 +180,32 @@ describe("复核页", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("导出期间显示 loading，下载后刷新 exported 状态", async () => {
-    const pdf = deferred<Response>();
-    const exported = {
-      ...review,
-      status: "exported" as const,
-      revision: 2,
-      hasPdf: true,
-      pdfFilename: "作文批改-为自己鼓掌.pdf",
-    };
+  it("导出时打开浏览器打印页", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
       .mockImplementationOnce(() => json({ job: null }))
-      .mockImplementationOnce(() => pdf.promise)
-      .mockImplementationOnce(() => json(exported));
-    const clickDownload = mockBrowserDownload();
+      .mockImplementationOnce(() => json(review));
+    const open = mockPrintWindow();
     const user = userEvent.setup();
     render(<ReviewPage />);
 
     await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
-    expect(screen.getByRole("button", { name: "正在生成 PDF…" })).toBeDisabled();
-    pdf.resolve(new Response("%PDF", {
-      headers: {
-        "content-type": "application/pdf",
-        "content-disposition": `attachment; filename="composition-review.pdf"; filename*=UTF-8''${encodeURIComponent(exported.pdfFilename)}`,
-      },
-    }));
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1/pdf");
-    expect(clickDownload).toHaveBeenCalledOnce();
-    expect(await screen.findByText("已导出")).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(open).toHaveBeenCalledWith("/print/reviews?id=review-1", "_blank", "noopener");
   });
 
-  it("导出 API 错误在页面上可见", async () => {
+  it("浏览器拦截打印窗口时显示错误", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
-      .mockImplementationOnce(() => json({ job: null }))
-      .mockImplementationOnce(() => json({
-        code: "PDF_ENGINE_MISSING",
-        message: "PDF 引擎未安装，请运行 npx playwright install chromium 后重试",
-      }, 503));
+      .mockImplementationOnce(() => json({ job: null }));
+    vi.spyOn(window, "open").mockReturnValue(null);
     const user = userEvent.setup();
     render(<ReviewPage />);
 
     await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "PDF 引擎未安装，请运行 npx playwright install chromium 后重试",
+      "浏览器拦截了打印窗口，请允许弹窗后重试",
     );
   });
 

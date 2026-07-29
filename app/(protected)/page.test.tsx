@@ -37,16 +37,8 @@ describe("历史首页", () => {
     delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
   });
 
-  function mockBrowserDownload() {
-    Object.defineProperty(URL, "createObjectURL", {
-      configurable: true,
-      value: vi.fn(() => "blob:pdf"),
-    });
-    Object.defineProperty(URL, "revokeObjectURL", {
-      configurable: true,
-      value: vi.fn(),
-    });
-    return vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+  function mockPrintWindow() {
+    return vi.spyOn(window, "open").mockReturnValue({} as Window);
   }
 
   it("加载历史、统计状态并确认删除", async () => {
@@ -86,36 +78,22 @@ describe("历史首页", () => {
     expect(screen.getAllByRole("link", { name: "新建作文批改" })[0]).toHaveAttribute("href", "/new");
   });
 
-  it("重新导出调用真实 PDF API，下载后刷新为可下载状态", async () => {
-    const refreshed = {
-      ...review,
-      status: "exported",
-      hasPdf: true,
-      pdfFilename: "作文批改-为自己鼓掌.pdf",
-    };
+  it("打开浏览器打印页以另存 PDF", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json([review]))
-      .mockImplementationOnce(() => Promise.resolve(new Response("%PDF", {
-        headers: {
-          "content-type": "application/pdf",
-          "content-disposition": `attachment; filename="composition-review.pdf"; filename*=UTF-8''${encodeURIComponent(refreshed.pdfFilename)}`,
-        },
-      })))
-      .mockImplementationOnce(() => json([refreshed]));
-    const clickDownload = mockBrowserDownload();
+      .mockImplementationOnce(() => json([review]));
+    const open = mockPrintWindow();
     const user = userEvent.setup();
     render(<Home />);
 
-    await user.click(await screen.findByRole("button", { name: "重新导出" }));
+    await user.click(await screen.findByRole("button", { name: "打印 / 另存 PDF" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(fetchMock.mock.calls[1][0]).toBe("/api/reviews/review-1/pdf");
-    expect(clickDownload).toHaveBeenCalledOnce();
-    expect(await screen.findByRole("button", { name: "下载 PDF" })).toBeEnabled();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(open).toHaveBeenCalledWith("/print/reviews?id=review-1", "_blank", "noopener");
   });
 
-  it("可选择多篇批改记录并下载批量 PDF 压缩包", async () => {
+  it("可选择多篇批改记录并分别打开打印页", async () => {
     const secondReview = {
       ...review,
       id: "review-2",
@@ -125,14 +103,8 @@ describe("历史首页", () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json([review, secondReview]))
-      .mockImplementationOnce(() => Promise.resolve(new Response("ZIP", {
-        headers: {
-          "content-type": "application/zip",
-          "content-disposition": `attachment; filename="review-pdfs.zip"; filename*=UTF-8''${encodeURIComponent("作文批改批量导出.zip")}`,
-        },
-      })))
       .mockImplementationOnce(() => json([review, secondReview]));
-    const clickDownload = mockBrowserDownload();
+    const open = mockPrintWindow();
     const user = userEvent.setup();
     render(<Home />);
 
@@ -140,14 +112,8 @@ describe("历史首页", () => {
     await user.click(screen.getByRole("checkbox", { name: "选择《珍贵的礼物》" }));
     await user.click(screen.getByRole("button", { name: "导出所选 2 篇 PDF" }));
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(fetchMock.mock.calls[1]).toEqual([
-      "/api/reviews/batch-pdf",
-      expect.objectContaining({ method: "POST" }),
-    ]);
-    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toEqual({
-      reviewIds: ["review-1", "review-2"],
-    });
-    expect(clickDownload).toHaveBeenCalledOnce();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(open).toHaveBeenNthCalledWith(1, "/print/reviews?id=review-1", "_blank", "noopener");
+    expect(open).toHaveBeenNthCalledWith(2, "/print/reviews?id=review-2", "_blank", "noopener");
   });
 });

@@ -128,7 +128,7 @@ describe("新建作文批改", () => {
     expect(screen.getByText("李羿辰")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews/review-new"));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews?id=review-new"));
     const reviewRequest = fetchMock.mock.calls[1];
     expect(reviewRequest[0]).toBe("/api/reviews");
     expect(JSON.parse((reviewRequest[1] as RequestInit).body as string)).toMatchObject({
@@ -214,6 +214,6 @@ describe("新建作文批改", () => {
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
     await confirmPrivacy(user);
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
-    await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews/review-versioned"));
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews?id=review-versioned"));
   });
 });
