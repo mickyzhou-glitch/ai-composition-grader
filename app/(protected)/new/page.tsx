@@ -13,6 +13,7 @@ import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { apiFetch, errorMessage } from "../../lib/api";
+import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
 
 const presetConfig: AssignmentConfig = {
   title: "为自己鼓掌",
@@ -220,7 +221,9 @@ export default function NewReviewPage() {
         form.append("expectedRevision", String(currentReview.revision));
         form.append("privacyConfirmed", String(privacyConfirmed));
         form.append("privacyNoticeVersion", PRIVACY_NOTICE_VERSION);
-        images.forEach(({ file }) => form.append("images", file));
+        const prepared = await Promise.all(images.map(async (image) => prepareImageForCloudUpload({ file: image.file, rotation: image.rotation, crop: asCrop(image.crop) })));
+        prepared.forEach(({ file }) => form.append("images", file));
+        form.append("imageMeta", JSON.stringify(prepared.map(({ width, height }) => ({ width, height }))));
         const uploadResult = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
           method: "POST",
           body: form,
@@ -229,6 +232,8 @@ export default function NewReviewPage() {
         setUploaded(serverImages);
         currentReview = { ...currentReview, revision: uploadResult.revision };
         setReview(currentReview);
+        router.push(`/reviews/${encodeURIComponent(currentReview.id)}`);
+        return;
       }
       const transformed = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
         method: "PATCH",

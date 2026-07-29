@@ -145,10 +145,7 @@ describe("新建作文批改", () => {
       "二.jpg",
       "四.jpg",
     ]);
-    const transforms = JSON.parse((fetchMock.mock.calls[3][1] as RequestInit).body as string);
-    expect(transforms.expectedRevision).toBe(1);
-    expect(transforms.images[2]).toMatchObject({ id: 13, position: 2, rotation: 90 });
-    expect(transforms.images[2].crop.x).toBe(0.1);
+    expect(JSON.parse(String(uploaded.get("imageMeta")))).toHaveLength(4);
   });
 
   it("上传失败后改题重试会先 PATCH 最新配置，再上传图片", async () => {
@@ -199,15 +196,12 @@ describe("新建作文批改", () => {
     });
   });
 
-  it("图片后续接口返回新版本时，重试配置同步使用最新版本", async () => {
+  it("转换后的图片上传成功后直接进入批改详情", async () => {
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json([]))
       .mockImplementationOnce(() => json({ id: "review-versioned", revision: 0 }, 201))
-      .mockImplementationOnce(() => json({ images: [{ id: 41, position: 0 }], revision: 1 }))
-      .mockImplementationOnce(() => json({ code: "TRANSFORM_FAILED", message: "处理失败" }, 502))
-      .mockImplementationOnce(() => json({ id: "review-versioned", revision: 2 }))
-      .mockImplementationOnce(() => json({ images: [{ id: 41, position: 0 }], revision: 3 }));
+      .mockImplementationOnce(() => json({ images: [{ id: 41, position: 0 }], revision: 1 }));
     const user = userEvent.setup();
     render(<NewReviewPage />);
 
@@ -220,15 +214,6 @@ describe("新建作文批改", () => {
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
     await confirmPrivacy(user);
     await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("处理失败");
-
-    await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(6));
-
-    const retryConfig = fetchMock.mock.calls[4];
-    expect(retryConfig[0]).toBe("/api/reviews/review-versioned");
-    expect(JSON.parse((retryConfig[1] as RequestInit).body as string)).toMatchObject({
-      expectedRevision: 1,
-    });
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews/review-versioned"));
   });
 });

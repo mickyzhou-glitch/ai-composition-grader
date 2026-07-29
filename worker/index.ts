@@ -6,6 +6,7 @@ import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
+import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 
 function apiError(code: string, message: string, status: number): Response {
@@ -92,6 +93,38 @@ export default {
       return Response.json({ ok: true, data: { deleted: true } });
     }
     const fileMatch = /^\/api\/reviews\/([^/]+)\/files$/u.exec(url.pathname);
+    const imagesMatch = /^\/api\/reviews\/([^/]+)\/images$/u.exec(url.pathname);
+    if (imagesMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const reviewId = decodeURIComponent(imagesMatch[1]);
+        const form = await request.formData();
+        const expectedRevision = Number(form.get("expectedRevision"));
+        const files = form.getAll("images");
+        const metadata = JSON.parse(String(form.get("imageMeta") ?? "[]")) as Array<{ width: number; height: number }>;
+        if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || files.length !== metadata.length || files.length < 1 || files.length > 4) return apiError("VALIDATION_ERROR", "图片上传参数无效", 400);
+        const prepared = await Promise.all(files.map(async (entry, position) => {
+          if (!(entry instanceof File) || entry.size > 20 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(entry.type)) throw new Error("INVALID_IMAGE");
+          const meta = metadata[position];
+          if (!Number.isInteger(meta?.width) || !Number.isInteger(meta?.height) || meta.width < 1 || meta.height < 1) throw new Error("INVALID_IMAGE");
+          const extension = entry.type === "image/png" ? "png" : entry.type === "image/webp" ? "webp" : "jpg";
+          const path = `images/${crypto.randomUUID()}.${extension}`;
+          return { originalName: entry.name.slice(0, 255), mimeType: entry.type as "image/jpeg" | "image/png" | "image/webp", width: meta.width, height: meta.height, path, data: await entry.arrayBuffer() };
+        }));
+        const keys = prepared.map((image) => `users/${user.id}/reviews/${reviewId}/${image.path}`);
+        await Promise.all(prepared.map((image, index) => env.FILES.put(keys[index], image.data, { httpMetadata: { contentType: image.mimeType } })));
+        try {
+          const saved = await new D1ImageWriter(env.DB).replace(user.id, reviewId, expectedRevision, prepared, form.get("privacyConfirmed") === "true" && form.get("privacyNoticeVersion") === "2026-07-22");
+          return Response.json({ ok: true, data: saved }, { headers: { "cache-control": "no-store" } });
+        } catch (error) {
+          await env.FILES.delete(keys);
+          const code = error instanceof Error ? error.message : "VALIDATION_ERROR";
+          return apiError(code, code === "PRIVACY_CONFIRMATION_REQUIRED" ? "请先确认真实作文上传说明" : "图片上传失败", code === "REVISION_CONFLICT" ? 409 : 400);
+        }
+      } catch {
+        return apiError("INVALID_IMAGE", "仅支持 JPG、PNG、WebP，且单张不超过 20MB", 422);
+      }
+    }
     if (fileMatch && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       const imageId = Number(url.searchParams.get("imageId"));
