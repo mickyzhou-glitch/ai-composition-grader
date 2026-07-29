@@ -52,6 +52,12 @@ export interface AnalyzeCompositionInput {
   teacherGuidance?: string;
 }
 
+export interface AnalyzeCompositionUrlInput {
+  config: AssignmentConfig;
+  imageUrls: string[];
+  teacherGuidance?: string;
+}
+
 export interface RewriteSampleInput {
   config: AssignmentConfig;
   sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
@@ -259,6 +265,17 @@ export class OpenAIReviewAdapter {
     ) {
       throw new TypeError("every composition page must be an image data URL");
     }
+    return this.analyzeImageUrls({
+      config: input.config,
+      imageUrls: input.imageDataUrls,
+      teacherGuidance: input.teacherGuidance,
+    });
+  }
+
+  async analyzeImageUrls(input: AnalyzeCompositionUrlInput): Promise<AiReviewEnvelope> {
+    if (input.imageUrls.length < 1 || input.imageUrls.length > MAX_REVIEW_IMAGES) {
+      throw new TypeError(`imageUrls must contain 1 to ${MAX_REVIEW_IMAGES} pages`);
+    }
     const settings = await this.settings.getRuntimeConfig();
     if (!settings) {
       throw new AiAdapterError(
@@ -282,7 +299,7 @@ export class OpenAIReviewAdapter {
           role: "user",
           content: [
             { type: "text", text: "请批改这些按页排序的作文图片。" },
-            ...input.imageDataUrls.map((url) => ({
+            ...input.imageUrls.map((url) => ({
               type: "image_url",
               image_url: { url, detail: "high" },
             })),
@@ -295,7 +312,7 @@ export class OpenAIReviewAdapter {
       const firstEnvelope = validateEnvelope(
         parseJsonResponse(content),
         input.config,
-        input.imageDataUrls.length,
+        input.imageUrls.length,
       );
       if (firstEnvelope.readable) return firstEnvelope;
 
@@ -308,7 +325,7 @@ export class OpenAIReviewAdapter {
             role: "user",
             content: [
               { type: "text", text: "请继续完成这篇作文的批改。" },
-              ...input.imageDataUrls.map((url) => ({
+              ...input.imageUrls.map((url) => ({
                 type: "image_url",
                 image_url: { url, detail: "high" },
               })),
@@ -319,7 +336,7 @@ export class OpenAIReviewAdapter {
       return validateEnvelope(
         parseJsonResponse(continued),
         input.config,
-        input.imageDataUrls.length,
+        input.imageUrls.length,
       );
     } catch {
       const repaired = await completionContent(client, {
@@ -331,7 +348,7 @@ export class OpenAIReviewAdapter {
             content: buildRepairPrompt(
               content,
               input.config,
-              input.imageDataUrls.length,
+              input.imageUrls.length,
             ),
           },
         ],
@@ -340,7 +357,7 @@ export class OpenAIReviewAdapter {
         return validateEnvelope(
           parseJsonResponse(repaired),
           input.config,
-          input.imageDataUrls.length,
+          input.imageUrls.length,
         );
       } catch {
         throw new AiAdapterError(

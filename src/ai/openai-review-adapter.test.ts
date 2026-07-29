@@ -8,6 +8,7 @@ import {
   testOpenAIConnection,
   type OpenAICompatibleClient,
   type OpenAIClientFactory,
+  type AnalyzeCompositionInput,
 } from "./openai-review-adapter";
 
 const config: AssignmentConfig = {
