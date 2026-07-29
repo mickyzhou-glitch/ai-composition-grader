@@ -83,6 +83,18 @@ export class D1ReviewReader {
     return { key: `users/${ownerId}/reviews/${reviewId}/${storedPath}`, contentType: row.mime_type };
   }
 
+  async savedAssignments(ownerId: string): Promise<unknown[]> {
+    const { results = [] } = await this.database.prepare(`
+      SELECT id, config, created_at, updated_at FROM saved_assignments WHERE owner_id = ? ORDER BY updated_at DESC
+    `).bind(ownerId).all<{ id: string; config: string; created_at: number; updated_at: number }>();
+    return results.map((assignment) => ({
+      id: assignment.id,
+      config: assignmentConfigSchema.parse(JSON.parse(assignment.config)),
+      createdAt: date(assignment.created_at),
+      updatedAt: date(assignment.updated_at),
+    }));
+  }
+
   private async hydrate(ownerId: string, review: ReviewRow): Promise<unknown> {
     const [imagesResult, annotationsResult] = await Promise.all([
       this.database.prepare(`SELECT id, review_id, position, original_name, mime_type, original_path, annotation_path, ai_path, width, height, rotation, crop FROM review_images WHERE review_id = ? ORDER BY position, id`).bind(review.id).all<ImageRow>(),

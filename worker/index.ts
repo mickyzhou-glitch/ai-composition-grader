@@ -3,6 +3,7 @@ import { D1LoginChallengeRepository } from "../src/cloudflare/d1-login-challenge
 import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-repository";
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
+import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 
 function apiError(code: string, message: string, status: number): Response {
@@ -29,6 +30,25 @@ export default {
     if (url.pathname === "/api/reviews" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).list(user.id) }, { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === "/api/reviews" && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const review = await new D1ReviewWriter(env.DB).create(user.id, await request.json());
+        return Response.json({ ok: true, data: review }, { status: 201, headers: { "cache-control": "no-store" } });
+      } catch {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+      }
+    }
+    if (url.pathname === "/api/saved-assignments" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).savedAssignments(user.id) }, { headers: { "cache-control": "no-store" } });
+    }
+    const savedAssignmentMatch = /^\/api\/saved-assignments\/([^/]+)$/u.exec(url.pathname);
+    if (savedAssignmentMatch && request.method === "DELETE") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const deleted = await new D1ReviewWriter(env.DB).deleteSavedAssignment(user.id, decodeURIComponent(savedAssignmentMatch[1]));
+      return deleted ? Response.json({ ok: true, data: { deleted: true } }) : apiError("NOT_FOUND", "常用题目不存在", 404);
     }
     const reviewMatch = /^\/api\/reviews\/([^/]+)$/u.exec(url.pathname);
     if (reviewMatch && request.method === "GET") {
