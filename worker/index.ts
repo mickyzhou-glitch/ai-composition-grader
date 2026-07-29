@@ -4,6 +4,7 @@ import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-r
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
+import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 
 function apiError(code: string, message: string, status: number): Response {
@@ -90,6 +91,26 @@ export default {
       const object = await env.FILES.get(file.key);
       if (!object) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
       return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? file.contentType, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
+    }
+    const analyzeMatch = /^\/api\/reviews\/([^/]+)\/analyze$/u.exec(url.pathname);
+    if (analyzeMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const reviewId = decodeURIComponent(analyzeMatch[1]);
+        const result = await new D1AnalysisJobs(env.DB).enqueue(user.id, reviewId, request.headers.get("content-type")?.includes("application/json") ? (await request.json() as { teacherGuidance?: unknown }).teacherGuidance : undefined);
+        if (!result.job) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+        if (result.newlyQueued) await env.ANALYSIS_QUEUE.send({ jobId: (result.job as { id: string }).id });
+        return Response.json({ ok: true, data: result.job }, { status: 202, headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        const code = error instanceof Error ? error.message : "VALIDATION_ERROR";
+        return apiError(code, code === "IMAGES_REQUIRED" ? "请先上传 1 至 4 张作文图片" : "请求参数无效", code === "IMAGES_REQUIRED" ? 422 : 400);
+      }
+    }
+    const analyzeStatusMatch = /^\/api\/reviews\/([^/]+)\/analyze\/status$/u.exec(url.pathname);
+    if (analyzeStatusMatch && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const job = await new D1AnalysisJobs(env.DB).latest(user.id, decodeURIComponent(analyzeStatusMatch[1]));
+      return Response.json({ ok: true, data: { job } }, { headers: { "cache-control": "no-store" } });
     }
     if (url.pathname.startsWith("/api/")) {
       return Response.json({ ok: false, error: { code: "NOT_FOUND", message: "接口不存在" } }, { status: 404 });
