@@ -9,6 +9,7 @@ import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-u
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
+import { sealSetting } from "../src/cloudflare/settings-secret";
 
 function apiError(code: string, message: string, status: number): Response {
   return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
@@ -43,6 +44,21 @@ export default {
     }
     const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);
+    if (url.pathname === "/api/settings" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const settings = await env.DB.prepare("SELECT base_url, model, encrypted_api_key FROM settings WHERE id = 1").first<{ base_url: string; model: string; encrypted_api_key: string | null }>();
+      return Response.json({ ok: true, data: settings ? { baseUrl: settings.base_url, model: settings.model, keyConfigured: settings.encrypted_api_key !== null || Boolean(env.AI_API_KEY) } : null });
+    }
+    if (url.pathname === "/api/settings" && request.method === "PUT") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const body = await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown };
+        if (typeof body.baseUrl !== "string" || !/^https?:\/\//u.test(body.baseUrl) || typeof body.model !== "string" || !body.model.trim()) throw new Error();
+        const encrypted = typeof body.apiKey === "string" && body.apiKey ? await sealSetting(body.apiKey, env.AUTH_PROOF_ENCRYPTION_KEY) : null;
+        await env.DB.prepare("INSERT INTO settings (id, base_url, model, updated_at, encrypted_api_key) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET base_url = excluded.base_url, model = excluded.model, updated_at = excluded.updated_at, encrypted_api_key = COALESCE(excluded.encrypted_api_key, settings.encrypted_api_key)").bind(body.baseUrl.replace(/\/+$/u, ""), body.model.trim(), Date.now(), encrypted).run();
+        return Response.json({ ok: true, data: { baseUrl: body.baseUrl.replace(/\/+$/u, ""), model: body.model.trim(), keyConfigured: encrypted !== null || Boolean(env.AI_API_KEY) } });
+      } catch { return apiError("VALIDATION_ERROR", "请求参数无效", 400); }
+    }
     if (url.pathname === "/api/reviews" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).list(user.id) }, { headers: { "cache-control": "no-store" } });
