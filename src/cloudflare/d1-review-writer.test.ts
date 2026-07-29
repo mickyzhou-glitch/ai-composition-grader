@@ -32,4 +32,23 @@ describe("D1ReviewWriter", () => {
     await expect(new D1ReviewWriter(database).deleteSavedAssignment("teacher-1", "assignment-1")).resolves.toBe(true);
     expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("owner_id"));
   });
+
+  it("uses the expected revision when editing a review", async () => {
+    const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+    const database = {
+      prepare: vi.fn((query: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(query.startsWith("SELECT student_name") ? {
+            student_name: "小明", config: JSON.stringify(config), report: null, status: "draft", revision: 4,
+          } : null),
+          run,
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).update("teacher-1", "review-1", {
+      expectedRevision: 4, studentName: "小红",
+    })).resolves.toEqual({ revision: 5 });
+    expect(run).toHaveBeenCalledOnce();
+  });
 });

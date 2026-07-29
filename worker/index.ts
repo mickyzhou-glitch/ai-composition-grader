@@ -56,6 +56,18 @@ export default {
       const review = await new D1ReviewReader(env.DB).get(user.id, decodeURIComponent(reviewMatch[1]));
       return review ? Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } }) : apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
     }
+    if (reviewMatch && request.method === "PATCH") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const reviewId = decodeURIComponent(reviewMatch[1]);
+        const updated = await new D1ReviewWriter(env.DB).update(user.id, reviewId, await request.json());
+        if (!updated) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+        const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
+        return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        return apiError(error instanceof Error && error.name === "RevisionConflictError" ? "REVISION_CONFLICT" : "VALIDATION_ERROR", error instanceof Error && error.name === "RevisionConflictError" ? "批改记录已更新，请刷新后重试" : "请求参数无效", error instanceof Error && error.name === "RevisionConflictError" ? 409 : 400);
+      }
+    }
     const fileMatch = /^\/api\/reviews\/([^/]+)\/files$/u.exec(url.pathname);
     if (fileMatch && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);

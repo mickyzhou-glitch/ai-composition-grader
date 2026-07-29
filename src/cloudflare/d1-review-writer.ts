@@ -1,4 +1,6 @@
-import { assignmentConfigSchema, studentNameSchema } from "../domain/contracts";
+import { z } from "zod";
+
+import { annotationSchema, assignmentConfigSchema, evaluationReportSchema, studentNameSchema } from "../domain/contracts";
 
 export class D1ReviewWriter {
   constructor(private readonly database: D1Database) {}
@@ -29,4 +31,41 @@ export class D1ReviewWriter {
     const result = await this.database.prepare("DELETE FROM saved_assignments WHERE id = ? AND owner_id = ?").bind(id, ownerId).run();
     return result.meta.changes > 0;
   }
+
+  async update(ownerId: string, reviewId: string, input: unknown): Promise<{ revision: number } | null> {
+    const parsed = z.object({
+      expectedRevision: z.number().int().nonnegative(),
+      studentName: studentNameSchema.optional(),
+      config: assignmentConfigSchema.optional(),
+      report: evaluationReportSchema.optional(),
+      annotations: z.array(annotationSchema).optional(),
+    }).strict().refine((value) => value.studentName !== undefined || value.config !== undefined || value.report !== undefined || value.annotations !== undefined).parse(input);
+    const current = await this.database.prepare("SELECT student_name, config, report, status, revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ student_name: string; config: string; report: string | null; status: string; revision: number }>();
+    if (!current) return null;
+    if (current.revision !== parsed.expectedRevision) throw new RevisionConflictError();
+    const config = parsed.config ?? assignmentConfigSchema.parse(JSON.parse(current.config));
+    const report = parsed.config ? null : parsed.report ?? (current.report === null ? null : evaluationReportSchema.parse(JSON.parse(current.report)));
+    const annotations = parsed.config ? [] : parsed.annotations;
+    const status = parsed.config ? "draft" : parsed.report !== undefined || parsed.annotations !== undefined ? (report === null ? "draft" : "ready_for_review") : current.status;
+    const now = Date.now();
+    const updated = await this.database.prepare(`
+      UPDATE reviews SET student_name = ?, config = ?, report = ?, status = ?, revision = revision + 1, updated_at = ?,
+        analysis_run_id = CASE WHEN ? THEN NULL ELSE analysis_run_id END,
+        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
+      WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
+    `).bind(parsed.studentName ?? current.student_name, JSON.stringify(config), report === null ? null : JSON.stringify(report), status, now, parsed.config !== undefined ? 1 : 0, reviewId, ownerId, parsed.expectedRevision).run();
+    if (updated.meta.changes === 0) throw new RevisionConflictError();
+    if (annotations !== undefined) {
+      await this.database.batch([
+        this.database.prepare("DELETE FROM annotations WHERE review_id = ?").bind(reviewId),
+        ...annotations.map((annotation, position) => this.database.prepare(`
+          INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(reviewId, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)),
+      ]);
+    }
+    return { revision: parsed.expectedRevision + 1 };
+  }
 }
+
+class RevisionConflictError extends Error {}
