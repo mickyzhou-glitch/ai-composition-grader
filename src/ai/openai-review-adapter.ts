@@ -83,6 +83,7 @@ export class AiAdapterError extends Error {
     message: string,
     readonly status: number,
     readonly upstreamStatus?: number,
+    readonly upstreamCode?: string,
   ) {
     super(message);
     this.name = "AiAdapterError";
@@ -245,7 +246,15 @@ async function completionContent(
     const upstreamStatus = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
       ? error.status
       : undefined;
-    throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502, upstreamStatus);
+    const rawUpstreamCode = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+      ? error.code
+      : typeof error === "object" && error !== null && "type" in error && typeof error.type === "string"
+        ? error.type
+        : undefined;
+    const upstreamCode = rawUpstreamCode && /^[A-Za-z0-9._-]{1,64}$/u.test(rawUpstreamCode)
+      ? rawUpstreamCode
+      : undefined;
+    throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502, upstreamStatus, upstreamCode);
   }
 }
 

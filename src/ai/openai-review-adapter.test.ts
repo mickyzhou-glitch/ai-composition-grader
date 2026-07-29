@@ -479,14 +479,15 @@ describe("OpenAIReviewAdapter", () => {
     );
   });
 
-  it("retains an upstream HTTP status without exposing provider details", async () => {
-    const harness = setup([Object.assign(new Error("provider detail"), { status: 400 })]);
+  it("retains a safe upstream error category without exposing provider details", async () => {
+    const harness = setup([Object.assign(new Error("provider detail"), { status: 400, code: "image_input_denied" })]);
 
     await expect(
       harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
     ).rejects.toEqual(expect.objectContaining({
       code: "AI_REQUEST_FAILED",
       upstreamStatus: 400,
+      upstreamCode: "image_input_denied",
       message: "AI 服务请求失败",
     }));
   });
