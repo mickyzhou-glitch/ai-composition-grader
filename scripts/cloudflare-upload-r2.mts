@@ -1,11 +1,12 @@
 import Database from "better-sqlite3";
-import { access } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 
 const databasePath = path.resolve(process.env.APP_DATABASE_PATH ?? ".data/app.db");
 const storageRoot = path.resolve(process.env.APP_STORAGE_ROOT ?? ".data/users");
 const bucket = "ai-composition-grader-files";
+const concurrency = 8;
 
 function run(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -34,12 +35,29 @@ try {
       objects.set(`users/${row.ownerId}/reviews/${row.reviewId}/${storedPath}`, source);
     }
   }
+  const entries = [...objects.entries()];
+  let nextIndex = 0;
   let completed = 0;
-  for (const [key, source] of objects) {
-    await run([`${bucket}/${key}`, `--file=${source}`]);
-    completed += 1;
-    if (completed % 25 === 0 || completed === objects.size) process.stdout.write(`Uploaded ${completed}/${objects.size}\n`);
+
+  async function uploadWorker() {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= entries.length) return;
+
+      const [key, source] = entries[index];
+      await run([`${bucket}/${key}`, `--file=${source}`]);
+      completed += 1;
+      if (completed % 25 === 0 || completed === entries.length) process.stdout.write(`Uploaded ${completed}/${entries.length}\n`);
+    }
   }
+
+  await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, uploadWorker));
+  await mkdir(".migration", { recursive: true });
+  await writeFile(
+    ".migration/r2-upload-complete.json",
+    `${JSON.stringify({ uploaded: entries.length, completedAt: new Date().toISOString() })}\n`,
+  );
 } finally {
   database.close();
 }
