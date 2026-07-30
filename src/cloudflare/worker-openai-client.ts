@@ -1,4 +1,5 @@
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "../ai/openai-review-adapter";
+import { aiRequestHeaders } from "./ai-request-headers";
 
 function safeProviderCode(payload: unknown): string | undefined {
   const error = typeof payload === "object" && payload !== null && "error" in payload ? payload.error : payload;
@@ -26,7 +27,7 @@ export const createWorkerOpenAIClient: OpenAIClientFactory = (options): OpenAICo
       async create(input: unknown) {
         const response = await fetch(`${options.baseURL.replace(/\/+$/u, "")}/chat/completions`, {
           method: "POST",
-          headers: { authorization: `Bearer ${options.apiKey}`, "content-type": "application/json" },
+          headers: aiRequestHeaders(options.baseURL, options.apiKey),
           body: JSON.stringify(input),
         });
         const payload = await responsePayload(response);

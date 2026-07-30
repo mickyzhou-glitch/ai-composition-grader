@@ -7,6 +7,7 @@ import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
+import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
 import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
@@ -43,7 +44,7 @@ async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null):
 async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string }): Promise<void> {
   const response = await fetch(`${input.baseUrl}/chat/completions`, {
     method: "POST",
-    headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json" },
+    headers: aiRequestHeaders(input.baseUrl, input.apiKey),
     body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "只回复 OK" }], max_tokens: 8 }),
   });
   if (!response.ok) throw new Error("AI_CONNECTION_FAILED");

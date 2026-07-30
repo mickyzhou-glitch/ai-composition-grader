@@ -20,4 +20,23 @@ describe("createWorkerOpenAIClient", () => {
     }));
     vi.unstubAllGlobals();
   });
+
+  it("为 MiMo Chat Completions 同时带上官方 api-key 认证头", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "{}" } }],
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createWorkerOpenAIClient({ apiKey: "mimo-key", baseURL: "https://api.xiaomimimo.com/v1", timeout: 1, maxRetries: 1 });
+    await client.chat.completions.create({ model: "mimo-v2.5", messages: [] });
+
+    expect(fetchMock).toHaveBeenCalledWith("https://api.xiaomimimo.com/v1/chat/completions", expect.objectContaining({
+      headers: {
+        authorization: "Bearer mimo-key",
+        "content-type": "application/json",
+        "api-key": "mimo-key",
+      },
+    }));
+    vi.unstubAllGlobals();
+  });
 });
