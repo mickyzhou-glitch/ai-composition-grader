@@ -307,26 +307,34 @@ export default {
         if (!settings) throw new Error("AI_SETTINGS_INCOMPLETE");
         const apiKey = await configuredApiKey(env, settings.encrypted_api_key);
         if (!apiKey) throw new Error("AI_SETTINGS_INCOMPLETE");
-        const urls = await Promise.all(results.map(({ id }) => createAiImageUrl({ origin: env.APP_ORIGIN, secret: env.AI_FILE_URL_SECRET, reviewId: job.review_id, imageId: id, variant: "ai", expiresAt: Date.now() + 600000 })));
         const adapter = new OpenAIReviewAdapter(
           { getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey }) },
           { clientFactory: createWorkerOpenAIClient },
         );
         const analysisInput = { config: JSON.parse(job.config), teacherGuidance: job.teacher_guidance ?? undefined };
-        let result;
-        try {
-          result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: urls });
-        } catch (error) {
-          if (!(error instanceof AiAdapterError) || error.upstreamStatus !== 403) throw error;
-          // The configured model supports vision. Retry once without asking the
-          // upstream gateway to fetch our signed private Workers URLs itself.
+        const loadInlineImages = async () => {
           const reader = new D1ReviewReader(env.DB);
           const images = await Promise.all(results.map(async ({ id }) => {
             const file = await reader.imageObjectKeyForAi(job.review_id, id, "ai");
             if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
             return { key: file.key, mimeType: file.contentType };
           }));
-          const inlineImageUrls = await loadInlineAiImageUrls(env.FILES, images);
+          return loadInlineAiImageUrls(env.FILES, images);
+        };
+        const isMiMo = new URL(settings.base_url).hostname === "api.xiaomimimo.com";
+        let result;
+        // MiMo supports data URLs directly. Sending private image bytes avoids
+        // depending on MiMo's servers being able to retrieve Workers URLs.
+        const initialImageUrls = isMiMo
+          ? await loadInlineImages()
+          : await Promise.all(results.map(({ id }) => createAiImageUrl({ origin: env.APP_ORIGIN, secret: env.AI_FILE_URL_SECRET, reviewId: job.review_id, imageId: id, variant: "ai", expiresAt: Date.now() + 600000 })));
+        try {
+          result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: initialImageUrls });
+        } catch (error) {
+          if (isMiMo || !(error instanceof AiAdapterError) || error.upstreamStatus !== 403) throw error;
+          // The configured model supports vision. Retry once without asking the
+          // upstream gateway to fetch our signed private Workers URLs itself.
+          const inlineImageUrls = await loadInlineImages();
           result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: inlineImageUrls });
         }
         const now = Date.now();
@@ -334,6 +342,8 @@ export default {
       } catch (error) {
         const code = error instanceof AiAdapterError && error.upstreamStatus
           ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
+          : error instanceof AiAdapterError
+            ? error.code
           : error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
         await env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ?").bind(code, Date.now(), job.id).run();
       }
