@@ -188,7 +188,7 @@ function parseJsonResponse(content: string): unknown {
   return JSON.parse(fenced?.[1] ?? trimmed);
 }
 
-function validateEnvelope(
+function validateUsableEnvelope(
   value: unknown,
   config: AssignmentConfig,
   pageCount: number,
@@ -199,6 +199,26 @@ function validateEnvelope(
       throw new Error("annotation.pageIndex exceeds supplied pages");
     }
   }
+  if (!envelope.readable) return envelope;
+  const report = validateReport(
+    envelope.report,
+    { templateType: "custom" },
+  );
+  if (config.templateType === "preset_self_applause" && report.sampleParagraphs.length !== 5) {
+    throw new Error("preset composition requires five sample paragraphs");
+  }
+  return {
+    ...envelope,
+    report,
+  };
+}
+
+function validateEnvelope(
+  value: unknown,
+  config: AssignmentConfig,
+  pageCount: number,
+): AiReviewEnvelope {
+  const envelope = validateUsableEnvelope(value, config, pageCount);
   if (!envelope.readable) return envelope;
   const report = validateReport(
     envelope.report,
@@ -382,11 +402,19 @@ export class OpenAIReviewAdapter {
           input.imageUrls.length,
         );
       } catch {
-        throw new AiAdapterError(
-          "AI_INVALID_RESPONSE",
-          "AI 返回结果结构无效",
-          502,
-        );
+        try {
+          return validateUsableEnvelope(
+            parseJsonResponse(repaired),
+            input.config,
+            input.imageUrls.length,
+          );
+        } catch {
+          throw new AiAdapterError(
+            "AI_INVALID_RESPONSE",
+            "AI 返回结果结构无效",
+            502,
+          );
+        }
       }
     }
   }

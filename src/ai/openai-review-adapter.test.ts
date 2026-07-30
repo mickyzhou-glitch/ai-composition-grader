@@ -299,6 +299,54 @@ describe("OpenAIReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
+  it("修复后评语仅超出推荐字数时仍保留可用批改结果", async () => {
+    const verboseEnvelope = {
+      ...successEnvelope,
+      report: {
+        ...successEnvelope.report,
+        personalizedComment: "这篇作文选择了真实生活中的礼物故事，能够把人物之间的感情变化写得比较清楚。",
+        painPoints: ["第三段需要继续补充收到礼物时的动作、神态和心理变化，让转折过程更加具体。"],
+      },
+    };
+    const harness = setup([
+      JSON.stringify(verboseEnvelope),
+      JSON.stringify(verboseEnvelope),
+    ]);
+
+    await expect(
+      harness.adapter.analyze({
+        config,
+        imageDataUrls: ["data:image/jpeg;base64,eA=="],
+      }),
+    ).resolves.toEqual(verboseEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("修复后五段范文仅未达到推荐总字数时仍保留可用批改结果", async () => {
+    const shortSampleEnvelope = {
+      ...successEnvelope,
+      report: {
+        ...successEnvelope.report,
+        sampleParagraphs: successEnvelope.report.sampleParagraphs.map((paragraph) => ({
+          ...paragraph,
+          text: "我".repeat(100),
+        })),
+      },
+    };
+    const harness = setup([
+      JSON.stringify(shortSampleEnvelope),
+      JSON.stringify(shortSampleEnvelope),
+    ]);
+
+    await expect(
+      harness.adapter.analyze({
+        config,
+        imageDataUrls: ["data:image/jpeg;base64,eA=="],
+      }),
+    ).resolves.toEqual(shortSampleEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
   it("可以只重新生成优点或需要修改", async () => {
     const items = ["选材真实贴近自己的生活", "礼物线索贯穿全文始终"];
     const harness = setup([JSON.stringify({ items })]);
