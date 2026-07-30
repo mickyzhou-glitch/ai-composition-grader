@@ -12,6 +12,14 @@ vi.mock("next/navigation", () => ({
   useRouter: () => navigation.router,
 }));
 
+const pdfDownloads = vi.hoisted(() => ({
+  single: vi.fn().mockResolvedValue("为自己鼓掌-张小明.pdf"),
+}));
+
+vi.mock("../../lib/pdf-download", () => ({
+  downloadReviewPdf: pdfDownloads.single,
+}));
+
 import ReviewPage from "./ReviewPage";
 
 const review = {
@@ -51,13 +59,10 @@ function deferred<T>() {
 describe("复核页", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.clearAllMocks();
     delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
     delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
   });
-
-  function mockPrintWindow() {
-    return vi.spyOn(window, "open").mockReturnValue({} as Window);
-  }
 
   it("复核与导出入口持续显示自动删除期限", async () => {
     vi.spyOn(globalThis, "fetch")
@@ -180,33 +185,20 @@ describe("复核页", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it("导出时打开浏览器打印页", async () => {
+  it("导出时直接下载 PDF，不打开打印页", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
       .mockImplementationOnce(() => json({ job: null }))
       .mockImplementationOnce(() => json(review));
-    const open = mockPrintWindow();
+    const open = vi.spyOn(window, "open");
     const user = userEvent.setup();
     render(<ReviewPage />);
 
     await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(open).toHaveBeenCalledWith("/print/reviews?id=review-1", "_blank", "noopener");
-  });
-
-  it("浏览器拦截打印窗口时显示错误", async () => {
-    vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => json(review))
-      .mockImplementationOnce(() => json({ job: null }));
-    vi.spyOn(window, "open").mockReturnValue(null);
-    const user = userEvent.setup();
-    render(<ReviewPage />);
-
-    await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "浏览器拦截了打印窗口，请允许弹窗后重试",
-    );
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1");
+    expect(pdfDownloads.single).toHaveBeenCalledWith("review-1");
+    expect(open).not.toHaveBeenCalled();
   });
 
   it("替换图片控件使用 file-label 显示键盘焦点", async () => {

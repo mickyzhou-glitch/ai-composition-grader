@@ -164,7 +164,11 @@ export default function Home() {
               <label><input type="checkbox" checked={reviews.length > 0 && selectedReviewIds.size === reviews.length} onChange={toggleAllReviews} /> 全选</label>
               <span className="muted">已选择 {selectedReviewIds.size} 篇</span>
               <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || batchExporting || exporting !== null} onClick={() => void exportSelectedPdfs()}>
-                {batchExporting ? "正在打包导出…" : `导出所选 ${selectedReviewIds.size} 篇 PDF`}
+                {batchExporting
+                  ? "正在打包导出…"
+                  : selectedReviewIds.size > 1
+                    ? `导出所选 ${selectedReviewIds.size} 篇（ZIP）`
+                    : "导出所选 PDF"}
               </button>
             </div>
           ) : null}
@@ -201,9 +205,7 @@ export default function Home() {
                     disabled={exporting !== null || batchExporting}
                     onClick={() => void exportPdf(review)}
                   >
-                    {exporting === review.id
-                      ? "正在打开打印页…"
-                      : "打印 / 另存 PDF"}
+                    {exporting === review.id ? "正在生成 PDF…" : "下载 PDF"}
                   </button>
                   <button className="button button--danger-quiet" type="button" disabled={deleting === review.id || batchExporting} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
                     {deleting === review.id ? "删除中…" : "删除"}
