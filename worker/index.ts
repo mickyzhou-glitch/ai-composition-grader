@@ -42,10 +42,24 @@ async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null):
 }
 
 async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string }): Promise<void> {
+  // A 1×1 PNG verifies that the configured model accepts the same multimodal
+  // request shape used by essay analysis, rather than only proving text chat.
+  const visionProbe = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  const isMiMo = new URL(input.baseUrl).hostname === "api.xiaomimimo.com";
   const response = await fetch(`${input.baseUrl}/chat/completions`, {
     method: "POST",
     headers: aiRequestHeaders(input.baseUrl, input.apiKey),
-    body: JSON.stringify({ model: input.model, messages: [{ role: "user", content: "只回复 OK" }], max_tokens: 8 }),
+    body: JSON.stringify({
+      model: input.model,
+      messages: [{
+        role: "user",
+        content: [
+          { type: "image_url", image_url: { url: visionProbe } },
+          { type: "text", text: "请确认你能读取图片，只回复 OK" },
+        ],
+      }],
+      ...(isMiMo ? { max_completion_tokens: 16 } : { max_tokens: 16 }),
+    }),
   });
   if (!response.ok) throw new Error("AI_CONNECTION_FAILED");
   const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
