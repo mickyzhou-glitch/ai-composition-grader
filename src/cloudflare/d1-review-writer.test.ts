@@ -52,6 +52,18 @@ describe("D1ReviewWriter", () => {
     expect(run).toHaveBeenCalledOnce();
   });
 
+  it("marks a completed review as exported only for its owner", async () => {
+    const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+    const database = {
+      prepare: vi.fn().mockReturnValue({ bind: vi.fn().mockReturnValue({ run }) }),
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).markExported("teacher-1", "review-1")).resolves.toBe(true);
+
+    expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("status = 'exported'"));
+    expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("owner_id"));
+  });
+
   it("returns only the deleted review's stored image paths", async () => {
     const database = {
       prepare: vi.fn((query: string) => ({

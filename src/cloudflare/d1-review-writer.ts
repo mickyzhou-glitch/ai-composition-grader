@@ -67,6 +67,15 @@ export class D1ReviewWriter {
     return { revision: parsed.expectedRevision + 1 };
   }
 
+  async markExported(ownerId: string, reviewId: string): Promise<boolean> {
+    const updated = await this.database.prepare(`
+      UPDATE reviews SET status = 'exported', updated_at = ?
+      WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND report IS NOT NULL
+        AND status IN ('ready_for_review', 'exported')
+    `).bind(Date.now(), reviewId, ownerId).run();
+    return updated.meta.changes > 0;
+  }
+
   async deleteReview(ownerId: string, reviewId: string): Promise<string[] | null> {
     const images = await this.database.prepare(`
       SELECT original_path, annotation_path, ai_path FROM review_images

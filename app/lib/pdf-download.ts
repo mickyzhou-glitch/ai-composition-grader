@@ -271,10 +271,15 @@ async function fetchReview(reviewId: string) {
   return apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`);
 }
 
+export async function markReviewExported(reviewId: string) {
+  return apiFetch<unknown>(`/api/reviews/${encodeURIComponent(reviewId)}/exported`, { method: "POST" });
+}
+
 export async function downloadReviewPdf(reviewId: string): Promise<string> {
   const review = await fetchReview(reviewId);
   const filename = reviewPdfFilename(review);
   triggerFileDownload(await createReviewPdf(review), filename);
+  await markReviewExported(reviewId);
   return filename;
 }
 
@@ -289,5 +294,6 @@ export async function downloadReviewPdfArchive(reviewIds: string[]): Promise<str
   }
   const filename = "作文批改批量导出.zip";
   triggerFileDownload(await archive.generateAsync({ type: "blob", compression: "DEFLATE" }), filename);
+  await Promise.all(reviewIds.map((reviewId) => markReviewExported(reviewId)));
   return filename;
 }

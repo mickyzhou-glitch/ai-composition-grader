@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PDF_HEADER, triggerFileDownload } from "./pdf-download";
+import { markReviewExported, PDF_HEADER, triggerFileDownload } from "./pdf-download";
 
 describe("PDF 文件下载", () => {
   afterEach(() => {
@@ -26,5 +26,16 @@ describe("PDF 文件下载", () => {
 
   it("所有导出页使用统一的青藤未来报告页眉", () => {
     expect(PDF_HEADER).toBe("青藤未来作文批改报告");
+  });
+
+  it("PDF 下载完成后把记录标记为已导出", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      ok: true,
+      data: { status: "exported" },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+
+    await markReviewExported("review-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/exported", { method: "POST" });
   });
 });

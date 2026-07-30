@@ -166,6 +166,15 @@ export default {
       const deleted = await new D1ReviewWriter(env.DB).deleteSavedAssignment(user.id, decodeURIComponent(savedAssignmentMatch[1]));
       return deleted ? Response.json({ ok: true, data: { deleted: true } }) : apiError("NOT_FOUND", "常用题目不存在", 404);
     }
+    const reviewExportMatch = /^\/api\/reviews\/([^/]+)\/exported$/u.exec(url.pathname);
+    if (reviewExportMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const reviewId = decodeURIComponent(reviewExportMatch[1]);
+      const exported = await new D1ReviewWriter(env.DB).markExported(user.id, reviewId);
+      if (!exported) return apiError("EXPORT_NOT_AVAILABLE", "仅已完成且未变更的批改记录可以标记为已导出", 422);
+      const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
+      return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
+    }
     const reviewMatch = /^\/api\/reviews\/([^/]+)$/u.exec(url.pathname);
     if (reviewMatch && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
