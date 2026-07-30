@@ -343,7 +343,7 @@ export default {
         const code = error instanceof AiAdapterError && error.upstreamStatus
           ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
           : error instanceof AiAdapterError
-            ? error.code
+            ? `${error.code}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
           : error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
         await env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ?").bind(code, Date.now(), job.id).run();
       }

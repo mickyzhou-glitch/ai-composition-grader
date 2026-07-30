@@ -188,12 +188,67 @@ function parseJsonResponse(content: string): unknown {
   return JSON.parse(fenced?.[1] ?? trimmed);
 }
 
+function firstLeafIssue(
+  issue: unknown,
+  prefix: Array<string | number> = [],
+): { path: Array<string | number>; code: string } | null {
+  if (typeof issue !== "object" || issue === null) return null;
+  const path = "path" in issue && Array.isArray(issue.path)
+    ? issue.path.filter((part): part is string | number => typeof part === "string" || typeof part === "number")
+    : [];
+  const combinedPath = [...prefix, ...path];
+  if ("errors" in issue && Array.isArray(issue.errors)) {
+    for (const group of issue.errors) {
+      if (!Array.isArray(group)) continue;
+      for (const nested of group) {
+        const leaf = firstLeafIssue(nested, combinedPath);
+        if (leaf) return leaf;
+      }
+    }
+  }
+  const code = "code" in issue && typeof issue.code === "string" ? issue.code : "invalid";
+  return { path: combinedPath, code };
+}
+
+function safeValidationCode(error: unknown): string {
+  if (error instanceof SyntaxError) return "json_parse";
+  if (error instanceof z.ZodError) {
+    const issue = firstLeafIssue(error.issues[0]);
+    const path = issue?.path.map(String).join("_") || "root";
+    return `schema_${path}_${issue?.code || "invalid"}`.slice(0, 64);
+  }
+  if (!(error instanceof Error)) return "validation_unknown";
+  if (error.message.includes("five sample paragraphs")) return "sample_paragraph_count";
+  if (error.message.includes("annotation.pageIndex")) return "annotation_page_index";
+  if (error.message.includes("off_topic")) return "off_topic_grade";
+  return "validation_unknown";
+}
+
+function normalizeProviderEnvelope(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || !("report" in value)) return value;
+  const report = value.report;
+  if (typeof report !== "object" || report === null || !("painPoints" in report) || typeof report.painPoints !== "string") {
+    return value;
+  }
+  const painPoints = report.painPoints
+    .split(/\r?\n/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return {
+    ...value,
+    report: {
+      ...report,
+      painPoints: painPoints.length > 0 ? painPoints : [report.painPoints.trim()],
+    },
+  };
+}
+
 function validateUsableEnvelope(
   value: unknown,
   config: AssignmentConfig,
   pageCount: number,
 ): AiReviewEnvelope {
-  const envelope = aiReviewEnvelopeSchema.parse(value);
+  const envelope = aiReviewEnvelopeSchema.parse(normalizeProviderEnvelope(value));
   for (const annotation of envelope.annotations) {
     if (annotation.pageIndex >= pageCount) {
       throw new Error("annotation.pageIndex exceeds supplied pages");
@@ -408,11 +463,13 @@ export class OpenAIReviewAdapter {
             input.config,
             input.imageUrls.length,
           );
-        } catch {
+        } catch (validationError) {
           throw new AiAdapterError(
             "AI_INVALID_RESPONSE",
             "AI 返回结果结构无效",
             502,
+            undefined,
+            safeValidationCode(validationError),
           );
         }
       }

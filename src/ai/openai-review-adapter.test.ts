@@ -347,6 +347,30 @@ describe("OpenAIReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
+  it("兼容 MiMo 将需要修改返回为换行分隔字符串", async () => {
+    const mimoEnvelope = {
+      ...successEnvelope,
+      report: {
+        ...successEnvelope.report,
+        painPoints: successEnvelope.report.painPoints.join("\n"),
+      },
+    };
+    const harness = setup([
+      JSON.stringify(mimoEnvelope),
+      JSON.stringify(mimoEnvelope),
+    ]);
+
+    await expect(
+      harness.adapter.analyze({
+        config,
+        imageDataUrls: ["data:image/jpeg;base64,eA=="],
+      }),
+    ).resolves.toMatchObject({
+      readable: true,
+      report: { painPoints: successEnvelope.report.painPoints },
+    });
+  });
+
   it("可以只重新生成优点或需要修改", async () => {
     const items = ["选材真实贴近自己的生活", "礼物线索贯穿全文始终"];
     const harness = setup([JSON.stringify({ items })]);
@@ -497,7 +521,24 @@ describe("OpenAIReviewAdapter", () => {
 
     await expect(
       harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
-    ).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", status: 502 });
+    ).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      status: 502,
+      upstreamCode: "schema_pageWarnings_invalid_type",
+    });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("二次响应不是 JSON 时保留安全的解析错误类别", async () => {
+    const harness = setup(["not-json", "still-not-json"]);
+
+    await expect(
+      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
+    ).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      status: 502,
+      upstreamCode: "json_parse",
+    });
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
