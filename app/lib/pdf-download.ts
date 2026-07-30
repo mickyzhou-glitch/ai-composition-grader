@@ -6,6 +6,7 @@ const PDF_WIDTH = 1152;
 const PDF_HEIGHT = 648;
 const RENDER_SCALE = 2;
 const FONT_FAMILY = '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
+export const PDF_HEADER = "青藤未来作文批改报告";
 
 type CanvasPage = {
   canvas: HTMLCanvasElement;
@@ -85,7 +86,7 @@ function paintPageBackground(context: CanvasRenderingContext2D, title: string, r
   context.fillRect(0, 0, PDF_WIDTH, 12);
   context.fillStyle = "#43635a";
   context.font = `600 14px ${FONT_FAMILY}`;
-  context.fillText("青藤未来作文批改助手 · 作文批改报告", 52, 32);
+  context.fillText(PDF_HEADER, 52, 32);
   context.textAlign = "right";
   context.fillText(`学生：${review.studentName || "未填写"}`, PDF_WIDTH - 52, 32);
   context.textAlign = "left";

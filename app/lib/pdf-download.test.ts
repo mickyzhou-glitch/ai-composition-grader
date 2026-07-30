@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { triggerFileDownload } from "./pdf-download";
+import { PDF_HEADER, triggerFileDownload } from "./pdf-download";
 
 describe("PDF 文件下载", () => {
   afterEach(() => {
@@ -22,5 +22,9 @@ describe("PDF 文件下载", () => {
     expect(click).toHaveBeenCalledOnce();
     expect(open).not.toHaveBeenCalled();
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:review-pdf");
+  });
+
+  it("所有导出页使用统一的青藤未来报告页眉", () => {
+    expect(PDF_HEADER).toBe("青藤未来作文批改报告");
   });
 });
