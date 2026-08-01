@@ -238,8 +238,48 @@ function firstLeafIssue(
   return { path: combinedPath, code };
 }
 
+type ParentFeedbackValidationCode =
+  | "parent_feedback_count"
+  | "parent_feedback_title"
+  | "parent_feedback_greeting";
+
+class ParentFeedbackValidationError extends Error {
+  constructor(readonly validationCode: ParentFeedbackValidationCode) {
+    super("parent feedback validation failed");
+    this.name = "ParentFeedbackValidationError";
+  }
+}
+
+const EXPECTED_PARENT_FEEDBACKS = [
+  { style: "warm", title: "亲切详细" },
+  { style: "professional", title: "专业清晰" },
+  { style: "concise", title: "简短微信版" },
+] as const;
+
+function validateParentFeedbackSemantics(
+  report: EvaluationReport,
+  studentName?: string,
+): void {
+  const feedbacks = report.parentFeedbacks;
+  if (feedbacks?.length !== EXPECTED_PARENT_FEEDBACKS.length) {
+    throw new ParentFeedbackValidationError("parent_feedback_count");
+  }
+  if (feedbacks.some((feedback, index) => {
+    const expected = EXPECTED_PARENT_FEEDBACKS[index];
+    return feedback.style !== expected.style || feedback.title !== expected.title;
+  })) {
+    throw new ParentFeedbackValidationError("parent_feedback_title");
+  }
+  const normalizedName = studentName?.trim() ?? "";
+  const expectedGreeting = normalizedName ? `${normalizedName}家长` : "家长您好";
+  if (feedbacks.some(({ content }) => !content.startsWith(expectedGreeting))) {
+    throw new ParentFeedbackValidationError("parent_feedback_greeting");
+  }
+}
+
 function safeValidationCode(error: unknown): string {
   if (error instanceof SyntaxError) return "json_parse";
+  if (error instanceof ParentFeedbackValidationError) return error.validationCode;
   if (error instanceof z.ZodError) {
     const issue = firstLeafIssue(error.issues[0]);
     const path = issue?.path.map(String).join("_") || "root";
@@ -247,7 +287,6 @@ function safeValidationCode(error: unknown): string {
   }
   if (!(error instanceof Error)) return "validation_unknown";
   if (error.message.includes("five sample paragraphs")) return "sample_paragraph_count";
-  if (error.message.includes("three parent feedbacks")) return "parent_feedback_count";
   if (error.message.includes("annotation.pageIndex")) return "annotation_page_index";
   if (error.message.includes("off_topic")) return "off_topic_grade";
   return "validation_unknown";
@@ -276,10 +315,13 @@ function validateUsableEnvelope(
   value: unknown,
   config: AssignmentConfig,
   pageCount: number,
+  studentName?: string,
 ): AiReviewEnvelope {
   if (
     typeof value === "object" &&
     value !== null &&
+    "readable" in value &&
+    value.readable === true &&
     "report" in value &&
     typeof value.report === "object" &&
     value.report !== null &&
@@ -287,7 +329,7 @@ function validateUsableEnvelope(
     Array.isArray(value.report.parentFeedbacks) &&
     value.report.parentFeedbacks.length !== 3
   ) {
-    throw new Error("report requires exactly three parent feedbacks");
+    throw new ParentFeedbackValidationError("parent_feedback_count");
   }
   const envelope = aiReviewEnvelopeSchema.parse(normalizeProviderEnvelope(value));
   for (const annotation of envelope.annotations) {
@@ -300,9 +342,7 @@ function validateUsableEnvelope(
     envelope.report,
     { templateType: "custom" },
   );
-  if (report.parentFeedbacks?.length !== 3) {
-    throw new Error("report requires exactly three parent feedbacks");
-  }
+  validateParentFeedbackSemantics(report, studentName);
   if (config.templateType === "preset_self_applause" && report.sampleParagraphs.length !== 5) {
     throw new Error("preset composition requires five sample paragraphs");
   }
@@ -316,8 +356,9 @@ function validateEnvelope(
   value: unknown,
   config: AssignmentConfig,
   pageCount: number,
+  studentName?: string,
 ): AiReviewEnvelope {
-  const envelope = validateUsableEnvelope(value, config, pageCount);
+  const envelope = validateUsableEnvelope(value, config, pageCount, studentName);
   if (!envelope.readable) return envelope;
   const report = validateReport(
     envelope.report,
@@ -455,6 +496,7 @@ export class OpenAIReviewAdapter {
         parseJsonResponse(content),
         input.config,
         input.imageUrls.length,
+        input.studentName,
       );
       if (firstEnvelope.readable) return firstEnvelope;
 
@@ -482,6 +524,7 @@ export class OpenAIReviewAdapter {
         parseJsonResponse(continued),
         input.config,
         input.imageUrls.length,
+        input.studentName,
       );
     } catch {
       const repaired = await completionContent(client, {
@@ -504,6 +547,7 @@ export class OpenAIReviewAdapter {
           parseJsonResponse(repaired),
           input.config,
           input.imageUrls.length,
+          input.studentName,
         );
       } catch {
         try {
@@ -511,6 +555,7 @@ export class OpenAIReviewAdapter {
             parseJsonResponse(repaired),
             input.config,
             input.imageUrls.length,
+            input.studentName,
           );
         } catch (validationError) {
           throw new AiAdapterError(
