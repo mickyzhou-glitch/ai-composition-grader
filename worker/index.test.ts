@@ -10,6 +10,60 @@ function workerEnv(assetResponse: () => Response, database?: unknown) {
 }
 
 describe("Cloudflare Worker", () => {
+  it("队列分析失败时原子结束任务并释放作文的分析中状态", async () => {
+    const prepared: Array<{ sql: string; bindings: unknown[] }> = [];
+    const prepare = vi.fn((sql: string) => {
+      const statement = {
+        sql,
+        bindings: [] as unknown[],
+        bind(...bindings: unknown[]) {
+          this.bindings = bindings;
+          return this;
+        },
+        async first() {
+          if (sql.includes("INNER JOIN reviews")) {
+            return {
+              id: "job-1",
+              review_id: "review-1",
+              owner_id: "owner-1",
+              teacher_guidance: null,
+              config: "{}",
+              student_name: "",
+            };
+          }
+          if (sql.includes("FROM settings")) return null;
+          throw new Error(`Unexpected first query: ${sql}`);
+        },
+        async all() {
+          if (sql.includes("FROM review_images")) return { results: [{ id: 1 }] };
+          throw new Error(`Unexpected all query: ${sql}`);
+        },
+        async run() {
+          return { success: true };
+        },
+      };
+      prepared.push(statement);
+      return statement;
+    });
+    const batch = vi.fn(async (statements: unknown[]) => statements);
+    const ack = vi.fn();
+
+    await worker.queue({
+      messages: [{ body: { jobId: "job-1" }, ack }],
+    } as never, {
+      DB: { prepare, batch },
+    } as never);
+
+    expect(batch).toHaveBeenCalledOnce();
+    const batched = batch.mock.calls[0][0] as Array<{ sql: string; bindings: unknown[] }>;
+    expect(batched).toHaveLength(2);
+    expect(batched[0].sql).toContain("UPDATE reviews SET status = 'failed', analysis_run_id = NULL");
+    expect(batched[0].sql).toContain("analysis_run_id = ?");
+    expect(batched[0].bindings).toEqual(expect.arrayContaining(["review-1", "owner-1", "job-1"]));
+    expect(batched[1].sql).toContain("UPDATE analysis_jobs SET status = 'failed'");
+    expect(ack).toHaveBeenCalledOnce();
+  });
+
   it("answers the unauthenticated health endpoint without requiring secrets", async () => {
     const response = await worker.fetch(
       new Request("https://grader.workers.dev/api/health"),

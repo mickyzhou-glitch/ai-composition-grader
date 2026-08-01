@@ -114,6 +114,27 @@ function setup(contents: Array<string | null | Error>) {
 }
 
 describe("OpenAIReviewAdapter", () => {
+  it("根据批注类别补全模型漏掉的 isHighlight", async () => {
+    const envelopeWithoutHighlight = {
+      ...successEnvelope,
+      annotations: successEnvelope.annotations.map(({ pageIndex, x, y, category, anchorText, comment }) => ({
+        pageIndex,
+        x,
+        y,
+        category,
+        anchorText,
+        comment,
+      })),
+    };
+    const harness = setup([JSON.stringify(envelopeWithoutHighlight)]);
+
+    await expect(harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).resolves.toEqual(successEnvelope);
+    expect(harness.create).toHaveBeenCalledOnce();
+  });
+
   it("在由服务器保管密钥的 Worker 运行时可以发起 AI 请求", async () => {
     vi.stubGlobal("window", { document: {} });
     vi.stubGlobal("navigator", {});

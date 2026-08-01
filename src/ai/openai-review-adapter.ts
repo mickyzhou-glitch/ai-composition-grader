@@ -294,16 +294,23 @@ function safeValidationCode(error: unknown): string {
 
 function normalizeProviderEnvelope(value: unknown): unknown {
   if (typeof value !== "object" || value === null || !("report" in value)) return value;
-  const report = value.report;
+  const annotations = "annotations" in value && Array.isArray(value.annotations)
+    ? value.annotations.map((annotation) => {
+      if (typeof annotation !== "object" || annotation === null || !("category" in annotation)) return annotation;
+      return { ...annotation, isHighlight: annotation.category === "highlight" };
+    })
+    : undefined;
+  const normalizedEnvelope = annotations ? { ...value, annotations } : value;
+  const report = normalizedEnvelope.report;
   if (typeof report !== "object" || report === null || !("painPoints" in report) || typeof report.painPoints !== "string") {
-    return value;
+    return normalizedEnvelope;
   }
   const painPoints = report.painPoints
     .split(/\r?\n/u)
     .map((item) => item.trim())
     .filter(Boolean);
   return {
-    ...value,
+    ...normalizedEnvelope,
     report: {
       ...report,
       painPoints: painPoints.length > 0 ? painPoints : [report.painPoints.trim()],

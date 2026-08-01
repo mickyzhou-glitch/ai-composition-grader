@@ -375,7 +375,11 @@ export default {
           : error instanceof AiAdapterError
             ? `${error.code}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
           : error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
-        await env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ?").bind(code, Date.now(), job.id).run();
+        const now = Date.now();
+        await env.DB.batch([
+          env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
+          env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").bind(code, now, job.id),
+        ]);
       }
       message.ack();
     }
