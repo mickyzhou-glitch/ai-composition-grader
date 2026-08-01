@@ -47,6 +47,7 @@ const report: EvaluationReport = {
     text: "我".repeat(120),
     suggestion: "补充细节。",
   })),
+  parentFeedbacks: [],
 };
 
 const annotation: Annotation = {

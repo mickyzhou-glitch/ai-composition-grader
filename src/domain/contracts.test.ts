@@ -99,7 +99,12 @@ describe("evaluationReportSchema", () => {
   });
 
   it("将缺少家长反馈的历史报告归一化为空数组", () => {
-    const { grade: _grade, diagnostics: _diagnostics, parentFeedbacks: _parentFeedbacks, ...legacyReport } = validReport;
+    const legacyReport = {
+      ...validReport,
+      grade: undefined,
+      diagnostics: undefined,
+      parentFeedbacks: undefined,
+    };
 
     expect(evaluationReportSchema.parse({
       ...legacyReport,
