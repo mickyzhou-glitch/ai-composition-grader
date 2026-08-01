@@ -56,14 +56,20 @@ export function ParentFeedbackEditor({
   }
 
   return (
-    <section aria-labelledby={`${instanceId}-heading`}>
-      <h2 id={`${instanceId}-heading`}>给家长的反馈</h2>
-      {feedbacks.length === 0 ? <p>暂无家长反馈，请重新分析作文后生成。</p> : (
+    <section className="parent-feedback-panel" aria-labelledby={`${instanceId}-heading`}>
+      <div className="parent-feedback-heading">
+        <div>
+          <p className="eyebrow">家校沟通</p>
+          <h2 id={`${instanceId}-heading`}>给家长的反馈</h2>
+        </div>
+        {feedbacks.length > 0 ? <p>已生成 3 份，可选择后修改</p> : null}
+      </div>
+      {feedbacks.length === 0 ? <p className="parent-feedback-empty">暂无家长反馈，请重新分析作文后生成。</p> : (
         <>
-          <p>已生成 3 份，可选择后修改</p>
-          <div role="tablist" aria-label="家长反馈版本">
+          <div className="parent-feedback-tabs" role="tablist" aria-label="家长反馈版本">
             {feedbacks.map((feedback) => (
               <button
+                className="parent-feedback-tab"
                 key={feedback.style}
                 type="button"
                 role="tab"
@@ -80,6 +86,7 @@ export function ParentFeedbackEditor({
             const isActive = feedback.style === activeFeedback.style;
             return (
               <div
+                className="parent-feedback-editor"
                 key={feedback.style}
                 role="tabpanel"
                 id={panelId(instanceId, feedback.style)}
@@ -98,8 +105,9 @@ export function ParentFeedbackEditor({
                       disabled={disabled}
                       onChange={(event) => updateActiveContent(event.target.value)}
                     />
-                    <div>
+                    <div className="parent-feedback-actions">
                       <button
+                        className="button button--quiet"
                         type="button"
                         disabled={disabled || !savedActiveFeedback || savedActiveFeedback.content === feedback.content}
                         onClick={() => updateActiveContent(savedActiveFeedback?.content ?? feedback.content)}
@@ -107,6 +115,7 @@ export function ParentFeedbackEditor({
                         恢复原文
                       </button>
                       <button
+                        className="button button--primary"
                         type="button"
                         disabled={disabled || !feedback.content.trim()}
                         onClick={() => void copyActiveFeedback()}

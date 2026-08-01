@@ -15,12 +15,19 @@ vi.mock("next/navigation", () => ({
 const pdfDownloads = vi.hoisted(() => ({
   single: vi.fn().mockResolvedValue("为自己鼓掌-张小明.pdf"),
 }));
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 vi.mock("../../lib/pdf-download", () => ({
   downloadReviewPdf: pdfDownloads.single,
 }));
 
 import ReviewPage from "./ReviewPage";
+
+const parentFeedbacks = [
+  { style: "warm" as const, title: "亲切详细", content: "家长您好，孩子这次作文选材真实，第三段可以补清事情的起因。" },
+  { style: "professional" as const, title: "专业清晰", content: "家长您好，本次作文选材切题；建议第三段补足冲突起因。" },
+  { style: "concise" as const, title: "简短微信版", content: "家长您好，作文选材真实，第三段再补清事情起因。" },
+];
 
 const review = {
   id: "review-1",
@@ -37,6 +44,7 @@ const review = {
     painPoints: ["结尾快"], commonIssues: ["句式单一"], revisionSuggestions: ["补感受"],
     scores: { themeIntent: 8, contentSelection: 8, structure: 7, languageExpression: 7, writingConventions: 3, total: 33, level: "二类作文" },
     sampleParagraphs: [{ title: "示范段", text: "示范正文", suggestion: "修改建议" }],
+    parentFeedbacks,
   },
   hasPdf: false,
   pdfFilename: null,
@@ -62,6 +70,11 @@ describe("复核页", () => {
     vi.clearAllMocks();
     delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
     delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
+    if (originalClipboard) {
+      Object.defineProperty(navigator, "clipboard", originalClipboard);
+    } else {
+      Reflect.deleteProperty(navigator, "clipboard");
+    }
   });
 
   it("复核与导出入口持续显示自动删除期限", async () => {
@@ -71,6 +84,127 @@ describe("复核页", () => {
     render(<ReviewPage />);
 
     expect(await screen.findByRole("note")).toHaveTextContent("导出 PDF 不会延长保存期限");
+  });
+
+  it("在状态提示之后、作文复核工作区之前展示三份家长反馈", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+
+    const panel = await screen.findByRole("region", { name: "给家长的反馈" });
+    const retentionNote = screen.getByRole("note");
+    const workspace = screen.getByRole("region", { name: "作文复核工作区" });
+
+    expect(retentionNote.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(panel.compareDocumentPosition(workspace) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "亲切详细" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getAllByRole("tab", { name: /亲切详细|专业清晰|简短微信版/ })).toHaveLength(3);
+  });
+
+  it("修改反馈后可保存完整 report，保存结果成为新的恢复基线", async () => {
+    const savedContent = "修改后的家长反馈";
+    const savedReview = {
+      ...review,
+      revision: 2,
+      report: {
+        ...review.report,
+        parentFeedbacks: [
+          { ...parentFeedbacks[0], content: savedContent },
+          parentFeedbacks[1],
+          parentFeedbacks[2],
+        ],
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(savedReview));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    const editor = await screen.findByLabelText("亲切详细家长反馈");
+    await user.clear(editor);
+    await user.type(editor, savedContent);
+    expect(screen.getByRole("button", { name: "保存复核" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toMatchObject({
+      report: {
+        parentFeedbacks: [
+          { style: "warm", title: "亲切详细", content: savedContent },
+          parentFeedbacks[1],
+          parentFeedbacks[2],
+        ],
+      },
+    });
+
+    await user.clear(editor);
+    await user.type(editor, "保存后的第二次修改");
+    await user.click(screen.getByRole("button", { name: "恢复原文" }));
+    expect(editor).toHaveValue(savedContent);
+  });
+
+  it("复制家长反馈成功时显示页面提示", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "复制反馈" }));
+
+    expect(writeText).toHaveBeenCalledWith(parentFeedbacks[0].content);
+    expect(await screen.findByRole("status")).toHaveTextContent("家长反馈已复制");
+  });
+
+  it("复制家长反馈失败时显示手动复制说明", async () => {
+    const user = userEvent.setup();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "复制反馈" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法自动复制，请选中文本后手动复制。");
+  });
+
+  it("分析排队或运行时锁定家长反馈编辑和操作", async () => {
+    const queuedJob = {
+      id: "job-1", reviewId: "review-1", status: "queued", progressStage: "queued",
+      message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    vi.spyOn(window, "setInterval").mockImplementation(() => 1 as never);
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: queuedJob }));
+    render(<ReviewPage />);
+
+    expect(await screen.findByLabelText("亲切详细家长反馈")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "恢复原文" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "复制反馈" })).toBeDisabled();
+  });
+
+  it("旧报告显示家长反馈空状态且保留原复核编辑器", async () => {
+    const legacyReview = {
+      ...review,
+      report: { ...review.report, parentFeedbacks: undefined },
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(legacyReview))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+
+    expect(await screen.findByText("暂无家长反馈，请重新分析作文后生成。")).toBeInTheDocument();
+    expect(screen.getByLabelText("优点一")).toHaveValue("真诚");
   });
 
   it("重新分析时把老师观点一并提交", async () => {

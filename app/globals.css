@@ -257,6 +257,18 @@ textarea { min-height: 100px; resize: vertical; }
 .analysis-guidance textarea { min-height: 64px; resize: vertical; }
 .retake-banner { display: grid; grid-template-columns: auto 1fr; gap: 5px 16px; margin-bottom: 18px; padding: 14px 18px; border: 1px solid #e4c5c0; border-radius: 10px; background: var(--danger-soft); color: var(--danger-dark); }
 .retake-banner b { grid-row: 1 / 3; align-self: center; }
+.parent-feedback-panel { margin: 0 0 28px; padding: 24px; border: 1px solid var(--line); border-top: 3px solid var(--teal); border-radius: 12px; background: var(--ivory); box-shadow: 0 6px 18px rgb(0 75 56 / 5%); }
+.parent-feedback-heading { display: flex; align-items: end; justify-content: space-between; gap: 18px; margin-bottom: 16px; }
+.parent-feedback-heading h2 { margin: 4px 0 0; font-size: 1.35rem; }
+.parent-feedback-heading > p { margin: 0; color: var(--muted); font-size: .85rem; }
+.parent-feedback-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 5px; margin-bottom: 14px; }
+.parent-feedback-tab { min-width: 0; min-height: 42px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px 8px 0 0; background: #e5eeeb; color: var(--muted); cursor: pointer; font-weight: 700; }
+.parent-feedback-tab[aria-selected="true"] { border-color: var(--teal); background: #fff; color: var(--teal); }
+.parent-feedback-editor { min-width: 0; }
+.parent-feedback-editor > label { display: block; margin-bottom: 6px; color: #40514b; font-size: .78rem; font-weight: 700; }
+.parent-feedback-editor textarea { width: 100%; min-height: 220px; resize: vertical; line-height: 1.75; }
+.parent-feedback-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.parent-feedback-empty { margin: 0; padding: 24px 18px; border: 1px dashed #bed2ca; border-radius: 10px; color: var(--muted); text-align: center; }
 .review-grid { display: grid; gap: 28px; }
 .photo-pane, .report-pane { min-width: 0; }
 .page-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
@@ -438,6 +450,12 @@ textarea { min-height: 100px; resize: vertical; }
   .confirm-assignment { padding: 16px; }
   .review-page { width: calc(100% - 20px); padding-bottom: 56px; }
   .review-heading h1 { font-size: 2.15rem; }
+  .parent-feedback-panel { padding: 16px; }
+  .parent-feedback-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .parent-feedback-tabs { grid-template-columns: 1fr; }
+  .parent-feedback-tab { border-radius: 8px; }
+  .parent-feedback-actions { display: grid; grid-template-columns: 1fr; }
+  .parent-feedback-actions .button { width: 100%; }
   .review-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .review-actions .analysis-guidance { grid-column: 1 / -1; }
   .review-actions .button { width: 100%; }

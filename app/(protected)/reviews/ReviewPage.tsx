@@ -12,6 +12,7 @@ import {
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { ParentFeedbackEditor } from "../../components/ParentFeedbackEditor";
 import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
 import { ReportEditor, type FeedbackSection } from "../../components/ReportEditor";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -522,6 +523,22 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         {analysisJob ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
         <div className={`privacy-note ${expiresSoon(review.expiresAt) ? "expiry-notice--urgent" : ""}`} role="note">{expiryNotice(review.expiresAt ?? null)}</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
+        {report ? (
+          <ParentFeedbackEditor
+            feedbacks={report.parentFeedbacks ?? []}
+            savedFeedbacks={review.report?.parentFeedbacks ?? []}
+            disabled={busy !== null || analysisActive}
+            onChange={(parentFeedbacks) => changeReport({ ...report, parentFeedbacks })}
+            onCopySuccess={() => {
+              setError("");
+              setNotice("家长反馈已复制");
+            }}
+            onCopyError={() => {
+              setNotice("");
+              setError("无法自动复制，请选中文本后手动复制。");
+            }}
+          />
+        ) : null}
 
         <section className="review-grid" aria-label="作文复核工作区">
           <div className="photo-pane">
