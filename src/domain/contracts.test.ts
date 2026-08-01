@@ -4,12 +4,18 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   createEvaluationReportSchema,
+  evaluationReportSchema,
   privacyUploadConsentSchema,
   scoreLevelSchema,
 } from "./contracts";
 import { deriveLevel, validateReport } from "./report-validation";
 
 const paragraph = "我".repeat(120);
+const parentFeedbacks = [
+  { style: "warm" as const, title: "亲切详细", content: "家长您好，这次作文选材真实，第三段可以补写争执原因。" },
+  { style: "professional" as const, title: "专业清晰", content: "本次作文选材切题；建议第三段补足冲突起因。" },
+  { style: "concise" as const, title: "简短微信版", content: "家长您好，作文选材真实，第三段再补清争执原因。" },
+];
 
 const validReport = {
   themeFit: "fits" as const,
@@ -30,6 +36,7 @@ const validReport = {
     text: paragraph,
     suggestion: "补充动作细节。",
   })),
+  parentFeedbacks,
 };
 
 describe("assignmentConfigSchema", () => {
@@ -87,6 +94,52 @@ describe("annotationSchema", () => {
 });
 
 describe("evaluationReportSchema", () => {
+  it("接受并保留固定顺序的三份家长反馈", () => {
+    expect(evaluationReportSchema.parse(validReport).parentFeedbacks).toEqual(parentFeedbacks);
+  });
+
+  it("将缺少家长反馈的历史报告归一化为空数组", () => {
+    const { grade: _grade, diagnostics: _diagnostics, parentFeedbacks: _parentFeedbacks, ...legacyReport } = validReport;
+
+    expect(evaluationReportSchema.parse({
+      ...legacyReport,
+      scores: {
+        themeIntent: 8,
+        contentSelection: 8,
+        structure: 7,
+        languageExpression: 7,
+        writingConventions: 4,
+        total: 34,
+        level: "优秀作文",
+      },
+    }).parentFeedbacks).toEqual([]);
+  });
+
+  it.each([
+    ["少于三项", parentFeedbacks.slice(0, 2)],
+    ["顺序错误", [parentFeedbacks[1], parentFeedbacks[0], parentFeedbacks[2]]],
+    ["样式重复", [parentFeedbacks[0], { ...parentFeedbacks[1], style: "warm" as const }, parentFeedbacks[2]]],
+  ])("拒绝%s的非空家长反馈列表", (_reason, invalidParentFeedbacks) => {
+    expect(() => evaluationReportSchema.parse({
+      ...validReport,
+      parentFeedbacks: invalidParentFeedbacks,
+    })).toThrow();
+  });
+
+  it.each([
+    ["title", "   "],
+    ["content", "   "],
+  ])("拒绝空白的家长反馈%s", (field, value) => {
+    expect(() => evaluationReportSchema.parse({
+      ...validReport,
+      parentFeedbacks: [
+        { ...parentFeedbacks[0], [field]: value },
+        parentFeedbacks[1],
+        parentFeedbacks[2],
+      ],
+    })).toThrow();
+  });
+
   it("接受无数值的七档等级和四维诊断", () => {
     const result = createEvaluationReportSchema("preset_self_applause").safeParse({
       ...validReport,

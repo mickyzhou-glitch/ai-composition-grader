@@ -136,6 +136,32 @@ export const sampleParagraphSchema = z.object({
 });
 export type SampleParagraph = z.infer<typeof sampleParagraphSchema>;
 
+export const parentFeedbackStyleSchema = z.enum(["warm", "professional", "concise"]);
+export type ParentFeedbackStyle = z.infer<typeof parentFeedbackStyleSchema>;
+
+const parentFeedbackTextSchema = z.object({
+  title: z.string().trim().min(1),
+  content: z.string().trim().min(1),
+});
+const warmParentFeedbackSchema = parentFeedbackTextSchema.extend({ style: z.literal("warm") });
+const professionalParentFeedbackSchema = parentFeedbackTextSchema.extend({ style: z.literal("professional") });
+const conciseParentFeedbackSchema = parentFeedbackTextSchema.extend({ style: z.literal("concise") });
+export const parentFeedbackSchema = z.discriminatedUnion("style", [
+  warmParentFeedbackSchema,
+  professionalParentFeedbackSchema,
+  conciseParentFeedbackSchema,
+]);
+export type ParentFeedback = z.infer<typeof parentFeedbackSchema>;
+
+const parentFeedbacksSchema = z.union([
+  z.tuple([]),
+  z.tuple([
+    warmParentFeedbackSchema,
+    professionalParentFeedbackSchema,
+    conciseParentFeedbackSchema,
+  ]),
+]).default([]);
+
 const reportBaseSchema = z.object({
   themeFit: z.enum(["fits", "partial", "off_topic"]),
   themeReason: z.string().trim().min(1),
@@ -144,6 +170,7 @@ const reportBaseSchema = z.object({
   commonIssues: z.array(z.string()),
   revisionSuggestions: z.array(z.string()),
   sampleParagraphs: z.array(sampleParagraphSchema).min(1).max(10),
+  parentFeedbacks: parentFeedbacksSchema,
 });
 
 const currentEvaluationReportSchema = reportBaseSchema.extend({
@@ -199,10 +226,11 @@ export const EvaluationReportSchema = evaluationReportSchema;
  * 持久化层与旧测试夹具可能仍携带 scores；读取和保存时会由 schema
  * 归一化为 CurrentEvaluationReport。界面层据此提供安全的历史回退。
  */
-export type EvaluationReport = Omit<CurrentEvaluationReport, "grade" | "diagnostics"> & {
+export type EvaluationReport = Omit<CurrentEvaluationReport, "grade" | "diagnostics" | "parentFeedbacks"> & {
   grade?: CompositionGrade;
   diagnostics?: Diagnostics;
   scores?: z.infer<typeof legacyScoreBreakdownSchema>;
+  parentFeedbacks?: ParentFeedback[];
 };
 
 function countChineseCharacters(value: string): number {
