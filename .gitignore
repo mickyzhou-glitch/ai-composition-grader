@@ -46,6 +46,7 @@ yarn-error.log*
 
 # local application data
 /.data/
+/.superpowers/
 
 # vercel
 .vercel
