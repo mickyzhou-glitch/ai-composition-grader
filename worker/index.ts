@@ -324,7 +324,7 @@ export default {
   },
   async queue(batch: MessageBatch<{ jobId: string }>, env: WorkerEnv): Promise<void> {
     for (const message of batch.messages) {
-      const job = await env.DB.prepare("SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id, analysis_jobs.teacher_guidance, reviews.config FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id WHERE analysis_jobs.id = ? AND analysis_jobs.status = 'queued'").bind(message.body.jobId).first<{ id: string; review_id: string; owner_id: string; teacher_guidance: string | null; config: string }>();
+      const job = await env.DB.prepare("SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id, analysis_jobs.teacher_guidance, reviews.config, reviews.student_name FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id WHERE analysis_jobs.id = ? AND analysis_jobs.status = 'queued'").bind(message.body.jobId).first<{ id: string; review_id: string; owner_id: string; teacher_guidance: string | null; config: string; student_name: string }>();
       if (!job) { message.ack(); continue; }
       try {
         await env.DB.prepare("UPDATE analysis_jobs SET status = 'running', progress_stage = 'reading_images', started_at = ? WHERE id = ?").bind(Date.now(), job.id).run();
@@ -337,7 +337,11 @@ export default {
           { getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey }) },
           { clientFactory: createWorkerOpenAIClient },
         );
-        const analysisInput = { config: JSON.parse(job.config), teacherGuidance: job.teacher_guidance ?? undefined };
+        const analysisInput = {
+          config: JSON.parse(job.config),
+          teacherGuidance: job.teacher_guidance ?? undefined,
+          studentName: job.student_name || undefined,
+        };
         const loadInlineImages = async () => {
           const reader = new D1ReviewReader(env.DB);
           const images = await Promise.all(results.map(async ({ id }) => {

@@ -314,9 +314,11 @@ describe("AnalysisJobService", () => {
     const started = deferred<void>();
     const release = deferred<void>();
     const calls: string[] = [];
+    let analyzeInput: Parameters<AnalysisExecutionService["analyze"]>[0] | undefined;
     const executor: AnalysisExecutionService = {
-      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
-      analyze: async () => {
+      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="], studentName: "艾绮" }),
+      analyze: async (input) => {
+        analyzeInput = input;
         calls.push("analyze");
         started.resolve();
         await release.promise;
@@ -354,6 +356,7 @@ describe("AnalysisJobService", () => {
     release.resolve();
     await first;
 
+    expect(analyzeInput).toMatchObject({ studentName: "艾绮" });
     expect(calls).toEqual([
       "generating_review",
       "analyze",

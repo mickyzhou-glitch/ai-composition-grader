@@ -28,8 +28,14 @@ export interface AnalysisExecutionService {
     token: AnalysisToken;
     config: AssignmentConfig;
     imageDataUrls: string[];
+    studentName?: string;
   }>;
-  analyze(input: { config: AssignmentConfig; imageDataUrls: string[]; teacherGuidance?: string }): Promise<AiReviewEnvelope>;
+  analyze(input: {
+    config: AssignmentConfig;
+    imageDataUrls: string[];
+    teacherGuidance?: string;
+    studentName?: string;
+  }): Promise<AiReviewEnvelope>;
   save(
     ownerId: string,
     reviewId: string,
@@ -147,6 +153,7 @@ export class AnalysisWorker {
         config: prepared.config,
         imageDataUrls: prepared.imageDataUrls,
         teacherGuidance: claim.teacherGuidance ?? undefined,
+        studentName: prepared.studentName,
       });
       this.assertClaimCurrent(claimLost, claim.id);
       claim = this.jobs.updateProgress(claim, "validating_result");

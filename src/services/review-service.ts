@@ -27,6 +27,7 @@ export interface AiReviewer {
     config: AssignmentConfig;
     imageDataUrls: string[];
     teacherGuidance?: string;
+    studentName?: string;
   }): Promise<AiReviewEnvelope>;
   rewriteSample?(input: RewriteSampleInput): Promise<{ text: string }>;
   rewriteFeedback?(input: RewriteFeedbackInput): Promise<{ items: string[] }>;
@@ -39,6 +40,7 @@ export interface PreparedReviewAnalysis {
   token: AnalysisToken;
   config: AssignmentConfig;
   imageDataUrls: string[];
+  studentName?: string;
 }
 
 /** Carries the durable review token when preparation fails after it began. */
@@ -350,7 +352,12 @@ export class ReviewService {
             return `data:image/jpeg;base64,${data.toString("base64")}`;
           }),
         );
-        return { token, config: review.config, imageDataUrls };
+        return {
+          token,
+          config: review.config,
+          imageDataUrls,
+          studentName: review.studentName || undefined,
+        };
       } catch (error) {
         throw new ReviewPreparationError(token, error);
       }
@@ -358,12 +365,15 @@ export class ReviewService {
   }
 
   async analyzePrepared(
-    prepared: Pick<PreparedReviewAnalysis, "config" | "imageDataUrls"> & { teacherGuidance?: string },
+    prepared: Pick<PreparedReviewAnalysis, "config" | "imageDataUrls" | "studentName"> & {
+      teacherGuidance?: string;
+    },
   ): Promise<AiReviewEnvelope> {
     return this.aiReviewer.analyze({
       config: prepared.config,
       imageDataUrls: prepared.imageDataUrls,
       teacherGuidance: prepared.teacherGuidance,
+      studentName: prepared.studentName,
     });
   }
 

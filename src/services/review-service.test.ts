@@ -108,6 +108,21 @@ describe("ReviewService analysis CAS", () => {
     } as never);
   }
 
+  it("将已保存的学生姓名传给 AI 分析", async () => {
+    const analyze = vi.fn(async () => readyEnvelope);
+    const service = serviceFor(analyze);
+    await service.update(OWNER_ID, "review-1", {
+      expectedRevision: 1,
+      studentName: "艾绮",
+    });
+
+    await service.analyze(OWNER_ID, "review-1");
+
+    expect(analyze).toHaveBeenCalledWith(expect.objectContaining({
+      studentName: "艾绮",
+    }));
+  });
+
   it("分析期间改配置时丢弃旧结果且保持新配置的 draft", async () => {
     const ai = deferred<AiReviewEnvelope>();
     const analyze = vi.fn(() => ai.promise);
