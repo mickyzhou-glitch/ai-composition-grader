@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 
 import type { ParentFeedback, ParentFeedbackStyle } from "@/src/domain/contracts";
 
@@ -13,12 +13,12 @@ export interface ParentFeedbackEditorProps {
   onCopyError: () => void;
 }
 
-function tabId(style: ParentFeedbackStyle) {
-  return `parent-feedback-tab-${style}`;
+function tabId(instanceId: string, style: ParentFeedbackStyle) {
+  return `${instanceId}-tab-${style}`;
 }
 
-function panelId(style: ParentFeedbackStyle) {
-  return `parent-feedback-panel-${style}`;
+function panelId(instanceId: string, style: ParentFeedbackStyle) {
+  return `${instanceId}-panel-${style}`;
 }
 
 export function ParentFeedbackEditor({
@@ -29,6 +29,7 @@ export function ParentFeedbackEditor({
   onCopySuccess,
   onCopyError,
 }: ParentFeedbackEditorProps) {
+  const instanceId = useId();
   const [activeStyle, setActiveStyle] = useState<ParentFeedbackStyle>("warm");
   const activeFeedback = feedbacks.find((feedback) => feedback.style === activeStyle) ?? feedbacks[0];
   const savedActiveFeedback = activeFeedback
@@ -55,8 +56,8 @@ export function ParentFeedbackEditor({
   }
 
   return (
-    <section aria-labelledby="parent-feedback-heading">
-      <h2 id="parent-feedback-heading">给家长的反馈</h2>
+    <section aria-labelledby={`${instanceId}-heading`}>
+      <h2 id={`${instanceId}-heading`}>给家长的反馈</h2>
       {feedbacks.length === 0 ? <p>暂无家长反馈，请重新分析作文后生成。</p> : (
         <>
           <p>已生成 3 份，可选择后修改</p>
@@ -66,47 +67,58 @@ export function ParentFeedbackEditor({
                 key={feedback.style}
                 type="button"
                 role="tab"
-                id={tabId(feedback.style)}
+                id={tabId(instanceId, feedback.style)}
                 aria-selected={feedback.style === activeFeedback.style}
-                aria-controls={panelId(feedback.style)}
+                aria-controls={panelId(instanceId, feedback.style)}
                 onClick={() => setActiveStyle(feedback.style)}
               >
                 {feedback.title}
               </button>
             ))}
           </div>
-          <div
-            role="tabpanel"
-            id={panelId(activeFeedback.style)}
-            aria-labelledby={tabId(activeFeedback.style)}
-          >
-            <label htmlFor={`parent-feedback-content-${activeFeedback.style}`}>
-              {`${activeFeedback.title}家长反馈`}
-            </label>
-            <textarea
-              id={`parent-feedback-content-${activeFeedback.style}`}
-              aria-label={`${activeFeedback.title}家长反馈`}
-              value={activeFeedback.content}
-              disabled={disabled}
-              onChange={(event) => updateActiveContent(event.target.value)}
-            />
-            <div>
-              <button
-                type="button"
-                disabled={disabled || !savedActiveFeedback || savedActiveFeedback.content === activeFeedback.content}
-                onClick={() => updateActiveContent(savedActiveFeedback?.content ?? activeFeedback.content)}
+          {feedbacks.map((feedback) => {
+            const isActive = feedback.style === activeFeedback.style;
+            return (
+              <div
+                key={feedback.style}
+                role="tabpanel"
+                id={panelId(instanceId, feedback.style)}
+                aria-labelledby={tabId(instanceId, feedback.style)}
+                hidden={!isActive}
               >
-                恢复原文
-              </button>
-              <button
-                type="button"
-                disabled={disabled || !activeFeedback.content.trim()}
-                onClick={() => void copyActiveFeedback()}
-              >
-                复制反馈
-              </button>
-            </div>
-          </div>
+                {isActive ? (
+                  <>
+                    <label htmlFor={`${instanceId}-content-${feedback.style}`}>
+                      {`${feedback.title}家长反馈`}
+                    </label>
+                    <textarea
+                      id={`${instanceId}-content-${feedback.style}`}
+                      aria-label={`${feedback.title}家长反馈`}
+                      value={feedback.content}
+                      disabled={disabled}
+                      onChange={(event) => updateActiveContent(event.target.value)}
+                    />
+                    <div>
+                      <button
+                        type="button"
+                        disabled={disabled || !savedActiveFeedback || savedActiveFeedback.content === feedback.content}
+                        onClick={() => updateActiveContent(savedActiveFeedback?.content ?? feedback.content)}
+                      >
+                        恢复原文
+                      </button>
+                      <button
+                        type="button"
+                        disabled={disabled || !feedback.content.trim()}
+                        onClick={() => void copyActiveFeedback()}
+                      >
+                        复制反馈
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
         </>
       )}
     </section>

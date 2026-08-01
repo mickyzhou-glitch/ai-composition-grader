@@ -208,4 +208,30 @@ describe("ParentFeedbackEditor", () => {
     expect(tabs.filter((tab) => tab.getAttribute("aria-selected") === "true")).toEqual([tabs[0]]);
     expect(screen.getByLabelText("简短微信版家长反馈")).toHaveValue(feedbacks[2].content);
   });
+
+  it("每个标签都关联页面中存在的面板", () => {
+    render(<FeedbackHarness />);
+
+    for (const tab of screen.getAllByRole("tab")) {
+      const panelId = tab.getAttribute("aria-controls");
+      expect(panelId).toBeTruthy();
+      expect(document.getElementById(panelId!)).toHaveAttribute("role", "tabpanel");
+    }
+  });
+
+  it("多个编辑器实例使用互不冲突的标签和面板 ID", () => {
+    render(
+      <>
+        <FeedbackHarness />
+        <FeedbackHarness />
+      </>,
+    );
+
+    const tabs = screen.getAllByRole("tab");
+    const tabIds = tabs.map((tab) => tab.id);
+    const panelIds = tabs.map((tab) => tab.getAttribute("aria-controls"));
+
+    expect(new Set(tabIds)).toHaveLength(tabIds.length);
+    expect(new Set(panelIds)).toHaveLength(panelIds.length);
+  });
 });
