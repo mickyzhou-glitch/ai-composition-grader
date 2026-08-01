@@ -6,12 +6,11 @@ import type { D1PasswordProofRepository } from "./d1-password-proof-repository";
 import type { D1SessionRepository } from "./d1-session-repository";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
-const DUMMY_SALT = "AAAAAAAAAAAAAAAAAAAAAA";
 
 interface WorkerAuthDependencies {
   appOrigin: string;
   ipHmacSecret: string;
-  proofs: Pick<D1PasswordProofRepository, "findByUsername"> & Partial<Pick<D1PasswordProofRepository, "findLegacyByUsername" | "save" | "clearMustChangePassword">>;
+  proofs: Pick<D1PasswordProofRepository, "findByUsername"> & Partial<Pick<D1PasswordProofRepository, "findLoginCandidateByUsername" | "findLegacyByUsername" | "save" | "saveIfMissing" | "clearMustChangePassword">>;
   challenges: LoginChallengeRepository;
   sessions?: Pick<D1SessionRepository, "create" | "findActiveByTokenHash" | "revokeByTokenHash">;
   proofEncryptionKey?: string;
@@ -94,8 +93,37 @@ function constantTimeEqual(left: Uint8Array, right: Uint8Array): boolean {
 async function sourceIpHash(request: Request, secret: string): Promise<string | null> {
   const ip = request.headers.get("cf-connecting-ip")?.trim();
   if (!ip || !secret) return null;
+  return toHex(await hmacSha256(secret, ip));
+}
+
+async function hmacSha256(secret: string, value: string): Promise<Uint8Array> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  return toHex(new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(ip))));
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(value)));
+}
+
+async function dummyChallengeProfile(username: string, secret: string): Promise<{
+  mode: "proof" | "legacy";
+  salt: string;
+  legacy?: LegacyPasswordParameters;
+}> {
+  const digest = await hmacSha256(secret, `login-challenge-dummy\0${username}`);
+  const mode = (digest[0] & 1) === 0 ? "proof" as const : "legacy" as const;
+  const salt = toBase64Url(digest.slice(1, 17));
+  return {
+    mode,
+    salt,
+    ...(mode === "legacy" ? { legacy: { ...DUMMY_LEGACY_PARAMETERS, salt } } : {}),
+  };
+}
+
+async function findLoginCandidate(dependencies: WorkerAuthDependencies, username: string) {
+  if (dependencies.proofs.findLoginCandidateByUsername) {
+    const candidate = await dependencies.proofs.findLoginCandidateByUsername(username);
+    return { proof: candidate?.proof ?? null, legacy: candidate?.legacy ?? null };
+  }
+  const proof = await dependencies.proofs.findByUsername(username);
+  const legacy = proof === null ? await dependencies.proofs.findLegacyByUsername?.(username) ?? null : null;
+  return { proof, legacy };
 }
 
 async function hashSessionToken(token: string): Promise<string> {
@@ -176,7 +204,7 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
     if (!dependencies.sessions || !dependencies.proofEncryptionKey || typeof body.challengeId !== "string" || typeof body.proof !== "string") {
       return jsonError("VALIDATION_ERROR", "请求参数无效", 400);
     }
-    const challenge = await dependencies.challenges.consumeIfActive(body.challengeId, ipHash);
+    const challenge = await dependencies.challenges.consumeIfActive(body.challengeId);
     if (!challenge) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
     const proof = await dependencies.proofs.findByUsername(challenge.normalizedUsername);
     const valid = proof !== null && proof.disabledAt === null && await verifyLoginProof({
@@ -190,10 +218,18 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
     return Response.json({ ok: true, data: proof.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });
   }
   const normalizedUsername = normalizeUsername(body.username);
-  const proof = await dependencies.proofs.findByUsername(normalizedUsername);
+  const { proof, legacy } = await findLoginCandidate(dependencies, normalizedUsername);
+  const legacyParameters = proof === null
+    ? (legacy && legacy.disabledAt === null ? legacyPasswordParameters(legacy.passwordHash) : null)
+    : null;
+  const profile = proof
+    ? { mode: "proof" as const, salt: proof.salt }
+    : legacyParameters
+      ? { mode: "legacy" as const, salt: legacyParameters.salt, legacy: legacyParameters }
+      : await dummyChallengeProfile(normalizedUsername, dependencies.ipHmacSecret);
   const challenge = await dependencies.challenges.create({
     normalizedUsername,
-    salt: proof?.salt ?? DUMMY_SALT,
+    salt: profile.salt,
     nonce: (dependencies.randomNonce ?? defaultNonce)(),
     ipHash,
     ttlMs: CHALLENGE_TTL_MS,
@@ -202,16 +238,18 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
     ok: true,
     data: {
       id: challenge.id,
+      mode: profile.mode,
       salt: challenge.salt,
       nonce: challenge.nonce,
       expiresAt: challenge.expiresAt.toISOString(),
+      ...(profile.legacy ? { legacy: { ...profile.legacy, salt: challenge.salt } } : {}),
     },
   }, { headers: { "cache-control": "no-store" } });
 }
 
 async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerAuthDependencies): Promise<Response> {
   if (!sameOrigin(request, dependencies.appOrigin)) return jsonError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
-  if (!dependencies.proofs.findLegacyByUsername || !dependencies.proofs.save || !dependencies.sessions || !dependencies.proofEncryptionKey) {
+  if (!dependencies.proofs.findLegacyByUsername) {
     return jsonError("AUTHENTICATION_UNAVAILABLE", "认证服务暂时不可用", 503);
   }
   const ipHash = await sourceIpHash(request, dependencies.ipHmacSecret);
@@ -224,23 +262,33 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
   }
   if (new URL(request.url).pathname === "/api/auth/login/legacy/challenge") {
     const username = normalizeUsername(body.username);
-    const legacy = await dependencies.proofs.findLegacyByUsername(username);
-    const parameters = legacy && legacy.disabledAt === null ? legacyPasswordParameters(legacy.passwordHash) : null;
+    const { proof: modern, legacy } = await findLoginCandidate(dependencies, username);
+    const parameters = !modern && legacy && legacy.disabledAt === null ? legacyPasswordParameters(legacy.passwordHash) : null;
+    const fallbackSalt = parameters
+      ? null
+      : modern?.salt ?? (await dummyChallengeProfile(username, dependencies.ipHmacSecret)).salt;
+    const challengeParameters = parameters ?? { ...DUMMY_LEGACY_PARAMETERS, salt: fallbackSalt! };
     const challenge = await dependencies.challenges.create({
       normalizedUsername: username,
-      salt: parameters?.salt ?? DUMMY_LEGACY_PARAMETERS.salt,
+      salt: challengeParameters.salt,
       nonce: (dependencies.randomNonce ?? defaultNonce)(),
       ipHash,
       ttlMs: CHALLENGE_TTL_MS,
     });
-    return Response.json({ ok: true, data: { id: challenge.id, nonce: challenge.nonce, legacy: parameters ?? DUMMY_LEGACY_PARAMETERS } }, { headers: { "cache-control": "no-store" } });
+    return Response.json({ ok: true, data: { id: challenge.id, nonce: challenge.nonce, legacy: { ...challengeParameters, salt: challenge.salt } } }, { headers: { "cache-control": "no-store" } });
+  }
+  if (!dependencies.proofs.saveIfMissing || !dependencies.sessions || !dependencies.proofEncryptionKey) {
+    return jsonError("AUTHENTICATION_UNAVAILABLE", "认证服务暂时不可用", 503);
   }
   if (typeof body.challengeId !== "string" || typeof body.proof !== "string" || typeof body.verifier !== "string") {
     return jsonError("VALIDATION_ERROR", "请求参数无效", 400);
   }
-  const challenge = await dependencies.challenges.consumeIfActive(body.challengeId, ipHash);
+  const challenge = await dependencies.challenges.consumeIfActive(body.challengeId);
   if (!challenge) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
-  const legacy = await dependencies.proofs.findLegacyByUsername(challenge.normalizedUsername);
+  const { proof: modern, legacy } = await findLoginCandidate(dependencies, challenge.normalizedUsername);
+  if (modern) {
+    return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+  }
   const digest = legacy && legacy.disabledAt === null ? legacyDigest(legacy.passwordHash) : null;
   let verifier: Uint8Array;
   let suppliedProof: Uint8Array;
@@ -255,7 +303,13 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
     return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
   }
   const now = new Date();
-  await dependencies.proofs.save(legacy.user.id, challenge.salt, await sealPasswordVerifier(verifier, fromBase64Url(dependencies.proofEncryptionKey)), now);
+  const inserted = await dependencies.proofs.saveIfMissing(
+    legacy.user.id,
+    challenge.salt,
+    await sealPasswordVerifier(verifier, fromBase64Url(dependencies.proofEncryptionKey)),
+    now,
+  );
+  if (!inserted) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
   const rawToken = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   await dependencies.sessions.create({ id: crypto.randomUUID(), userId: legacy.user.id, tokenHash: await hashSessionToken(rawToken), expiresAt: new Date(now.getTime() + 12 * 60 * 60_000), now });
   return Response.json({ ok: true, data: legacy.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });

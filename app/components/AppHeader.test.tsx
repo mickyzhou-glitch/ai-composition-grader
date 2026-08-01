@@ -10,8 +10,16 @@ const navigation = vi.hoisted(() => ({
   refresh: vi.fn(),
 }));
 
+const documentNavigation = vi.hoisted(() => ({
+  replace: vi.fn(),
+}));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => navigation,
+}));
+
+vi.mock("../lib/document-navigation", () => ({
+  replaceDocument: documentNavigation.replace,
 }));
 
 function renderHeader(role: "admin" | "teacher" = "teacher") {
@@ -27,6 +35,7 @@ describe("AppHeader", () => {
     vi.restoreAllMocks();
     navigation.replace.mockReset();
     navigation.refresh.mockReset();
+    documentNavigation.replace.mockReset();
   });
 
   it("显示青藤未来作文批改助手品牌名", () => {
@@ -46,7 +55,7 @@ describe("AppHeader", () => {
     expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
   });
 
-  it("退出期间禁用按钮，成功后替换到登录页并刷新路由", async () => {
+  it("退出期间禁用按钮，成功后整页替换到登录页", async () => {
     let resolveRequest!: (response: Response) => void;
     vi.spyOn(globalThis, "fetch").mockImplementation(
       () => new Promise<Response>((resolve) => { resolveRequest = resolve; }),
@@ -62,8 +71,9 @@ describe("AppHeader", () => {
       JSON.stringify({ ok: true, data: { loggedOut: true } }),
       { status: 200, headers: { "content-type": "application/json" } },
     ));
-    await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/login"));
-    expect(navigation.refresh).toHaveBeenCalledOnce();
+    await waitFor(() => expect(documentNavigation.replace).toHaveBeenCalledWith("/login"));
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(navigation.refresh).not.toHaveBeenCalled();
   });
 
   it("退出失败时保留页面并显示服务端错误", async () => {
@@ -79,5 +89,6 @@ describe("AppHeader", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("退出失败，请重试");
     expect(screen.getByRole("button", { name: "退出登录" })).toBeEnabled();
     expect(navigation.replace).not.toHaveBeenCalled();
+    expect(documentNavigation.replace).not.toHaveBeenCalled();
   });
 });

@@ -12,8 +12,14 @@ describe("D1LoginChallengeRepository", () => {
       () => new Date("2026-07-29T00:00:00.000Z"),
     );
 
-    await expect(repository.consumeIfActive("login-1", "a".repeat(64))).resolves.toBeNull();
+    await expect(repository.consumeIfActive("login-1")).resolves.toBeNull();
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("consumed_at IS NULL"));
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("RETURNING"));
+    expect(prepare).toHaveBeenCalledWith(expect.not.stringContaining("ip_hash ="));
+    expect(bind).toHaveBeenCalledWith(
+      new Date("2026-07-29T00:00:00.000Z").getTime(),
+      "login-1",
+      new Date("2026-07-29T00:00:00.000Z").getTime(),
+    );
   });
 });

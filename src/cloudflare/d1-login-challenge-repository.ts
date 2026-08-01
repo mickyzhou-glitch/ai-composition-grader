@@ -52,14 +52,14 @@ export class D1LoginChallengeRepository implements LoginChallengeRepository {
     return { ...record, consumedAt: null };
   }
 
-  async consumeIfActive(challengeId: string, ipHash: string): Promise<LoginChallengeRecord | null> {
+  async consumeIfActive(challengeId: string): Promise<LoginChallengeRecord | null> {
     const consumedAt = this.now().getTime();
     const row = await this.database.prepare(`
       UPDATE login_challenges
       SET consumed_at = ?
-      WHERE id = ? AND ip_hash = ? AND consumed_at IS NULL AND expires_at > ?
+      WHERE id = ? AND consumed_at IS NULL AND expires_at > ?
       RETURNING id, normalized_username, salt, nonce, ip_hash, expires_at, consumed_at, created_at
-    `).bind(consumedAt, challengeId, ipHash, consumedAt).first<ChallengeRow>();
+    `).bind(consumedAt, challengeId, consumedAt).first<ChallengeRow>();
     return row ? toRecord(row) : null;
   }
 }

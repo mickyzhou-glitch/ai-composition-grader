@@ -1,9 +1,9 @@
 "use client";
 
 import { useEffect, useState, type PropsWithChildren } from "react";
-import { useRouter } from "next/navigation";
 
 import { ApiError, apiFetch } from "../lib/api";
+import { replaceDocument } from "../lib/document-navigation";
 import { AuthUserProvider } from "./AuthUserContext";
 
 type CurrentUser = {
@@ -14,31 +14,43 @@ type CurrentUser = {
 };
 
 export function RequireAuthenticatedUser({ children, requireAdmin = false }: PropsWithChildren<{ requireAdmin?: boolean }>) {
-  const router = useRouter();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let active = true;
-    void apiFetch<CurrentUser>("/api/auth/me")
-      .then((nextUser) => {
-        if (!active) return;
+    let verification = 0;
+    const verifyAuthentication = async () => {
+      const currentVerification = ++verification;
+      setUser(null);
+      setFailed(false);
+      try {
+        const nextUser = await apiFetch<CurrentUser>("/api/auth/me");
+        if (!active || currentVerification !== verification) return;
         if (nextUser.mustChangePassword) {
-          router.replace("/change-password");
+          replaceDocument("/change-password");
           return;
         }
         setUser(nextUser);
-      })
-      .catch((error: unknown) => {
-        if (!active) return;
+      } catch (error: unknown) {
+        if (!active || currentVerification !== verification) return;
         if (error instanceof ApiError && error.code === "UNAUTHENTICATED") {
-          router.replace("/login");
+          replaceDocument("/login");
           return;
         }
         setFailed(true);
-      });
-    return () => { active = false; };
-  }, [router]);
+      }
+    };
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void verifyAuthentication();
+    };
+    void verifyAuthentication();
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      active = false;
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, []);
 
   if (failed) return <main className="auth-page"><p className="error-banner" role="alert">认证服务暂时不可用，请稍后重试。</p></main>;
   if (!user) return <main aria-busy="true" />;

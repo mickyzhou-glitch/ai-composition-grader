@@ -19,7 +19,7 @@ export interface CreateLoginChallengeInput {
 
 export interface LoginChallengeRepository {
   create(input: CreateLoginChallengeInput): Promise<LoginChallengeRecord>;
-  consumeIfActive(challengeId: string, ipHash: string): Promise<LoginChallengeRecord | null>;
+  consumeIfActive(challengeId: string): Promise<LoginChallengeRecord | null>;
 }
 
 export interface InMemoryLoginChallengeRepositoryOptions {
@@ -65,10 +65,10 @@ export class InMemoryLoginChallengeRepository implements LoginChallengeRepositor
     return { ...record, createdAt: snapshotDate(record.createdAt), expiresAt: snapshotDate(record.expiresAt) };
   }
 
-  async consumeIfActive(challengeId: string, ipHash: string): Promise<LoginChallengeRecord | null> {
+  async consumeIfActive(challengeId: string): Promise<LoginChallengeRecord | null> {
     const record = this.records.get(challengeId);
     const now = this.now();
-    if (!record || record.ipHash !== ipHash || record.consumedAt || record.expiresAt.getTime() <= now.getTime()) return null;
+    if (!record || record.consumedAt || record.expiresAt.getTime() <= now.getTime()) return null;
     record.consumedAt = snapshotDate(now);
     return {
       ...record,

@@ -20,13 +20,18 @@ function apiError(code: string, message: string, status: number): Response {
   return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
 }
 
-function secureResponse(response: Response): Response {
+function secureResponse(response: Response, pathname: string): Response {
   const headers = new Headers(response.headers);
   headers.set("x-content-type-options", "nosniff");
   headers.set("referrer-policy", "no-referrer");
   headers.set("x-frame-options", "DENY");
   headers.set("x-robots-tag", "noindex, nofollow");
-  headers.set("content-security-policy", "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; object-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; connect-src 'self'");
+  const legacyWasmFallback = ["/login", "/change-password"].includes(pathname)
+    && (response.status === 304 || (response.status === 200 && headers.get("content-type")?.toLowerCase().includes("text/html")));
+  headers.set("content-security-policy", `default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; object-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${legacyWasmFallback ? " 'unsafe-eval'" : ""}; connect-src 'self'`);
+  if ([200, 304].includes(response.status) && pathname.startsWith("/_next/static/")) {
+    headers.set("cache-control", "public, max-age=31536000, immutable");
+  }
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -80,6 +85,9 @@ function workerAiSettings(env: WorkerEnv) {
 export default {
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
+    if (url.pathname.startsWith("/_next/static/")) {
+      return secureResponse(await env.ASSETS.fetch(request), url.pathname);
+    }
     const authResponse = await handleWorkerAuth(request, {
       appOrigin: url.origin,
       ipHmacSecret: env.AUTH_IP_HMAC_SECRET,
@@ -104,8 +112,17 @@ export default {
       if (!object) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
       return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? file.contentType, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
     }
+    if (!url.pathname.startsWith("/api/") && url.pathname !== "/") {
+      return secureResponse(await env.ASSETS.fetch(request), url.pathname);
+    }
     const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);
+    if (request.method === "GET" && url.pathname === "/" && request.headers.get("accept")?.includes("text/html") && !user) {
+      return new Response(null, {
+        status: 302,
+        headers: { "cache-control": "no-store", location: new URL("/login", url).toString() },
+      });
+    }
     if (url.pathname === "/api/settings" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       const settings = await env.DB.prepare("SELECT base_url, model, encrypted_api_key FROM settings WHERE id = 1").first<{ base_url: string; model: string; encrypted_api_key: string | null }>();
@@ -303,7 +320,7 @@ export default {
     if (url.pathname.startsWith("/api/")) {
       return Response.json({ ok: false, error: { code: "NOT_FOUND", message: "接口不存在" } }, { status: 404 });
     }
-    return secureResponse(await env.ASSETS.fetch(request));
+    return secureResponse(await env.ASSETS.fetch(request), url.pathname);
   },
   async queue(batch: MessageBatch<{ jobId: string }>, env: WorkerEnv): Promise<void> {
     for (const message of batch.messages) {

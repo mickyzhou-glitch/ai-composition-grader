@@ -2,16 +2,15 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 
 import { apiFetch, errorMessage } from "../lib/api";
+import { replaceDocument } from "../lib/document-navigation";
 import { AsyncButton } from "./AsyncButton";
 import { useAuthRole } from "./AuthUserContext";
 
 export function AppHeader({ compact = false, userRole }: { compact?: boolean; userRole?: "admin" | "teacher" }) {
   const contextRole = useAuthRole();
   const role = userRole ?? contextRole;
-  const router = useRouter();
   const [loggingOut, setLoggingOut] = useState(false);
   const [logoutError, setLogoutError] = useState("");
 
@@ -20,8 +19,7 @@ export function AppHeader({ compact = false, userRole }: { compact?: boolean; us
     setLogoutError("");
     try {
       await apiFetch<{ loggedOut: boolean }>("/api/auth/logout", { method: "POST" });
-      router.replace("/login");
-      router.refresh();
+      replaceDocument("/login");
     } catch (error) {
       setLogoutError(errorMessage(error));
     } finally {
