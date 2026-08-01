@@ -583,6 +583,6 @@ describe("复核页", () => {
     expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1/images");
     expect(fetchMock.mock.calls[2][1]).toMatchObject({ method: "POST" });
     expect(((fetchMock.mock.calls[2][1] as RequestInit).body as FormData).get("expectedRevision")).toBe("1");
-    expect(await screen.findByRole("status")).toHaveTextContent("作文图片已替换");
+    expect(await screen.findByRole("status")).toHaveTextContent("作文图片已压缩优化并替换，可重新开始 AI 分析。");
   });
 });
