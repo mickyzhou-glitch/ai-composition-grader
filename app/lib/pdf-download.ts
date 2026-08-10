@@ -1,17 +1,19 @@
 import { apiFetch } from "./api";
 import type { ReviewView } from "./types";
-import { gradeFromLegacyTotal } from "@/src/domain/contracts";
 
-const PDF_WIDTH = 1152;
-const PDF_HEIGHT = 648;
+const PDF_WIDTH = 841.89;
+const PDF_HEIGHT = 595.28;
 const RENDER_SCALE = 2;
-const FONT_FAMILY = '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif';
-export const PDF_HEADER = "青藤未来作文批改报告";
+const HEITI_FONT = '"SimHei", "Heiti SC", "Microsoft YaHei", sans-serif';
+const KAITI_FONT = '"KaiTi", "STKaiti", "Kaiti SC", serif';
+const BLUE = "#1557b0";
+const RED = "#c62828";
 
 type CanvasPage = {
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
 };
+type PdfSample = NonNullable<ReviewView["report"]>["sampleParagraphs"][number];
 
 function safeFilenamePart(value: string) {
   return value
@@ -65,78 +67,20 @@ function wrapLines(context: CanvasRenderingContext2D, text: string, maxWidth: nu
   return lines;
 }
 
-function drawTextBlock(
+function drawLines(
   context: CanvasRenderingContext2D,
-  text: string,
+  lines: string[],
   x: number,
   y: number,
-  maxWidth: number,
   lineHeight: number,
-  maxLines = Number.POSITIVE_INFINITY,
 ) {
-  const lines = wrapLines(context, text, maxWidth).slice(0, maxLines);
   lines.forEach((line, index) => context.fillText(line, x, y + index * lineHeight));
   return y + lines.length * lineHeight;
 }
 
-function paintPageBackground(context: CanvasRenderingContext2D, title: string, review: ReviewView) {
-  context.fillStyle = "#fbfefc";
+function paintPageBackground(context: CanvasRenderingContext2D) {
+  context.fillStyle = "#ffffff";
   context.fillRect(0, 0, PDF_WIDTH, PDF_HEIGHT);
-  context.fillStyle = "#007157";
-  context.fillRect(0, 0, PDF_WIDTH, 12);
-  context.fillStyle = "#43635a";
-  context.font = `600 14px ${FONT_FAMILY}`;
-  context.fillText(PDF_HEADER, 52, 32);
-  context.textAlign = "right";
-  context.fillText(`学生：${review.studentName || "未填写"}`, PDF_WIDTH - 52, 32);
-  context.textAlign = "left";
-  context.fillStyle = "#1f2d28";
-  context.font = `700 34px ${FONT_FAMILY}`;
-  context.fillText(title, 52, 67);
-  context.strokeStyle = "#d4e5de";
-  context.lineWidth = 1;
-  context.beginPath();
-  context.moveTo(52, 116);
-  context.lineTo(PDF_WIDTH - 52, 116);
-  context.stroke();
-}
-
-function splitComment(value: string) {
-  const marker = /(?:现在)?最需要(?:调整|改进|加强)(?:的是)?[：:，,]?/u;
-  const match = marker.exec(value);
-  if (!match || match.index === undefined) return { strengths: value, improvement: "" };
-  return {
-    strengths: value.slice(0, match.index).trim(),
-    improvement: value.slice(match.index).trim(),
-  };
-}
-
-function points(value: string | string[]) {
-  const raw = Array.isArray(value) ? value : value.split(/\r?\n/gu);
-  return raw.map((item) => item.trim()).filter(Boolean).slice(0, 6);
-}
-
-function drawSummaryPage(review: ReviewView, heading: string, items: string[], grade?: string) {
-  const { canvas, context } = createCanvasPage();
-  paintPageBackground(context, review.config.title, review);
-  context.fillStyle = "#047354";
-  context.font = `700 17px ${FONT_FAMILY}`;
-  context.fillText(grade ? `等级评定 · ${grade}${grade === "C" ? "（重写）" : ""}` : "教师复核重点", 52, 142);
-  context.fillStyle = "#c90000";
-  context.font = `700 46px ${FONT_FAMILY}`;
-  context.fillText(heading, 52, 177);
-  context.font = `500 25px ${FONT_FAMILY}`;
-  let y = 257;
-  items.forEach((item, index) => {
-    context.fillStyle = "#c90000";
-    context.font = `700 25px ${FONT_FAMILY}`;
-    context.fillText(`${["一", "二", "三", "四", "五", "六"][index]}、`, 70, y);
-    context.fillStyle = "#2a312f";
-    context.font = `500 25px ${FONT_FAMILY}`;
-    const nextY = drawTextBlock(context, item, 115, y, PDF_WIDTH - 185, 37, 4);
-    y = nextY + 24;
-  });
-  return canvas;
 }
 
 function samplesForImage<T>(samples: T[], imageIndex: number, imageCount: number) {
@@ -166,64 +110,92 @@ function drawFittedImage(context: CanvasRenderingContext2D, image: HTMLImageElem
   context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
 }
 
+function fittedTextSize(
+  context: CanvasRenderingContext2D,
+  samples: PdfSample[],
+  field: "suggestion" | "text",
+  width: number,
+  height: number,
+  fontFamily: string,
+  maximum: number,
+) {
+  for (let size = maximum; size >= 8; size -= 0.5) {
+    let totalHeight = 0;
+    for (const sample of samples) {
+      context.font = `700 ${size}px ${fontFamily}`;
+      totalHeight += wrapLines(context, sample.title, width).length * size * 1.35;
+      context.font = `400 ${size}px ${fontFamily}`;
+      totalHeight += wrapLines(context, sample[field], width).length * size * 1.5 + size * 0.85;
+    }
+    if (totalHeight <= height) return size;
+  }
+  return 8;
+}
+
+function drawSampleColumn(
+  context: CanvasRenderingContext2D,
+  samples: PdfSample[],
+  field: "suggestion" | "text",
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: string,
+  fontFamily: string,
+  maximumSize: number,
+) {
+  const size = fittedTextSize(context, samples, field, width, height, fontFamily, maximumSize);
+  let cursor = y;
+  for (const sample of samples) {
+    context.fillStyle = color;
+    context.font = `700 ${size}px ${fontFamily}`;
+    cursor = drawLines(context, wrapLines(context, sample.title, width), x, cursor, size * 1.35);
+    context.font = `400 ${size}px ${fontFamily}`;
+    cursor = drawLines(context, wrapLines(context, sample[field], width), x, cursor, size * 1.5) + size * 0.85;
+  }
+}
+
 async function drawFeedbackPage(review: ReviewView, imageIndex: number) {
   const report = review.report;
   const imageMeta = review.images[imageIndex];
   if (!report || !imageMeta) throw new Error("批改内容不完整，暂不能导出 PDF");
   const image = await loadReviewImage(review.id, imageMeta.id);
   const { canvas, context } = createCanvasPage();
-  paintPageBackground(context, `第 ${imageIndex + 1} 页批注`, review);
+  paintPageBackground(context);
 
-  const top = 142;
-  const height = PDF_HEIGHT - top - 38;
-  const leftX = 52;
-  const leftWidth = 205;
-  const imageX = leftX + leftWidth + 22;
-  const imageWidth = 515;
-  const rightX = imageX + imageWidth + 22;
-  const rightWidth = PDF_WIDTH - rightX - 52;
+  const top = 18;
+  const height = PDF_HEIGHT - top - 18;
+  const leftX = 18;
+  const leftWidth = 175;
+  const imageX = leftX + leftWidth + 14;
+  const imageWidth = 310;
+  const rightX = imageX + imageWidth + 14;
+  const rightWidth = PDF_WIDTH - rightX - 18;
   const samples = samplesForImage(report.sampleParagraphs, imageIndex, review.images.length);
 
-  context.fillStyle = "#fff9f8";
-  roundedRect(context, leftX, top, leftWidth, height, 12);
+  context.fillStyle = "#f7faff";
+  roundedRect(context, leftX, top, leftWidth, height, 4);
   context.fill();
-  context.fillStyle = "#f4eee5";
-  roundedRect(context, imageX, top, imageWidth, height, 12);
+  context.fillStyle = "#f3f3f3";
+  roundedRect(context, imageX, top, imageWidth, height, 4);
   context.fill();
   context.save();
-  roundedRect(context, imageX, top, imageWidth, height, 12);
+  roundedRect(context, imageX, top, imageWidth, height, 4);
   context.clip();
   drawFittedImage(context, image, imageX, top, imageWidth, height);
   context.restore();
-  context.fillStyle = "#f8fbff";
-  roundedRect(context, rightX, top, rightWidth, height, 12);
+  context.fillStyle = "#fff8f8";
+  roundedRect(context, rightX, top, rightWidth, height, 4);
   context.fill();
 
-  context.fillStyle = "#c90000";
-  context.font = `700 19px ${FONT_FAMILY}`;
-  context.fillText("段落修改建议", leftX + 16, top + 18);
-  let leftY = top + 56;
-  for (const sample of samples) {
-    context.fillStyle = "#c90000";
-    context.font = `700 17px ${FONT_FAMILY}`;
-    leftY = drawTextBlock(context, `${sample.title}：`, leftX + 16, leftY, leftWidth - 32, 24, 2) + 5;
-    context.fillStyle = "#522f2f";
-    context.font = `500 16px ${FONT_FAMILY}`;
-    leftY = drawTextBlock(context, sample.suggestion, leftX + 16, leftY, leftWidth - 32, 23, 8) + 24;
-  }
-
-  context.fillStyle = "#255ab1";
-  context.font = `700 21px ${FONT_FAMILY}`;
-  context.fillText("改后范文", rightX + 16, top + 18);
-  let rightY = top + 58;
-  for (const sample of samples) {
-    context.fillStyle = "#c90000";
-    context.font = `700 17px ${FONT_FAMILY}`;
-    rightY = drawTextBlock(context, sample.title, rightX + 16, rightY, rightWidth - 32, 24, 2) + 5;
-    context.fillStyle = "#255ab1";
-    context.font = `500 16px ${FONT_FAMILY}`;
-    rightY = drawTextBlock(context, sample.text, rightX + 16, rightY, rightWidth - 32, 23, 12) + 22;
-  }
+  context.fillStyle = BLUE;
+  context.font = `700 13px ${HEITI_FONT}`;
+  context.fillText("修改建议", leftX + 12, top + 12);
+  context.fillStyle = RED;
+  context.font = `700 15px ${KAITI_FONT}`;
+  context.fillText("范文", rightX + 12, top + 12);
+  drawSampleColumn(context, samples, "suggestion", leftX + 12, top + 40, leftWidth - 24, height - 52, BLUE, HEITI_FONT, 11.5);
+  drawSampleColumn(context, samples, "text", rightX + 12, top + 42, rightWidth - 24, height - 54, RED, KAITI_FONT, 13);
   return canvas;
 }
 
@@ -235,21 +207,16 @@ async function createReviewPdf(review: ReviewView) {
   const pdf = new jsPDF({
     orientation: "landscape",
     unit: "pt",
-    format: [PDF_WIDTH, PDF_HEIGHT],
+    format: "a4",
     compress: true,
   });
   pdf.setProperties({ title: review.config.title, subject: "作文批改报告", author: "青藤未来作文批改助手" });
-  const comment = splitComment(review.report.personalizedComment);
-  const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0);
-  const pages: HTMLCanvasElement[] = [
-    drawSummaryPage(review, "优点", points(comment.strengths), grade),
-    drawSummaryPage(review, "需要修改", points([comment.improvement, ...review.report.painPoints])),
-  ];
+  const pages: HTMLCanvasElement[] = [];
   for (let index = 0; index < review.images.length; index += 1) {
     pages.push(await drawFeedbackPage(review, index));
   }
   pages.forEach((canvas, index) => {
-    if (index > 0) pdf.addPage([PDF_WIDTH, PDF_HEIGHT], "landscape");
+    if (index > 0) pdf.addPage("a4", "landscape");
     pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", 0, 0, PDF_WIDTH, PDF_HEIGHT, undefined, "FAST");
   });
   return pdf.output("blob");

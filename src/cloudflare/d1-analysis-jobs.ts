@@ -15,6 +15,8 @@ function view(row: JobRow) {
   if (!statuses.has(row.status) || !stages.has(row.progress_stage)) throw new TypeError("Invalid analysis job");
   const failedMessage = row.error_code === "AI_SETTINGS_INCOMPLETE"
     ? "请联系管理员检查 AI 服务设置后再试"
+    : row.error_code === "AI_INVALID_RESPONSE" || row.error_code?.startsWith("AI_INVALID_RESPONSE_")
+      ? "AI 返回格式异常，请重新分析"
     : row.error_code === "AI_UPSTREAM_HTTP_400"
       ? "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入"
     : row.error_code === "AI_UPSTREAM_HTTP_401" || row.error_code?.startsWith("AI_UPSTREAM_HTTP_401_")

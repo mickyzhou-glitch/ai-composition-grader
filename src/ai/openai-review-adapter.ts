@@ -189,14 +189,16 @@ function buildRepairPrompt(
   content: string,
   config: AssignmentConfig,
   pageCount: number,
+  validationCode: string,
   studentName?: string,
 ): string {
   const sampleRule =
-    "sampleParagraphs 必须恰好五段对象，并严格遵循当前 AssignmentConfig 的 structureRequirements；仅 text 字段合计 600-700 个汉字，保留学生原有核心事件，不虚构关键经历。每段正文开头不得使用时间词，必须用动作、情绪、对比、因果或核心物件承接上文。必须把人物关系和事件因果统一成一条主线：删去或合并多余人物、无关争吵和枝节，绝不保留人物称呼前后矛盾的写法。";
+    "sampleParagraphs 必须恰好五段对象，每段的 title、text、suggestion 必须是非空字符串，不能是数组、对象或 null；并严格遵循当前 AssignmentConfig 的 structureRequirements。仅 text 字段合计 600-700 个汉字，保留学生原有核心事件，不虚构关键经历。每段正文开头不得使用时间词，必须用动作、情绪、对比、因果或核心物件承接上文。必须把人物关系和事件因果统一成一条主线：删去或合并多余人物、无关争吵和枝节，绝不保留人物称呼前后矛盾的写法。";
 
   return [
     "修复以下无效文本，使其严格符合 schema 和全部业务不变量，并只返回 JSON。",
     `无效文本：\n${content}`,
+    `校验失败原因：${validationCode}`,
     `运行时页面约束：pageCount=${pageCount}，annotation.pageIndex 必须是整数 0..${pageCount - 1}。`,
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
@@ -292,7 +294,17 @@ function safeValidationCode(error: unknown): string {
   return "validation_unknown";
 }
 
-function normalizeProviderEnvelope(value: unknown): unknown {
+function normalizeParentFeedbackGreeting(content: string, expectedGreeting: string): string {
+  const trimmed = content.trim();
+  if (trimmed.startsWith(expectedGreeting)) return trimmed;
+  const separatorIndex = trimmed.search(/[，,。！!：:\n]/u);
+  const firstClause = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : "";
+  const hasGreeting = /(?:家长|妈妈|爸爸)(?:您好|好)?$/u.test(firstClause);
+  const body = hasGreeting ? trimmed.slice(separatorIndex + 1).trim() : trimmed;
+  return `${expectedGreeting}，${body}`;
+}
+
+function normalizeProviderEnvelope(value: unknown, studentName?: string): unknown {
   if (typeof value !== "object" || value === null || !("report" in value)) return value;
   const annotations = "annotations" in value && Array.isArray(value.annotations)
     ? value.annotations.map((annotation) => {
@@ -302,18 +314,44 @@ function normalizeProviderEnvelope(value: unknown): unknown {
     : undefined;
   const normalizedEnvelope = annotations ? { ...value, annotations } : value;
   const report = normalizedEnvelope.report;
-  if (typeof report !== "object" || report === null || !("painPoints" in report) || typeof report.painPoints !== "string") {
+  if (typeof report !== "object" || report === null) return normalizedEnvelope;
+  const painPoints = "painPoints" in report && typeof report.painPoints === "string"
+    ? report.painPoints
+      .split(/\r?\n/u)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    : undefined;
+  const sampleParagraphs = "sampleParagraphs" in report && Array.isArray(report.sampleParagraphs)
+    ? report.sampleParagraphs.map((paragraph) => {
+      if (typeof paragraph !== "object" || paragraph === null || !("suggestion" in paragraph) || !Array.isArray(paragraph.suggestion)) {
+        return paragraph;
+      }
+      const suggestionParts: unknown[] = paragraph.suggestion;
+      if (!suggestionParts.every((item): item is string => typeof item === "string")) return paragraph;
+      const suggestion = suggestionParts.map((item) => item.trim()).filter(Boolean).join("；");
+      return suggestion ? { ...paragraph, suggestion } : paragraph;
+    })
+    : undefined;
+  const normalizedName = studentName?.trim() ?? "";
+  const expectedGreeting = normalizedName ? `${normalizedName}家长` : "家长您好";
+  const parentFeedbacks = "parentFeedbacks" in report && Array.isArray(report.parentFeedbacks)
+    ? report.parentFeedbacks.map((feedback) => {
+      if (typeof feedback !== "object" || feedback === null || !("content" in feedback) || typeof feedback.content !== "string") {
+        return feedback;
+      }
+      return { ...feedback, content: normalizeParentFeedbackGreeting(feedback.content, expectedGreeting) };
+    })
+    : undefined;
+  if (!painPoints && !sampleParagraphs && !parentFeedbacks) {
     return normalizedEnvelope;
   }
-  const painPoints = report.painPoints
-    .split(/\r?\n/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
   return {
     ...normalizedEnvelope,
     report: {
       ...report,
-      painPoints: painPoints.length > 0 ? painPoints : [report.painPoints.trim()],
+      ...(painPoints ? { painPoints: painPoints.length > 0 ? painPoints : [(report as { painPoints: string }).painPoints.trim()] } : {}),
+      ...(sampleParagraphs ? { sampleParagraphs } : {}),
+      ...(parentFeedbacks ? { parentFeedbacks } : {}),
     },
   };
 }
@@ -338,7 +376,7 @@ function validateUsableEnvelope(
   ) {
     throw new ParentFeedbackValidationError("parent_feedback_count");
   }
-  const envelope = aiReviewEnvelopeSchema.parse(normalizeProviderEnvelope(value));
+  const envelope = aiReviewEnvelopeSchema.parse(normalizeProviderEnvelope(value, studentName));
   for (const annotation of envelope.annotations) {
     if (annotation.pageIndex >= pageCount) {
       throw new Error("annotation.pageIndex exceeds supplied pages");
@@ -533,7 +571,7 @@ export class OpenAIReviewAdapter {
         input.imageUrls.length,
         input.studentName,
       );
-    } catch {
+    } catch (initialValidationError) {
       const repaired = await completionContent(client, {
         model: settings.model,
         response_format: { type: "json_object" },
@@ -544,6 +582,7 @@ export class OpenAIReviewAdapter {
               content,
               input.config,
               input.imageUrls.length,
+              safeValidationCode(initialValidationError),
               input.studentName,
             ),
           },

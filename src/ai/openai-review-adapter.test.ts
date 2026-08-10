@@ -114,6 +114,27 @@ function setup(contents: Array<string | null | Error>) {
 }
 
 describe("OpenAIReviewAdapter", () => {
+  it("把模型返回的修改建议字符串数组合并为单条建议", async () => {
+    const envelopeWithSuggestionArray = {
+      ...successEnvelope,
+      report: {
+        ...report,
+        sampleParagraphs: report.sampleParagraphs.map((paragraph, index) => index === 0
+          ? { ...paragraph, suggestion: ["补充人物动作", "写清心理变化"] }
+          : paragraph),
+      },
+    };
+    const harness = setup([JSON.stringify(envelopeWithSuggestionArray)]);
+
+    const result = await harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    expect(result.report?.sampleParagraphs[0].suggestion).toBe("补充人物动作；写清心理变化");
+    expect(harness.create).toHaveBeenCalledOnce();
+  });
+
   it("根据批注类别补全模型漏掉的 isHighlight", async () => {
     const envelopeWithoutHighlight = {
       ...successEnvelope,
@@ -572,6 +593,33 @@ describe("OpenAIReviewAdapter", () => {
     expect(JSON.stringify(repair.messages)).not.toContain("data:image");
   });
 
+  it("修复提示指出修改建议字段必须是非空字符串", async () => {
+    const invalidSuggestionEnvelope = {
+      ...successEnvelope,
+      report: {
+        ...report,
+        sampleParagraphs: report.sampleParagraphs.map((paragraph, index) => index === 0
+          ? { ...paragraph, suggestion: null }
+          : paragraph),
+      },
+    };
+    const harness = setup([
+      JSON.stringify(invalidSuggestionEnvelope),
+      JSON.stringify(successEnvelope),
+    ]);
+
+    await expect(harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).resolves.toEqual(successEnvelope);
+
+    const repair = harness.create.mock.calls[1][0] as {
+      messages: Array<{ content: string }>;
+    };
+    expect(repair.messages[0].content).toContain("schema_report_sampleParagraphs_0_suggestion_invalid_type");
+    expect(repair.messages[0].content).toContain("suggestion 必须是非空字符串");
+  });
+
   it("语义校验失败时修复提示包含动态页数、当前配置和等级规则", async () => {
     const offTopicNonC = {
       ...successEnvelope,
@@ -721,7 +769,7 @@ describe("OpenAIReviewAdapter", () => {
     });
   });
 
-  it("命名反馈称呼其他学生时触发修复并接受正确称呼", async () => {
+  it("命名反馈称呼其他学生时由程序替换为当前学生称呼", async () => {
     const invalidGreetingEnvelope = {
       ...namedSuccessEnvelope,
       report: {
@@ -730,20 +778,17 @@ describe("OpenAIReviewAdapter", () => {
           index === 2 ? { ...feedback, content: "小明家长，作文选材真实，第三段再补清争执原因。" } : feedback),
       },
     };
-    const harness = setup([
-      JSON.stringify(invalidGreetingEnvelope),
-      JSON.stringify(namedSuccessEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(invalidGreetingEnvelope)]);
 
     await expect(harness.adapter.analyze({
       config,
       imageDataUrls: ["data:image/jpeg;base64,eA=="],
       studentName: "艾绮",
     })).resolves.toEqual(namedSuccessEnvelope);
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(harness.create).toHaveBeenCalledOnce();
   });
 
-  it("修复后命名反馈仍缺少正确称呼时返回稳定错误类别", async () => {
+  it("命名反馈使用通用称呼时由程序补上当前学生姓名", async () => {
     const invalidGreetingEnvelope = {
       ...namedSuccessEnvelope,
       report: {
@@ -752,22 +797,19 @@ describe("OpenAIReviewAdapter", () => {
           index === 0 ? { ...feedback, content: "家长您好，我来反馈本次作文。" } : feedback),
       },
     };
-    const harness = setup([
-      JSON.stringify(invalidGreetingEnvelope),
-      JSON.stringify(invalidGreetingEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(invalidGreetingEnvelope)]);
 
-    await expect(harness.adapter.analyze({
+    const result = await harness.adapter.analyze({
       config,
       imageDataUrls: ["data:image/jpeg;base64,eA=="],
       studentName: "艾绮",
-    })).rejects.toMatchObject({
-      code: "AI_INVALID_RESPONSE",
-      upstreamCode: "parent_feedback_greeting",
     });
+
+    expect(result.report?.parentFeedbacks?.[0].content).toBe("艾绮家长，我来反馈本次作文。");
+    expect(harness.create).toHaveBeenCalledOnce();
   });
 
-  it("无姓名时修复后仍使用学生姓名称呼则拒绝保存", async () => {
+  it("无姓名时由程序把学生姓名称呼替换为通用称呼", async () => {
     const invalidGreetingEnvelope = {
       ...successEnvelope,
       report: {
@@ -776,17 +818,12 @@ describe("OpenAIReviewAdapter", () => {
           index === 0 ? { ...feedback, content: "艾绮家长，我来反馈本次作文。" } : feedback),
       },
     };
-    const harness = setup([
-      JSON.stringify(invalidGreetingEnvelope),
-      JSON.stringify(invalidGreetingEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(invalidGreetingEnvelope)]);
 
-    await expect(
-      harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] }),
-    ).rejects.toMatchObject({
-      code: "AI_INVALID_RESPONSE",
-      upstreamCode: "parent_feedback_greeting",
-    });
+    const result = await harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] });
+
+    expect(result.report?.parentFeedbacks?.[0].content).toBe("家长您好，我来反馈本次作文。");
+    expect(harness.create).toHaveBeenCalledOnce();
   });
 
   it("二次响应不是 JSON 时保留安全的解析错误类别", async () => {

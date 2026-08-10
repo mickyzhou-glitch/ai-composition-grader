@@ -10,6 +10,62 @@ function workerEnv(assetResponse: () => Response, database?: unknown) {
 }
 
 describe("Cloudflare Worker", () => {
+  it("returns the invalid review field path for an authenticated PATCH", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1",
+            username: "teacher",
+            role: "teacher",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : null),
+        })),
+      })),
+    };
+    const response = await worker.fetch(
+      new Request("https://grader.workers.dev/api/reviews/review-1", {
+        method: "PATCH",
+        headers: {
+          cookie: "__Host-zuowen_session=session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          expectedRevision: 1,
+          report: {
+            themeFit: "fits",
+            themeReason: "",
+            personalizedComment: "观察细致",
+            painPoints: [],
+            commonIssues: [],
+            revisionSuggestions: [],
+            sampleParagraphs: [{ title: "开头", text: "示范正文", suggestion: "修改建议" }],
+            parentFeedbacks: [],
+            grade: "A",
+            diagnostics: {
+              authenticityAndRelevance: { finding: "切题", action: "补充细节" },
+              materialAndDetails: { finding: "细节不足", action: "补充动作" },
+              structure: { finding: "结构完整", action: "衔接自然" },
+              language: { finding: "表达通顺", action: "精简句子" },
+            },
+          },
+        }),
+      }),
+      workerEnv(() => new Response("asset"), database),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "请求参数无效",
+        details: { path: ["report", "themeReason"] },
+      },
+    });
+  });
+
   it("队列分析失败时原子结束任务并释放作文的分析中状态", async () => {
     const prepared: Array<{ sql: string; bindings: unknown[] }> = [];
     const prepare = vi.fn((sql: string) => {

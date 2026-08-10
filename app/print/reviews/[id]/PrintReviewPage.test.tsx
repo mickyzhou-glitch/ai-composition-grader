@@ -41,7 +41,7 @@ describe("PrintReviewPage", () => {
     render(<PrintReviewPage reviewId="review-1" />);
 
     await waitFor(() => expect(mockApiFetch).toHaveBeenCalledWith("/api/reviews/review-1"));
-    expect(await screen.findByText("优点")).toBeVisible();
+    expect(await screen.findByText("改后范文")).toBeVisible();
     expect(screen.getByAltText("第 1 页原作文")).toHaveAttribute(
       "src",
       "/api/reviews/review-1/files?imageId=7&variant=original",

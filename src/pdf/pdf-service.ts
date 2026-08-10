@@ -12,7 +12,7 @@ const PDF_TIMEOUT_MS = 60_000;
 const PDF_CLOSE_TIMEOUT_MS = 5_000;
 // Bump this whenever the printable document structure changes so an otherwise
 // current review cannot return a PDF rendered with an older layout.
-const PDF_LAYOUT_RELEASED_AT = new Date("2026-07-26T16:18:00.000Z");
+const PDF_LAYOUT_RELEASED_AT = new Date("2026-08-08T06:00:00.000Z");
 
 interface PdfRoute {
   request(): { url(): string };

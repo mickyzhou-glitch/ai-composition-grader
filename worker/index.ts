@@ -15,9 +15,32 @@ import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-ada
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
 import { openSetting, sealSetting } from "../src/cloudflare/settings-secret";
 import type { ReviewView } from "../app/lib/types";
+import { ZodError } from "zod";
 
-function apiError(code: string, message: string, status: number): Response {
-  return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
+function apiError(code: string, message: string, status: number, details?: unknown): Response {
+  return Response.json({
+    ok: false,
+    error: { code, message, ...(details === undefined ? {} : { details }) },
+  }, { status, headers: { "cache-control": "no-store" } });
+}
+
+type ValidationIssue = {
+  path?: PropertyKey[];
+  errors?: ValidationIssue[][];
+};
+
+function validationErrorDetails(error: unknown): { path: PropertyKey[] } | undefined {
+  if (!(error instanceof ZodError)) return undefined;
+
+  function leafPath(issue: ValidationIssue, prefix: PropertyKey[] = []): PropertyKey[] {
+    const path = [...prefix, ...(issue.path ?? [])];
+    if (!issue.errors?.length) return path;
+    const closestBranch = [...issue.errors].sort((left, right) => left.length - right.length)[0];
+    return closestBranch?.[0] ? leafPath(closestBranch[0], path) : path;
+  }
+
+  const path = error.issues[0] ? leafPath(error.issues[0] as ValidationIssue) : [];
+  return { path };
 }
 
 function secureResponse(response: Response, pathname: string): Response {
@@ -207,7 +230,13 @@ export default {
         const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
         return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
       } catch (error) {
-        return apiError(error instanceof Error && error.name === "RevisionConflictError" ? "REVISION_CONFLICT" : "VALIDATION_ERROR", error instanceof Error && error.name === "RevisionConflictError" ? "批改记录已更新，请刷新后重试" : "请求参数无效", error instanceof Error && error.name === "RevisionConflictError" ? 409 : 400);
+        const revisionConflict = error instanceof Error && error.name === "RevisionConflictError";
+        return apiError(
+          revisionConflict ? "REVISION_CONFLICT" : "VALIDATION_ERROR",
+          revisionConflict ? "批改记录已更新，请刷新后重试" : "请求参数无效",
+          revisionConflict ? 409 : 400,
+          revisionConflict ? undefined : validationErrorDetails(error),
+        );
       }
     }
     if (reviewMatch && request.method === "DELETE") {

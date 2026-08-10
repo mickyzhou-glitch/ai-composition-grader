@@ -59,28 +59,29 @@ describe("最终交付的本机安全默认值", () => {
     }
   });
 
-  it("README 给出完整的本机安装、设置与数据删除边界", () => {
+  it("README 面向教师说明产品价值、人工复核与云端数据边界", () => {
     const readme = readWorkspaceFile("README.md");
     const install = readme.indexOf("npm install");
-    const chromium = readme.indexOf("npx playwright install chromium");
-    const database = readme.indexOf("npm run db:init");
-    const development = readme.indexOf("npm run dev");
+    const devVars = readme.indexOf("cp .dev.vars.example .dev.vars");
+    const database = readme.indexOf("npx wrangler d1 migrations apply ai-composition-grader --local");
+    const build = readme.indexOf("npm run build");
+    const development = readme.indexOf("npm run cf:dev");
 
-    expect([install, chromium, database, development]).toEqual([...new Set([install, chromium, database, development])]);
+    expect([install, devVars, database, build, development]).toEqual([...new Set([install, devVars, database, build, development])]);
     expect(install).toBeGreaterThan(-1);
-    expect(chromium).toBeGreaterThan(install);
-    expect(database).toBeGreaterThan(chromium);
-    expect(development).toBeGreaterThan(database);
+    expect(devVars).toBeGreaterThan(install);
+    expect(database).toBeGreaterThan(devVars);
+    expect(build).toBeGreaterThan(database);
+    expect(development).toBeGreaterThan(build);
     expect(readme).toContain("Node.js >= 24");
-    expect(readme).toContain("macOS");
-    expect(readme).toContain("Keychain");
-    expect(readme).toContain("127.0.0.1");
-    expect(readme).toContain("API 根地址");
-    expect(readme).toContain("模型");
-    expect(readme).toContain("API key");
-    expect(readme).toContain("测试保存");
-    expect(readme).toContain("Chromium");
-    expect(readme).toContain(".data/");
-    expect(readme).toContain("不会删除");
+    expect(readme).toContain("面向一线语文教师");
+    expect(readme).toContain("教师负责最终判断");
+    expect(readme).toContain("不提供公开注册");
+    expect(readme).toContain("OpenAI 兼容模型");
+    expect(readme).toContain("Cloudflare D1");
+    expect(readme).toContain("Cloudflare R2");
+    expect(readme).toContain("30 天到期时间");
+    expect(readme).toContain("第三方 AI 服务");
+    expect(readme).toContain("不要把真实密钥、学生作文或数据库导出提交到 Git");
   });
 });

@@ -3,6 +3,24 @@ import { describe, expect, it, vi } from "vitest";
 import { D1AnalysisJobs } from "./d1-analysis-jobs";
 
 describe("D1AnalysisJobs", () => {
+  it("把带校验详情的 AI_INVALID_RESPONSE 说明为返回格式异常", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "job-1", review_id: "review-1", status: "failed", progress_stage: "reading_images",
+            error_code: "AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type",
+            created_at: 1_700_000_000_000, finished_at: 1_700_000_000_100,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
+      message: "AI 返回格式异常，请重新分析",
+    });
+  });
+
   it("把图片批改的 403 说明为模型或网关不支持视觉输入", async () => {
     const database = {
       prepare: vi.fn(() => ({

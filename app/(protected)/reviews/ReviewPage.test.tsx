@@ -258,6 +258,38 @@ describe("复核页", () => {
     });
   });
 
+  it("保存前指出具体的空白报告字段，不发送无效 PATCH", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.clear(await screen.findByLabelText("主题判断依据"));
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("主题判断依据不能为空");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("保存被 Worker 拒绝时使用安全字段路径显示具体问题", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({
+        code: "VALIDATION_ERROR",
+        message: "请求参数无效",
+        details: { path: ["report", "sampleParagraphs", 0, "text"] },
+      }, 400));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.type(await screen.findByRole("textbox", { name: "学生姓名" }), "小明");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("示范文第 1 段的示范正文不能为空");
+  });
+
   it("支持填写并保存学生姓名", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))

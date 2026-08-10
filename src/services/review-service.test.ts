@@ -267,7 +267,7 @@ describe("ReviewService analysis CAS", () => {
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "作文批改-为自己喝彩-未填写.pdf",
       pdfPath: "pdf/作文批改-为自己喝彩-未填写.pdf",
-      exportedAt: new Date("2026-07-27T06:00:00.000Z"),
+      exportedAt: new Date("2026-08-08T07:00:00.000Z"),
     });
     const cachedRead = deferred<Buffer>();
     const originalRead = fileStore.readFile.bind(fileStore);

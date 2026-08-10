@@ -4,6 +4,7 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  evaluationReportSchema,
   MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
   type Annotation,
@@ -58,6 +59,52 @@ function expiresSoon(value: string | null | undefined) {
 
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
+}
+
+const diagnosticFieldLabels: Record<string, string> = {
+  authenticityAndRelevance: "真实度与切题",
+  materialAndDetails: "素材与细节",
+  structure: "五段结构",
+  language: "语言流畅度",
+};
+
+function validationPathMessage(inputPath: readonly unknown[]): string | null {
+  const path = inputPath[0] === "report" ? inputPath.slice(1) : inputPath;
+  if (path[0] === "themeReason") return "主题判断依据不能为空";
+  if (path[0] === "personalizedComment") return "优点至少保留一项，且内容不能为空";
+  if (path[0] === "sampleParagraphs" && typeof path[1] === "number") {
+    const field = path[2] === "title" ? "标题" : path[2] === "suggestion" ? "修改建议" : "示范正文";
+    return `示范文第 ${path[1] + 1} 段的${field}不能为空`;
+  }
+  if (path[0] === "diagnostics" && typeof path[1] === "string") {
+    const field = path[2] === "action" ? "修改动作" : "精准定位";
+    return `${diagnosticFieldLabels[path[1]] ?? "四维诊断"}的${field}不能为空`;
+  }
+  if (path[0] === "parentFeedbacks" && typeof path[1] === "number") {
+    return `第 ${path[1] + 1} 份家长反馈不能为空`;
+  }
+  if (path[0] === "studentName") return "学生姓名不能超过 50 个字";
+  if (path[0] === "annotations") return "图片批注位置或内容无效，请检查后再保存";
+  return null;
+}
+
+function reportValidationMessage(report: EvaluationReport): string | null {
+  const result = evaluationReportSchema.safeParse(report);
+  if (result.success) return null;
+  return validationPathMessage(result.error.issues[0]?.path ?? [])
+    ?? "复核内容有未填写或格式不正确的项目，请检查后再保存";
+}
+
+function saveErrorMessage(error: unknown): string {
+  if (error instanceof ApiError && error.code === "VALIDATION_ERROR") {
+    const details = error.details;
+    if (typeof details === "object" && details !== null && "path" in details) {
+      const path = (details as { path?: unknown }).path;
+      const message = validationPathMessage(Array.isArray(path) ? path : []);
+      if (message) return message;
+    }
+  }
+  return errorMessage(error);
 }
 
 export function ReviewPage({ reviewId }: { reviewId: string }) {
@@ -348,6 +395,12 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
 
   async function save() {
     if (!report || !review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    const validationMessage = reportValidationMessage(report);
+    if (validationMessage) {
+      setError(validationMessage);
+      setNotice("");
+      return;
+    }
     setBusy("save");
     setError("");
     try {
@@ -365,7 +418,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       setDirty(false);
       setNotice("复核内容已保存");
     } catch (caught) {
-      setError(caught instanceof ApiError && caught.status === 409 ? "内容发生冲突，请刷新后重新检查。" : errorMessage(caught));
+      setError(caught instanceof ApiError && caught.status === 409 ? "内容发生冲突，请刷新后重新检查。" : saveErrorMessage(caught));
     } finally {
       setBusy(null);
     }

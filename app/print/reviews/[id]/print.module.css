@@ -1,142 +1,198 @@
 @page {
-  size: 16in 9in;
+  size: A4 landscape;
   margin: 0;
 }
 
 .document {
-  --ink: #202020;
-  --muted: #53645e;
-  --paper: #fbfefc;
-  --line: #d5e3de;
-  --teal: #01654b;
-  --teal-soft: #e2f1ec;
+  --blue: #255ab1;
+  --red: #c90000;
+  --heiti: SimHei, "Heiti SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --kaiti: STKaiti, KaiTi, "Kaiti SC", "FZKai-Z03", serif;
   min-height: 100%;
   background: #fff;
-  color: var(--ink);
-  font-family: STKaiti, KaiTi, "Kaiti SC", "FZKai-Z03", serif;
-  font-size: 18pt;
-  line-height: 1.65;
+  color: var(--blue);
+  font-family: var(--heiti);
+  font-size: 12pt;
+  line-height: 1.45;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
 }
 
-.document *, .document *::before, .document *::after { box-sizing: border-box; }
-.document h1, .document h2, .document h3, .document p { margin-top: 0; }
-.document h1, .document h2, .document h3 { break-after: avoid-page; }
-
-.runningHeader {
-  display: none;
-  position: fixed;
-  right: 0;
-  left: 0;
-  color: var(--muted);
-  font-size: 8pt;
+.document *,
+.document *::before,
+.document *::after {
+  box-sizing: border-box;
 }
-.runningHeader { top: -8mm; justify-content: space-between; border-bottom: .2mm solid var(--line); }
 
-.sheet { min-height: 9in; break-after: page; }
-.sheet[data-print-final="true"] { break-after: auto; }
-.summary {
+.document h2,
+.document h3,
+.document h4,
+.document p {
+  margin-top: 0;
+}
+
+.document h2,
+.document h3,
+.document h4 {
+  break-after: avoid-page;
+}
+
+.sheet {
+  width: 297mm;
+  height: 210mm;
+  min-height: 210mm;
+  break-after: page;
+}
+
+.sheet[data-print-final="true"] {
+  break-after: auto;
+}
+
+.feedbackPage {
   display: grid;
-  height: 9in;
-  min-height: 9in;
-  max-height: 9in;
-  place-items: center;
-  padding: 1.1in 2.6in;
+  align-content: stretch;
+  padding: 0;
+}
+
+.feedbackLayout {
+  display: grid;
+  height: 210mm;
+  min-height: 210mm;
+  grid-template-columns: 19.5% 44% 36.5%;
+  align-items: stretch;
+}
+
+.suggestionColumn,
+.modelColumn {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.suggestionColumn {
+  padding: 10mm 4mm 7mm 6mm;
+  color: var(--blue);
+  font-family: var(--heiti);
+  font-size: 11pt;
+  line-height: 1.4;
+}
+
+.modelColumn {
+  padding: 4mm 5mm;
+  color: var(--red);
+  font-family: var(--kaiti);
+  font-size: 9.5pt;
+  line-height: 1.3;
+}
+
+.modelColumn > h2 {
+  margin: 0 0 1.5mm;
+  font-size: 14pt;
+  font-weight: 500;
+}
+
+.imageFigure {
+  position: relative;
+  width: 100%;
+  height: 210mm;
+  margin: 0;
   overflow: hidden;
-  break-inside: avoid-page;
+  background: #fff;
 }
-.summaryContent { color: #c90000; font-size: 31pt; line-height: 1.38; }
-.gradeBadge { margin: 0 0 .12in; color: var(--teal); font-size: 12pt; font-weight: 700; }
-.summaryContent h1 { margin: 0 0 .24in; font-size: 39pt; font-weight: 500; }
-.summaryContent p { margin: 0; }
-.summaryPoints { display: grid; gap: .22in; margin: .38in 0 0; padding: 0; list-style: none; }
-.summaryPoints li { display: grid; grid-template-columns: 1.3em minmax(0, 1fr); align-items: start; }
-.summaryPoints li > span { font-weight: 700; }
-.summaryCompact { padding: .75in 1.55in; }
-.summaryCompact .summaryContent { font-size: 23pt; line-height: 1.3; }
-.summaryCompact .summaryContent h1 { font-size: 32pt; }
-.summaryCompact .summaryPoints { gap: .15in; margin-top: .24in; }
-.summaryDense { padding: .5in .9in; }
-.summaryDense .summaryContent { font-size: 15pt; line-height: 1.22; }
-.summaryDense .summaryContent h1 { margin-bottom: .12in; font-size: 26pt; }
-.summaryDense .summaryPoints { gap: .08in; margin-top: .13in; }
-.eyebrow { margin-bottom: 2mm; color: var(--teal); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
-.summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
-.summaryGrid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8mm; margin-bottom: 12mm; }
-.levelBadge, .overallComment, .assignmentInfo, .card, .sampleParagraph {
-  border: .25mm solid var(--line);
-  background: var(--paper);
-  break-inside: avoid;
+
+.imageFigure img {
+  display: block;
+  width: 100%;
+  height: 210mm;
+  object-fit: contain;
+  object-position: center;
 }
-.levelBadge { display: grid; min-height: 48mm; padding: 6mm; place-content: center; border-top: 1.2mm solid var(--teal); text-align: center; }
-.levelBadge span { color: var(--muted); font-size: 8pt; }
-.levelBadge b { margin-top: 2mm; color: var(--ink); font: 700 19pt/1.2 STKaiti, KaiTi, serif; }
-.overallComment { padding: 10mm; border-left: 1.2mm solid var(--teal); }
-.overallComment h2 { margin-bottom: 3mm; }
-.overallComment p { margin-bottom: 0; font-size: 15pt; }
-.assignmentInfo { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 0; }
-.assignmentInfo > div { padding: 4mm 5mm; border-bottom: .2mm solid var(--line); }
-.assignmentInfo dt { color: var(--muted); font-size: 8pt; }
-.assignmentInfo dd { margin: 1mm 0 0; }
 
-.feedbackPage { display: grid; align-content: stretch; padding: 0; }
-.feedbackLayout { display: grid; min-height: 9in; grid-template-columns: 19.5% 44% 36.5%; gap: 0; align-items: stretch; }
-.suggestionColumn, .modelColumn { min-width: 0; }
-.suggestionColumn { padding: .42in .22in .3in .25in; color: #c90000; font-size: 19pt; line-height: 1.24; }
-.modelColumn { padding: .16in .3in .2in .22in; color: #255ab1; font-size: 17pt; line-height: 1.27; }
-.modelColumn > h2 { margin: 0 0 .06in; font-size: 23pt; font-weight: 500; }
+.suggestionParagraph {
+  margin: 0 0 9mm;
+}
 
-.annotationPage { display: grid; grid-template-rows: auto 1fr; padding-top: 2mm; }
-.pageHeading { margin-bottom: 4mm; }
-.pageHeading h2 { margin-bottom: 0; }
-.annotationLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 5mm; align-items: start; }
-.imageFigure { position: relative; width: 100%; height: 9in; margin: 0; overflow: hidden; background: #f4eee5; }
-.imageFigure img { display: block; width: 100%; height: 9in; object-fit: contain; }
-.suggestionParagraph { margin: 0 0 .56in; }
-.suggestionParagraph h3 { margin: 0 0 .04in; color: #d00000; font-size: 20pt; font-weight: 500; }
-.suggestionParagraph p { margin: 0; }
-.modelParagraph { margin: 0 0 .34in; padding: 0; border: 0; }
-.modelParagraph h4 { margin: 0 0 .03in; color: #d00000; font-size: 18pt; font-weight: 500; }
-.modelParagraph p { margin: 0; white-space: pre-wrap; }
-.muted { color: var(--muted); }
+.suggestionParagraph h3 {
+  margin: 0 0 1mm;
+  color: inherit;
+  font-size: 12pt;
+  font-weight: 700;
+}
 
-.analysisPages { break-before: page; }
-.card, .samples { margin-bottom: 5mm; padding: 6mm; }
-.card h2, .samples h2 { margin-bottom: 3mm; }
-.themeCard { display: grid; grid-template-columns: 42mm 1fr; align-items: center; border-top: 1.2mm solid var(--teal); }
-.themeCard h2 { margin-bottom: 0; color: var(--teal); font-size: 18pt; }
-.themeCard > p { margin-bottom: 0; }
-.textList { display: grid; gap: 2mm; margin: 0; padding-left: 5mm; }
-.scoreTable { width: 100%; border-collapse: collapse; }
-.scoreTable th, .scoreTable td { padding: 2.5mm 3mm; border-bottom: .2mm solid var(--line); text-align: left; }
-.scoreTable td { text-align: right; }
-.totalRow { color: var(--teal); font-weight: 800; }
-.samples { padding: 0; }
-.sampleParagraph { margin: 0 0 4mm; padding: 0 0 3mm; border: 0; border-bottom: .2mm solid var(--line); background: transparent; }
-.sampleParagraph:last-child { margin-bottom: 0; border-bottom: 0; }
-.sampleParagraph h4 { margin: 0 0 2mm; color: #9b6a1c; font-size: 9pt; }
-.sampleText { margin-bottom: 0; white-space: pre-wrap; }
-.sampleSuggestion { margin-bottom: 0; padding: 3mm 4mm; border-left: 1mm solid var(--line); background: #f4f9f7; color: var(--ink); break-before: avoid; }
-.sampleSuggestion b { margin-right: 1mm; }
+.suggestionParagraph p {
+  margin: 0;
+}
+
+.modelParagraph {
+  margin: 0 0 2.5mm;
+  padding: 0;
+}
+
+.modelParagraph h4 {
+  margin: 0 0 .5mm;
+  color: inherit;
+  font-size: 10pt;
+  font-weight: 500;
+}
+
+.modelParagraph p {
+  margin: 0;
+  white-space: pre-wrap;
+}
 
 @media screen and (max-width: 768px) {
-  .document { font-size: 16px; line-height: 1.55; }
-  .sheet, .summary { width: 100%; min-height: 0; height: auto; max-height: none; padding: 28px 18px; }
-  .summaryContent { font-size: 1.2rem; line-height: 1.5; }
-  .summaryContent h1 { font-size: 2rem; }
-  .summaryPoints { gap: 12px; margin-top: 18px; }
-  .feedbackLayout { min-height: 0; grid-template-columns: 1fr; }
-  .suggestionColumn, .modelColumn { padding: 22px 18px; font-size: 1rem; line-height: 1.55; }
-  .suggestionParagraph { margin-bottom: 20px; }
-  .suggestionParagraph h3, .modelParagraph h4 { font-size: 1.1rem; }
-  .modelColumn > h2 { font-size: 1.45rem; }
-  .imageFigure, .imageFigure img { height: auto; min-height: 0; }
-  .imageFigure img { max-height: none; object-fit: contain; }
+  .document {
+    font-size: 16px;
+    line-height: 1.55;
+  }
+
+  .sheet {
+    width: 100%;
+    height: auto;
+    min-height: 0;
+  }
+
+  .feedbackLayout {
+    height: auto;
+    min-height: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .suggestionColumn,
+  .modelColumn {
+    padding: 22px 18px;
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+
+  .suggestionParagraph {
+    margin-bottom: 20px;
+  }
+
+  .suggestionParagraph h3,
+  .modelParagraph h4 {
+    font-size: 1.1rem;
+  }
+
+  .modelColumn > h2 {
+    font-size: 1.45rem;
+  }
+
+  .imageFigure,
+  .imageFigure img {
+    height: auto;
+    min-height: 0;
+  }
+
+  .imageFigure img {
+    max-height: none;
+    object-fit: contain;
+  }
 }
 
 @media print {
-  .runningHeader { display: flex; }
-  .sheet, .card, .sampleParagraph, .annotationNotes li { break-inside: avoid; }
-  .sampleSuggestion { break-inside: avoid; }
+  .sheet,
+  .suggestionParagraph,
+  .modelParagraph {
+    break-inside: avoid;
+  }
 }
