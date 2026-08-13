@@ -134,6 +134,28 @@ describe("CompositionReviewAdapter", () => {
     });
   });
 
+  it("repairs one invalid provider response before failing the analysis", async () => {
+    const harness = setup();
+    const request = harness.create.getMockImplementation();
+    harness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+        report: { ...report, parentFeedbacks: [] },
+        annotationAnchors: [],
+      }) } }] })
+      .mockImplementationOnce(request!);
+
+    await expect(harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
+      studentName: "小艾",
+    })).resolves.toMatchObject({ report, annotationAnchors: [{ pageIndex: 0 }] });
+
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    const repairRequest = harness.create.mock.calls[1][0] as { messages: Array<{ content: string }> };
+    expect(repairRequest.messages[1].content).toContain("parent_feedback_count");
+    expect(repairRequest.messages[1].content).toContain("我终于明白了坚持的意义");
+  });
+
   it("rejects coordinates supplied by the content model", async () => {
     const harness = setup();
     const request = harness.create.getMockImplementation();
@@ -148,7 +170,10 @@ describe("CompositionReviewAdapter", () => {
       config,
       pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "schema_annotationAnchors_0_unrecognized_keys",
+    });
   });
 
   it("rejects a structurally valid report that omits the three parent feedback variants", async () => {
@@ -165,6 +190,9 @@ describe("CompositionReviewAdapter", () => {
       config,
       pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "parent_feedback_count",
+    });
   });
 });

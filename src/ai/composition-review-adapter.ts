@@ -72,6 +72,37 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
   ].filter(Boolean).join("\n\n");
 }
 
+function validationCode(error: unknown): string {
+  if (error instanceof SyntaxError) return "json_parse";
+  if (error instanceof z.ZodError) {
+    const issue = error.issues[0];
+    const path = issue?.path.map(String).join("_") || "root";
+    return `schema_${path}_${issue?.code || "invalid"}`.slice(0, 64);
+  }
+  if (!(error instanceof Error)) return "validation_unknown";
+  if (error.message.includes("parent feedback count")) return "parent_feedback_count";
+  if (error.message.includes("parent feedback semantics")) return "parent_feedback_semantics";
+  if (error.message.includes("sample paragraphs")) return "sample_paragraphs";
+  if (error.message.includes("overall feedback")) return "overall_feedback";
+  if (error.message.includes("off_topic")) return "off_topic_grade";
+  if (error.message.includes("annotation page")) return "annotation_page_index";
+  return "validation_unknown";
+}
+
+function validateContentResult(
+  content: string,
+  input: AnalyzeOcrTextInput,
+): CompositionReviewResult {
+  const parsed = resultSchema.parse(parseJsonResponse(content));
+  if (parsed.annotationAnchors.some(({ pageIndex }) => pageIndex >= input.pages.length)) {
+    throw new Error("annotation page exceeds OCR pages");
+  }
+  return {
+    report: validateGeneratedReportSemantics(parsed.report, input.config, input.studentName),
+    annotationAnchors: parsed.annotationAnchors,
+  };
+}
+
 export class CompositionReviewAdapter {
   private readonly clientFactory: OpenAIClientFactory;
 
@@ -89,26 +120,44 @@ export class CompositionReviewAdapter {
     }
     const { client, model, baseUrl } = await roleClient(this.settings, this.clientFactory, "content");
     const isDeepSeek = new URL(baseUrl).hostname === "api.deepseek.com";
-    const content = await completionContent(client, {
+    const requestOptions = {
       model,
       response_format: { type: "json_object" },
       ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
+    };
+    const content = await completionContent(client, {
+      ...requestOptions,
       messages: [
         { role: "system", content: contentPrompt(input) },
         { role: "user", content: JSON.stringify({ pages: input.pages }) },
       ],
     });
     try {
-      const parsed = resultSchema.parse(parseJsonResponse(content));
-      if (parsed.annotationAnchors.some(({ pageIndex }) => pageIndex >= input.pages.length)) {
-        throw new Error("annotation page exceeds OCR pages");
+      return validateContentResult(content, input);
+    } catch (initialError) {
+      const repaired = await completionContent(client, {
+        ...requestOptions,
+        messages: [
+          { role: "system", content: contentPrompt(input) },
+          { role: "user", content: JSON.stringify({
+            pages: input.pages,
+            invalidResponse: content,
+            validationError: validationCode(initialError),
+            instruction: "修复 invalidResponse，使其严格符合系统要求；只返回修复后的完整 JSON 对象。",
+          }) },
+        ],
+      });
+      try {
+        return validateContentResult(repaired, input);
+      } catch (repairError) {
+        throw new AiAdapterError(
+          "AI_INVALID_RESPONSE",
+          "作文内容模型返回结果结构无效",
+          502,
+          undefined,
+          validationCode(repairError),
+        );
       }
-      return {
-        report: validateGeneratedReportSemantics(parsed.report, input.config, input.studentName),
-        annotationAnchors: parsed.annotationAnchors,
-      };
-    } catch {
-      throw new AiAdapterError("AI_INVALID_RESPONSE", "作文内容模型返回结果结构无效", 502);
     }
   }
 }
