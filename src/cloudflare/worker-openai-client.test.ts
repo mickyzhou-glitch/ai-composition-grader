@@ -39,4 +39,18 @@ describe("createWorkerOpenAIClient", () => {
     }));
     vi.unstubAllGlobals();
   });
+
+  it("把客户端超时时间传给上游 fetch", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: "{}" } }],
+    }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createWorkerOpenAIClient({ apiKey: "server-key", baseURL: "https://gateway.test/v1", timeout: 180_000, maxRetries: 1 });
+    await client.chat.completions.create({ model: "content-model", messages: [] });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    vi.unstubAllGlobals();
+  });
 });

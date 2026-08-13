@@ -87,10 +87,12 @@ export class CompositionReviewAdapter {
     if (input.pages.length < 1 || input.pages.some((page, index) => page.pageIndex !== index)) {
       throw new TypeError("pages must use continuous zero-based indexes");
     }
-    const { client, model } = await roleClient(this.settings, this.clientFactory, "content");
+    const { client, model, baseUrl } = await roleClient(this.settings, this.clientFactory, "content");
+    const isDeepSeek = new URL(baseUrl).hostname === "api.deepseek.com";
     const content = await completionContent(client, {
       model,
       response_format: { type: "json_object" },
+      ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
       messages: [
         { role: "system", content: contentPrompt(input) },
         { role: "user", content: JSON.stringify({ pages: input.pages }) },

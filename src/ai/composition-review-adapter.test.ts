@@ -115,6 +115,25 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("annotationAnchors={pageIndex:integer");
   });
 
+  it("disables DeepSeek default thinking mode for content generation", async () => {
+    const harness = setup();
+    harness.settings.getRuntimeConfig.mockResolvedValue({
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-flash",
+      apiKey: "content-secret",
+    });
+
+    await harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
+      studentName: "小艾",
+    });
+
+    expect(harness.create.mock.calls[0][0]).toMatchObject({
+      thinking: { type: "disabled" },
+    });
+  });
+
   it("rejects coordinates supplied by the content model", async () => {
     const harness = setup();
     const request = harness.create.getMockImplementation();

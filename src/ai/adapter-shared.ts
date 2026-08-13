@@ -14,7 +14,7 @@ export async function roleClient(
   settingsSource: AiSettingsSource,
   clientFactory: OpenAIClientFactory,
   role: "vision" | "content",
-): Promise<{ client: OpenAICompatibleClient; model: string }> {
+): Promise<{ client: OpenAICompatibleClient; model: string; baseUrl: string }> {
   const settings = await settingsSource.getRuntimeConfig(role);
   if (!settings) {
     throw new AiAdapterError(
@@ -25,6 +25,7 @@ export async function roleClient(
   }
   return {
     model: settings.model,
+    baseUrl: settings.baseUrl,
     client: clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,

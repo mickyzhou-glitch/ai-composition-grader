@@ -29,6 +29,7 @@ export const createWorkerOpenAIClient: OpenAIClientFactory = (options): OpenAICo
           method: "POST",
           headers: aiRequestHeaders(options.baseURL, options.apiKey),
           body: JSON.stringify(input),
+          signal: AbortSignal.timeout(options.timeout),
         });
         const payload = await responsePayload(response);
         if (!response.ok) {
