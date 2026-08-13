@@ -16,6 +16,7 @@ function database(): D1Database {
             async all() {
               if (query.includes("FROM reviews WHERE owner_id")) return { results: [{
                 id: "r1", status: "draft", student_name: "小明", config, report: null, revision: 2,
+                image_revision: 3, ocr_checkpoint: null, report_ocr_revision: null,
                 pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null, expires_at: null,
                 created_at: 1_700_000_000_000, updated_at: 1_700_000_100_000,
               }] };
@@ -43,7 +44,8 @@ describe("D1ReviewReader", () => {
   it("returns the existing page data shape and keeps R2 keys scoped to the owner", async () => {
     const reader = new D1ReviewReader(database());
     await expect(reader.list("teacher-1")).resolves.toEqual([expect.objectContaining({
-      id: "r1", status: "draft", hasPdf: false, images: [expect.objectContaining({ id: 7, rotation: 0 })],
+      id: "r1", status: "draft", hasPdf: false, ocr: null, reportStale: false,
+      images: [expect.objectContaining({ id: 7, rotation: 0 })],
     })]);
     await expect(reader.imageObjectKey("teacher-1", "r1", 7, "annotation")).resolves.toEqual({
       key: "users/teacher-1/reviews/r1/images/annotation.jpg", contentType: "image/jpeg",

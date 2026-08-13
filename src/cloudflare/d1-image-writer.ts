@@ -19,7 +19,9 @@ export class D1ImageWriter {
     if (review.revision !== expectedRevision) throw new Error("REVISION_CONFLICT");
     const now = Date.now();
     const updated = await this.database.prepare(`
-      UPDATE reviews SET status = 'draft', report = NULL, revision = revision + 1, analysis_run_id = NULL,
+      UPDATE reviews SET status = 'draft', report = NULL, revision = revision + 1,
+        image_revision = image_revision + 1, ocr_checkpoint = NULL, report_ocr_revision = NULL,
+        analysis_run_id = NULL,
         pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL, expires_at = COALESCE(expires_at, ?),
         privacy_consent_version = COALESCE(privacy_consent_version, ?), privacy_consented_at = COALESCE(privacy_consented_at, ?), updated_at = ?
       WHERE id = ? AND owner_id = ? AND revision = ?

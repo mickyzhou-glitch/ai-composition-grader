@@ -34,22 +34,28 @@ describe("D1ReviewWriter", () => {
   });
 
   it("uses the expected revision when editing a review", async () => {
+    const queries: string[] = [];
     const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
     const database = {
-      prepare: vi.fn((query: string) => ({
+      prepare: vi.fn((query: string) => {
+        queries.push(query);
+        return ({
         bind: vi.fn(() => ({
           first: vi.fn().mockResolvedValue(query.startsWith("SELECT student_name") ? {
             student_name: "小明", config: JSON.stringify(config), report: null, status: "draft", revision: 4,
           } : null),
           run,
         })),
-      })),
+      }); }),
     } as unknown as D1Database;
 
     await expect(new D1ReviewWriter(database).update("teacher-1", "review-1", {
       expectedRevision: 4, studentName: "小红",
     })).resolves.toEqual({ revision: 5 });
     expect(run).toHaveBeenCalledOnce();
+    const update = queries.find((query) => query.includes("UPDATE reviews SET"));
+    expect(update).not.toContain("image_revision");
+    expect(update).not.toContain("ocr_checkpoint");
   });
 
   it("marks a completed review as exported only for its owner", async () => {

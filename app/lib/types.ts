@@ -29,6 +29,12 @@ export interface ReviewView {
   expiresAt?: string | null;
   images: ReviewImageView[];
   annotations: Annotation[];
+  ocr: {
+    ocrRevision: number;
+    editedAt: string | null;
+    pages: Array<{ pageIndex: number; text: string; readable: boolean; warnings: string[] }>;
+  } | null;
+  reportStale: boolean;
   hasPdf: boolean;
   pdfFilename: string | null;
 }

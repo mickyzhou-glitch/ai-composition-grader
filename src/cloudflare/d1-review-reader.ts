@@ -5,6 +5,8 @@ import {
   normalizedCropSchema,
   reviewStatusSchema,
 } from "../domain/contracts";
+import { ocrCheckpointSchema } from "../ocr/contracts";
+import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 
 interface ReviewRow {
   id: string;
@@ -13,6 +15,9 @@ interface ReviewRow {
   config: string;
   report: string | null;
   revision: number;
+  image_revision: number;
+  ocr_checkpoint: string | null;
+  report_ocr_revision: number | null;
   pdf_filename: string | null;
   pdf_path: string | null;
   pdf_revision: number | null;
@@ -57,7 +62,7 @@ export class D1ReviewReader {
 
   async list(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
-      SELECT id, status, student_name, config, report, revision, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, created_at, updated_at
       FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
     `).bind(ownerId).all<ReviewRow>();
     return Promise.all(results.map((review) => this.hydrate(ownerId, review)));
@@ -65,7 +70,7 @@ export class D1ReviewReader {
 
   async get(ownerId: string, reviewId: string): Promise<unknown | null> {
     const row = await this.database.prepare(`
-      SELECT id, status, student_name, config, report, revision, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, created_at, updated_at
       FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
     `).bind(reviewId, ownerId).first<ReviewRow>();
     return row ? this.hydrate(ownerId, row) : null;
@@ -122,11 +127,17 @@ export class D1ReviewReader {
     }));
     const config = assignmentConfigSchema.parse(JSON.parse(review.config));
     const report = review.report === null ? null : evaluationReportSchema.parse(JSON.parse(review.report));
+    const checkpoint = review.ocr_checkpoint === null
+      ? null
+      : ocrCheckpointSchema.parse(JSON.parse(review.ocr_checkpoint));
+    const currentCheckpoint = checkpoint?.sourceRevision === review.image_revision ? checkpoint : null;
+    const ocr = currentCheckpoint ? D1OcrCheckpointRepository.publicView(currentCheckpoint) : null;
+    const reportStale = report !== null && currentCheckpoint !== null && review.report_ocr_revision !== currentCheckpoint.ocrRevision;
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
     return {
       id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, config, report,
       revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at), expiresAt: date(review.expires_at),
-      images, annotations, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,
+      images, annotations, ocr, reportStale, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,
     };
   }
 }
