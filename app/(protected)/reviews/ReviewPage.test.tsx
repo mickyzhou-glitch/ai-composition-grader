@@ -46,6 +46,12 @@ const review = {
     sampleParagraphs: [{ title: "示范段", text: "示范正文", suggestion: "修改建议" }],
     parentFeedbacks,
   },
+  ocr: {
+    ocrRevision: 1,
+    editedAt: null,
+    pages: [{ pageIndex: 0, text: "我为自己鼓掌。", readable: true, warnings: [] }],
+  },
+  reportStale: false,
   hasPdf: false,
   pdfFilename: null,
   expiresAt: "2026-08-19T08:00:00.000Z",
@@ -222,6 +228,48 @@ describe("复核页", () => {
     expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
       teacherGuidance: "请重点看结尾是否扣题",
     });
+  });
+
+  it("识别原文保存后保留旧报告并提示重新生成", async () => {
+    const staleReview = {
+      ...review,
+      ocr: { ...review.ocr, ocrRevision: 2, pages: [{ ...review.ocr.pages[0], text: "老师修正后的作文。" }] },
+      reportStale: true,
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(staleReview));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "识别原文" }));
+    const editor = screen.getByRole("textbox", { name: "第 1 页识别原文" });
+    await user.clear(editor);
+    await user.type(editor, "老师修正后的作文。");
+    await user.click(screen.getByRole("button", { name: "保存识别原文" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("批改报告基于旧版识别原文");
+    await user.click(screen.getByRole("tab", { name: "批改报告" }));
+    expect(screen.getByLabelText("优点一")).toHaveValue("真诚");
+  });
+
+  it("从过期提示重新生成时只提交 content_only，失败仍保留旧报告", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, reportStale: true }))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({ code: "AI_REQUEST_FAILED", message: "内容模型暂时不可用" }, 502));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "重新生成批改" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
+      mode: "content_only",
+    });
+    expect(await screen.findByText("内容模型暂时不可用")).toBeInTheDocument();
+    expect(screen.getByLabelText("优点一")).toHaveValue("真诚");
   });
 
   it("保存时 PATCH 完整 report 与 annotations", async () => {
@@ -550,7 +598,7 @@ describe("复核页", () => {
       .mockImplementationOnce(() => json({ ...review, revision: 2 }));
     render(<ReviewPage />);
 
-    expect(await screen.findByText("AI 分析：生成批改")).toBeInTheDocument();
+    expect(await screen.findByText("AI 分析：正在生成批改内容")).toBeInTheDocument();
     await waitFor(() => expect(intervals).toHaveLength(1));
     intervals[0]();
 

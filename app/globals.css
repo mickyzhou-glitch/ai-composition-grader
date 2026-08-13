@@ -163,6 +163,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .auth-card h1 { margin-bottom: 8px; font: 700 2.25rem/1.1 STKaiti, KaiTi, serif; }
 .auth-card .error-banner { margin-bottom: 0; }
 .form-stack label, .field { display: grid; gap: 7px; font-size: .9rem; font-weight: 700; }
+.model-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.model-settings-grid h2 { margin: 0; font-size: 1.05rem; }
 input, textarea, select {
   width: 100%;
   min-height: 44px;
@@ -274,6 +276,16 @@ textarea { min-height: 100px; resize: vertical; }
 .page-tabs { display: flex; gap: 5px; margin-bottom: 10px; }
 .page-tabs button { min-height: 38px; padding: 7px 14px; border: 1px solid var(--line); border-radius: 9px 9px 0 0; background: #e5eeeb; color: var(--muted); cursor: pointer; }
 .page-tabs button[aria-selected="true"] { border-color: var(--teal); background: var(--ivory); color: var(--teal); font-weight: 800; }
+.review-view-tabs { display: flex; gap: 4px; margin-top: 18px; border-bottom: 1px solid var(--line); }
+.review-view-tabs button { min-height: 42px; padding: 8px 18px; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--muted); cursor: pointer; font-weight: 800; }
+.review-view-tabs button[aria-selected="true"] { border-bottom-color: var(--teal); color: var(--teal); }
+.review-view-tabs button:disabled { cursor: not-allowed; opacity: .45; }
+.stale-report-banner { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; padding: 12px 16px; border: 1px solid #c55e4f; border-radius: 8px; background: #fff5f1; color: #7e2e24; font-weight: 700; }
+.ocr-editor { padding: 20px 0; }
+.ocr-page-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.ocr-page { display: grid; min-width: 0; gap: 8px; font-weight: 800; }
+.ocr-page textarea { width: 100%; min-height: 360px; resize: vertical; overflow: auto; line-height: 1.8; overflow-wrap: anywhere; }
+.ocr-page small { color: #8a3c31; font-weight: 600; }
 .annotation-workspace { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(340px, .65fr); gap: 16px; align-items: start; }
 .annotation-canvas { position: sticky; top: 12px; overflow: hidden; border: 1px solid #c6d6d0; border-radius: 12px; background: #d8e3df; box-shadow: var(--shadow); cursor: crosshair; }
 .annotation-canvas:focus-visible { outline: 3px solid rgb(1 101 75 / 38%); outline-offset: 3px; }
@@ -399,6 +411,7 @@ textarea { min-height: 100px; resize: vertical; }
   .review-actions .button { flex: 1; }
   .analysis-guidance { width: 100%; }
   .annotation-workspace { grid-template-columns: 1fr; }
+  .model-settings-grid, .ocr-page-grid { grid-template-columns: 1fr; }
   .annotation-canvas { position: relative; top: 0; }
   .report-section { padding: 18px; }
   .report-arrays, .score-layout, .sample-card, .diagnostic-grid { grid-template-columns: 1fr; }
@@ -461,6 +474,8 @@ textarea { min-height: 100px; resize: vertical; }
   .review-actions .button { width: 100%; }
   .page-tabs { overflow-x: auto; padding-bottom: 2px; scrollbar-width: thin; }
   .page-tabs button { flex: 0 0 auto; }
+  .stale-report-banner { align-items: stretch; flex-direction: column; }
+  .ocr-page textarea { min-height: 280px; }
   .canvas-hint { max-width: calc(100% - 20px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .annotation-card { padding: 14px; }
   .annotation-fields { grid-template-columns: 1fr; }

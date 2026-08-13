@@ -10,6 +10,126 @@ function workerEnv(assetResponse: () => Response, database?: unknown) {
 }
 
 describe("Cloudflare Worker", () => {
+  it("内容模型连接测试只发送纯文本请求", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1",
+            username: "teacher",
+            role: "teacher",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM settings") ? { encrypted_api_key: null } : null),
+        })),
+      })),
+    };
+    const upstream = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "OK" } }],
+    }), { headers: { "content-type": "application/json" } }));
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ baseUrl: "https://content.example/v1", model: "writer" }),
+    }), {
+      ASSETS: { fetch: async () => new Response("asset") },
+      DB: database,
+      CONTENT_AI_API_KEY: "content-secret",
+    } as never);
+
+    expect(response.status).toBe(200);
+    expect(upstream).toHaveBeenCalledOnce();
+    const body = JSON.parse((upstream.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.messages).toEqual([{ role: "user", content: "请只回复 OK" }]);
+    expect(JSON.stringify(body)).not.toContain("image_url");
+  });
+
+  it("保存作文内容模型时只更新 content 角色", async () => {
+    const statements: Array<{ sql: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const statement = {
+          sql,
+          bindings: [] as unknown[],
+          bind(...bindings: unknown[]) {
+            this.bindings = bindings;
+            return this;
+          },
+          async first() {
+            if (sql.includes("FROM sessions INNER JOIN users")) return {
+              id: "teacher-1", username: "teacher", role: "teacher",
+              must_change_password: 0, expires_at: Date.now() + 60_000,
+            };
+            if (sql.includes("FROM settings")) return { encrypted_api_key: "sealed-existing" };
+            return null;
+          },
+          async run() { return { meta: { changes: 1 } }; },
+        };
+        statements.push(statement);
+        return statement;
+      }),
+    };
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content", {
+      method: "PUT",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ baseUrl: "https://content.example/v1", model: "writer" }),
+    }), workerEnv(() => new Response("asset"), database));
+
+    expect(response.status).toBe(200);
+    const insert = statements.find(({ sql }) => sql.includes("INSERT INTO settings"));
+    expect(insert?.bindings[0]).toBe("content");
+    expect(insert?.bindings).not.toContain("vision");
+  });
+
+  it("OCR 版本冲突时返回 409 且不暴露内部检查点", async () => {
+    const checkpoint = JSON.stringify({
+      version: 1,
+      sourceRevision: 2,
+      ocrRevision: 3,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "作文原文", readable: true, warnings: [], blocks: [] }],
+    });
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1", username: "teacher", role: "teacher",
+            must_change_password: 0, expires_at: Date.now() + 60_000,
+          } : sql.includes("SELECT image_revision, ocr_checkpoint") ? {
+            image_revision: 2, ocr_checkpoint: checkpoint,
+          } : null),
+          run: vi.fn().mockResolvedValue({ meta: { changes: 0 } }),
+        })),
+      })),
+    };
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/ocr", {
+      method: "PATCH",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        expectedOcrRevision: 3,
+        pages: [{ pageIndex: 0, text: "修正后原文" }],
+      }),
+    }), workerEnv(() => new Response("asset"), database));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { code: "OCR_REVISION_CONFLICT", message: "识别原文已被更新" },
+    });
+  });
+
   it("报告保存先校验版本，最后才把任务标记成功", async () => {
     const prepared: Array<{ sql: string; bindings: unknown[] }> = [];
     const database = {

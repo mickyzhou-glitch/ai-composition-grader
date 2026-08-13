@@ -16,7 +16,7 @@ import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter";
 import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
 import { assignmentConfigSchema } from "../src/domain/contracts";
-import { D1OcrCheckpointRepository } from "../src/cloudflare/d1-ocr-checkpoint";
+import { D1OcrCheckpointRepository, OcrCheckpointError } from "../src/cloudflare/d1-ocr-checkpoint";
 import { createWorkerAiSettingsSource } from "../src/cloudflare/ai-settings";
 import {
   CloudAnalysisConflictError,
@@ -74,12 +74,12 @@ function normalizeSettingsCandidate(value: { baseUrl?: unknown; model?: unknown;
   return { baseUrl: value.baseUrl.replace(/\/+$/u, ""), model: value.model.trim(), ...(typeof value.apiKey === "string" ? { apiKey: value.apiKey.trim() } : {}) };
 }
 
-async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null): Promise<string | null> {
+async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null, role: "vision" | "content" = "content"): Promise<string | null> {
   if (encryptedApiKey) return openSetting(encryptedApiKey, env.AUTH_PROOF_ENCRYPTION_KEY);
-  return env.AI_API_KEY || null;
+  return (role === "vision" ? env.VISION_AI_API_KEY : env.CONTENT_AI_API_KEY) || env.AI_API_KEY || null;
 }
 
-async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string }): Promise<void> {
+async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string; role: "vision" | "content" }): Promise<void> {
   // A 1×1 PNG verifies that the configured model accepts the same multimodal
   // request shape used by essay analysis, rather than only proving text chat.
   const visionProbe = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
@@ -89,13 +89,10 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
     headers: aiRequestHeaders(input.baseUrl, input.apiKey),
     body: JSON.stringify({
       model: input.model,
-      messages: [{
-        role: "user",
-        content: [
+      messages: input.role === "vision" ? [{ role: "user", content: [
           { type: "image_url", image_url: { url: visionProbe } },
           { type: "text", text: "请确认你能读取图片，只回复 OK" },
-        ],
-      }],
+        ] }] : [{ role: "user", content: "请只回复 OK" }],
       ...(isMiMo ? { max_completion_tokens: 16 } : { max_tokens: 16 }),
     }),
   });
@@ -105,14 +102,7 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
 }
 
 function workerAiSettings(env: WorkerEnv) {
-  return {
-    async getRuntimeConfig() {
-      const settings = await env.DB.prepare("SELECT base_url, model, encrypted_api_key FROM settings WHERE id = 1").first<{ base_url: string; model: string; encrypted_api_key: string | null }>();
-      if (!settings) return null;
-      const apiKey = await configuredApiKey(env, settings.encrypted_api_key);
-      return apiKey ? { baseUrl: settings.base_url, model: settings.model, apiKey } : null;
-    },
-  };
+  return createWorkerAiSettingsSource(env);
 }
 
 export default {
@@ -158,27 +148,41 @@ export default {
     }
     if (url.pathname === "/api/settings" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
-      const settings = await env.DB.prepare("SELECT base_url, model, encrypted_api_key FROM settings WHERE id = 1").first<{ base_url: string; model: string; encrypted_api_key: string | null }>();
-      return Response.json({ ok: true, data: settings ? { baseUrl: settings.base_url, model: settings.model, keyConfigured: settings.encrypted_api_key !== null || Boolean(env.AI_API_KEY) } : null });
+      const { results = [] } = await env.DB.prepare(
+        "SELECT role, base_url, model, encrypted_api_key FROM settings WHERE role IN ('vision', 'content')",
+      ).all<{ role: "vision" | "content"; base_url: string; model: string; encrypted_api_key: string | null }>();
+      const data = Object.fromEntries(results.map((setting) => [setting.role, {
+        baseUrl: setting.base_url,
+        model: setting.model,
+        keyConfigured: setting.encrypted_api_key !== null || Boolean(
+          setting.role === "vision" ? env.VISION_AI_API_KEY || env.AI_API_KEY : env.CONTENT_AI_API_KEY || env.AI_API_KEY,
+        ),
+      }]));
+      return Response.json({ ok: true, data });
     }
-    if (url.pathname === "/api/settings" && request.method === "PUT") {
+    const settingMatch = /^\/api\/settings\/(vision|content)$/u.exec(url.pathname);
+    if (settingMatch && request.method === "PUT") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
+        const role = settingMatch[1] as "vision" | "content";
         const candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown });
         const encrypted = candidate.apiKey ? await sealSetting(candidate.apiKey, env.AUTH_PROOF_ENCRYPTION_KEY) : null;
-        const previous = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE id = 1").first<{ encrypted_api_key: string | null }>();
-        await env.DB.prepare("INSERT INTO settings (id, base_url, model, updated_at, encrypted_api_key) VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET base_url = excluded.base_url, model = excluded.model, updated_at = excluded.updated_at, encrypted_api_key = COALESCE(excluded.encrypted_api_key, settings.encrypted_api_key)").bind(candidate.baseUrl, candidate.model, Date.now(), encrypted).run();
-        return Response.json({ ok: true, data: { baseUrl: candidate.baseUrl, model: candidate.model, keyConfigured: encrypted !== null || previous?.encrypted_api_key !== null || Boolean(env.AI_API_KEY) } });
+        const previous = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ encrypted_api_key: string | null }>();
+        await env.DB.prepare("INSERT INTO settings (role, base_url, model, updated_at, encrypted_api_key) VALUES (?, ?, ?, ?, ?) ON CONFLICT(role) DO UPDATE SET base_url = excluded.base_url, model = excluded.model, updated_at = excluded.updated_at, encrypted_api_key = COALESCE(excluded.encrypted_api_key, settings.encrypted_api_key)").bind(role, candidate.baseUrl, candidate.model, Date.now(), encrypted).run();
+        const envKey = role === "vision" ? env.VISION_AI_API_KEY : env.CONTENT_AI_API_KEY;
+        return Response.json({ ok: true, data: { baseUrl: candidate.baseUrl, model: candidate.model, keyConfigured: encrypted !== null || previous?.encrypted_api_key !== null || Boolean(envKey || env.AI_API_KEY) } });
       } catch { return apiError("VALIDATION_ERROR", "请求参数无效", 400); }
     }
-    if (url.pathname === "/api/settings/test" && request.method === "POST") {
+    const settingTestMatch = /^\/api\/settings\/(vision|content)\/test$/u.exec(url.pathname);
+    if (settingTestMatch && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
+        const role = settingTestMatch[1] as "vision" | "content";
         const candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown });
-        const stored = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE id = 1").first<{ encrypted_api_key: string | null }>();
-        const apiKey = candidate.apiKey ?? await configuredApiKey(env, stored?.encrypted_api_key ?? null);
+        const stored = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ encrypted_api_key: string | null }>();
+        const apiKey = candidate.apiKey ?? await configuredApiKey(env, stored?.encrypted_api_key ?? null, role);
         if (!apiKey) return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
-        await testAiConnection({ ...candidate, apiKey });
+        await testAiConnection({ ...candidate, apiKey, role });
         return Response.json({ ok: true, data: { connected: true } });
       } catch (error) {
         if (error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE") return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
@@ -304,18 +308,51 @@ export default {
       if (!object) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
       return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? file.contentType, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
     }
+    const ocrMatch = /^\/api\/reviews\/([^/]+)\/ocr$/u.exec(url.pathname);
+    if (ocrMatch && request.method === "PATCH") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const reviewId = decodeURIComponent(ocrMatch[1]);
+      try {
+        const body = await request.json() as {
+          expectedOcrRevision?: unknown;
+          pages?: unknown;
+        };
+        if (!Number.isSafeInteger(body.expectedOcrRevision) || !Array.isArray(body.pages)) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        await new D1OcrCheckpointRepository(env.DB).editTexts(
+          user.id,
+          reviewId,
+          body.expectedOcrRevision as number,
+          body.pages as Array<{ pageIndex: number; text: string }>,
+        );
+        const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
+        if (!review) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+        return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        if (error instanceof OcrCheckpointError) {
+          return apiError(error.code, error.code === "OCR_REVISION_CONFLICT" ? "识别原文已被更新" : "识别原文不存在", error.status);
+        }
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+      }
+    }
     const analyzeMatch = /^\/api\/reviews\/([^/]+)\/analyze$/u.exec(url.pathname);
     if (analyzeMatch && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
         const reviewId = decodeURIComponent(analyzeMatch[1]);
-        const result = await new D1AnalysisJobs(env.DB).enqueue(user.id, reviewId, request.headers.get("content-type")?.includes("application/json") ? (await request.json() as { teacherGuidance?: unknown }).teacherGuidance : undefined);
+        const input = request.headers.get("content-type")?.includes("application/json")
+          ? await request.json() as { teacherGuidance?: unknown; mode?: unknown }
+          : undefined;
+        const result = await new D1AnalysisJobs(env.DB).enqueue(user.id, reviewId, input);
         if (!result.job) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
         if (result.newlyQueued) await env.ANALYSIS_QUEUE.send({ jobId: (result.job as { id: string }).id });
         return Response.json({ ok: true, data: result.job }, { status: 202, headers: { "cache-control": "no-store" } });
       } catch (error) {
         const code = error instanceof Error ? error.message : "VALIDATION_ERROR";
-        return apiError(code, code === "IMAGES_REQUIRED" ? "请先上传 1 至 4 张作文图片" : "请求参数无效", code === "IMAGES_REQUIRED" ? 422 : 400);
+        if (code === "IMAGES_REQUIRED") return apiError(code, "请先上传 1 至 4 张作文图片", 422);
+        if (code === "OCR_NOT_FOUND") return apiError(code, "识别原文不存在或已失效", 409);
+        return apiError(code, "请求参数无效", 400);
       }
     }
     const analyzeStatusMatch = /^\/api\/reviews\/([^/]+)\/analyze\/status$/u.exec(url.pathname);

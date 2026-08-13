@@ -14,6 +14,7 @@ import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { ParentFeedbackEditor } from "../../components/ParentFeedbackEditor";
+import { OcrTextEditor } from "../../components/OcrTextEditor";
 import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
 import { ReportEditor, type FeedbackSection } from "../../components/ReportEditor";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -26,7 +27,7 @@ interface AnalysisJobView {
   id: string;
   reviewId: string;
   status: "queued" | "running" | "succeeded" | "failed" | "canceled";
-  progressStage: "queued" | "reading_images" | "generating_review" | "validating_result" | "saving_result";
+  progressStage: "queued" | "reading_images" | "saving_ocr" | "generating_review" | "mapping_annotations" | "validating_result" | "saving_result";
   message: string | null;
   createdAt: string;
   finishedAt: string | null;
@@ -34,10 +35,12 @@ interface AnalysisJobView {
 
 const stageLabels: Record<AnalysisJobView["progressStage"], string> = {
   queued: "排队中",
-  reading_images: "读取作文",
-  generating_review: "生成批改",
-  validating_result: "校验结果",
-  saving_result: "保存结果",
+  reading_images: "正在识别作文",
+  saving_ocr: "正在识别作文",
+  generating_review: "正在生成批改内容",
+  mapping_annotations: "正在生成批改内容",
+  validating_result: "正在生成批改内容",
+  saving_result: "正在保存结果",
 };
 
 function expiryNotice(value: string | null) {
@@ -115,6 +118,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobView | null>(null);
   const [activePage, setActivePage] = useState(0);
+  const [activeView, setActiveView] = useState<"report" | "ocr">("report");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | "rewrite-feedback" | "rewrite-sample" | "rewrite-all-samples" | null>(null);
   const [rewritingFeedbackSection, setRewritingFeedbackSection] = useState<FeedbackSection | null>(null);
@@ -424,7 +428,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
   }
 
-  async function analyze() {
+  async function analyze(mode: "full" | "content_only" = "full") {
     if (busy) return;
     if (dirty && !window.confirm("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？")) {
       return;
@@ -437,7 +441,10 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       const job = await apiFetch<AnalysisJobView>(`/api/reviews/${encodeURIComponent(reviewId)}/analyze`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(teacherGuidance.trim() ? { teacherGuidance: teacherGuidance.trim() } : {}),
+        body: JSON.stringify({
+          ...(mode === "content_only" ? { mode } : {}),
+          ...(teacherGuidance.trim() ? { teacherGuidance: teacherGuidance.trim() } : {}),
+        }),
       });
       setAnalysisJob(job);
       setDirty(false);
@@ -574,26 +581,31 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
         {analysisJob ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
+        {review.reportStale && report ? <div className="stale-report-banner" role="alert"><span>批改报告基于旧版识别原文</span><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成批改</AsyncButton></div> : null}
         <div className={`privacy-note ${expiresSoon(review.expiresAt) ? "expiry-notice--urgent" : ""}`} role="note">{expiryNotice(review.expiresAt ?? null)}</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
-        {report ? (
-          <ParentFeedbackEditor
-            feedbacks={report.parentFeedbacks ?? []}
-            savedFeedbacks={review.report?.parentFeedbacks ?? []}
-            disabled={busy !== null || analysisActive}
-            onChange={(parentFeedbacks) => changeReport({ ...report, parentFeedbacks })}
-            onCopySuccess={() => {
-              setError("");
-              setNotice("家长反馈已复制");
-            }}
-            onCopyError={() => {
-              setNotice("");
-              setError("无法自动复制，请选中文本后手动复制。");
-            }}
-          />
-        ) : null}
-
-        <section className="review-grid" aria-label="作文复核工作区">
+        <div className="review-view-tabs" role="tablist" aria-label="复核内容">
+          <button type="button" role="tab" aria-selected={activeView === "report"} aria-controls="review-report-panel" onClick={() => setActiveView("report")}>批改报告</button>
+          <button type="button" role="tab" aria-selected={activeView === "ocr"} aria-controls="review-ocr-panel" disabled={!review.ocr} onClick={() => setActiveView("ocr")}>识别原文</button>
+        </div>
+        <section id="review-report-panel" role="tabpanel" aria-label="批改报告" hidden={activeView !== "report"}>
+          {report ? (
+            <ParentFeedbackEditor
+              feedbacks={report.parentFeedbacks ?? []}
+              savedFeedbacks={review.report?.parentFeedbacks ?? []}
+              disabled={busy !== null || analysisActive}
+              onChange={(parentFeedbacks) => changeReport({ ...report, parentFeedbacks })}
+              onCopySuccess={() => {
+                setError("");
+                setNotice("家长反馈已复制");
+              }}
+              onCopyError={() => {
+                setNotice("");
+                setError("无法自动复制，请选中文本后手动复制。");
+              }}
+            />
+          ) : null}
+          <div className="review-grid" role="region" aria-label="作文复核工作区">
           <div className="photo-pane">
             {review.images.length > 1 ? <div className="page-tabs" role="tablist" aria-label="作文页码">{review.images.map((image, index) => <button role="tab" aria-selected={activePage === index} key={image.id} onClick={() => setActivePage(index)}>第 {index + 1} 页</button>)}</div> : null}
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
@@ -601,7 +613,20 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           <div className="report-pane">
             {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
+          </div>
         </section>
+        {review.ocr ? <section id="review-ocr-panel" role="tabpanel" aria-label="识别原文" hidden={activeView !== "ocr"}>
+          <OcrTextEditor
+            key={`${review.id}:${review.ocr.ocrRevision}`}
+            reviewId={review.id}
+            ocr={review.ocr}
+            disabled={busy !== null || analysisActive}
+            onSaved={(saved) => {
+              applyReview(saved);
+              setNotice("识别原文已保存，可重新生成批改。");
+            }}
+          />
+        </section> : null}
       </main>
     </div>
   );
