@@ -16,9 +16,10 @@ import type {
   NormalizedCrop,
   ReviewStatus,
 } from "../domain/contracts";
+import type { OcrCheckpoint } from "../ocr/contracts";
 
 export const settings = sqliteTable("settings", {
-  id: integer("id").primaryKey().default(1),
+  role: text("role").$type<"vision" | "content">().primaryKey(),
   baseUrl: text("base_url").notNull(),
   model: text("model").notNull(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" })
@@ -60,6 +61,9 @@ export const reviews = sqliteTable(
     config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
     report: text("report", { mode: "json" }).$type<EvaluationReport>(),
     revision: integer("revision").notNull().default(0),
+    imageRevision: integer("image_revision").notNull().default(0),
+    ocrCheckpoint: text("ocr_checkpoint", { mode: "json" }).$type<OcrCheckpoint>(),
+    reportOcrRevision: integer("report_ocr_revision"),
     analysisRunId: text("analysis_run_id"),
     pdfFilename: text("pdf_filename"),
     pdfPath: text("pdf_path"),

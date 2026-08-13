@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import type { AiModelRole } from "./settings-repository";
 
 export const KEYCHAIN_SERVICE = "ai-composition-grader";
 export const KEYCHAIN_ACCOUNT = "default";
@@ -75,7 +76,7 @@ export class MacOSKeychain {
     this.account = options.account ?? KEYCHAIN_ACCOUNT;
   }
 
-  async set(secret: string): Promise<void> {
+  async set(secret: string, role: AiModelRole = "content"): Promise<void> {
     this.assertAvailable();
     if (secret.length === 0) throw new TypeError("API key must not be empty");
     try {
@@ -85,7 +86,7 @@ export class MacOSKeychain {
         "-s",
         this.service,
         "-a",
-        this.account,
+        role === "content" ? this.account : role,
         "-w",
         secret,
       ]);
@@ -95,7 +96,7 @@ export class MacOSKeychain {
     }
   }
 
-  async get(): Promise<string | null> {
+  async get(role: AiModelRole = "content"): Promise<string | null> {
     this.assertAvailable();
     try {
       const { stdout } = await this.runner(SECURITY_EXECUTABLE, [
@@ -103,7 +104,7 @@ export class MacOSKeychain {
         "-s",
         this.service,
         "-a",
-        this.account,
+        role === "content" ? this.account : role,
         "-w",
       ]);
       const secret = stdout.replace(/[\r\n]+$/, "");
@@ -114,7 +115,7 @@ export class MacOSKeychain {
     }
   }
 
-  async delete(): Promise<void> {
+  async delete(role: AiModelRole = "content"): Promise<void> {
     this.assertAvailable();
     try {
       await this.runner(SECURITY_EXECUTABLE, [
@@ -122,7 +123,7 @@ export class MacOSKeychain {
         "-s",
         this.service,
         "-a",
-        this.account,
+        role === "content" ? this.account : role,
       ]);
     } catch (error) {
       if (isNotFoundError(error)) return;

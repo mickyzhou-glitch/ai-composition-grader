@@ -34,6 +34,9 @@ CREATE TABLE IF NOT EXISTS reviews (
   config TEXT NOT NULL,
   report TEXT,
   revision INTEGER NOT NULL DEFAULT 0,
+  image_revision INTEGER NOT NULL DEFAULT 0,
+  ocr_checkpoint TEXT,
+  report_ocr_revision INTEGER,
   analysis_run_id TEXT,
   pdf_filename TEXT,
   pdf_path TEXT,
@@ -50,7 +53,7 @@ CREATE TABLE IF NOT EXISTS reviews (
 
 const CREATE_REMAINING_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS settings (
-  id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+  role TEXT PRIMARY KEY CHECK (role IN ('vision', 'content')),
   base_url TEXT NOT NULL,
   model TEXT NOT NULL,
   updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
@@ -216,6 +219,9 @@ function migrateReviews(database: Database.Database): void {
       "TEXT REFERENCES users(id)",
     ],
     ["revision", "INTEGER NOT NULL DEFAULT 0"],
+    ["image_revision", "INTEGER NOT NULL DEFAULT 0"],
+    ["ocr_checkpoint", "TEXT"],
+    ["report_ocr_revision", "INTEGER"],
     ["analysis_run_id", "TEXT"],
     ["pdf_filename", "TEXT"],
     ["pdf_path", "TEXT"],
@@ -265,6 +271,9 @@ function migrateReviews(database: Database.Database): void {
         config TEXT NOT NULL,
         report TEXT,
         revision INTEGER NOT NULL DEFAULT 0,
+        image_revision INTEGER NOT NULL DEFAULT 0,
+        ocr_checkpoint TEXT,
+        report_ocr_revision INTEGER,
         analysis_run_id TEXT,
         pdf_filename TEXT,
         pdf_path TEXT,
@@ -278,11 +287,13 @@ function migrateReviews(database: Database.Database): void {
         updated_at INTEGER NOT NULL
       );
       INSERT INTO reviews_owner_migration (
-        id, owner_id, status, student_name, config, report, revision, analysis_run_id,
+        id, owner_id, status, student_name, config, report, revision, image_revision,
+        ocr_checkpoint, report_ocr_revision, analysis_run_id,
         pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
         deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       )
-      SELECT id, owner_id, status, student_name, config, report, revision, analysis_run_id,
+      SELECT id, owner_id, status, student_name, config, report, revision, image_revision,
+        ocr_checkpoint, report_ocr_revision, analysis_run_id,
         pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
         deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       FROM reviews;
@@ -300,6 +311,25 @@ function migrateReviews(database: Database.Database): void {
       ON reviews(owner_id, deleting_at);
     CREATE INDEX IF NOT EXISTS reviews_expires_deleting_at_idx
       ON reviews(expires_at, deleting_at);
+  `);
+}
+
+function migrateSettings(database: Database.Database): void {
+  const columns = tableColumns(database, "settings");
+  if (columns.has("role")) return;
+  database.exec(`
+    CREATE TABLE settings_role_migration (
+      role TEXT PRIMARY KEY CHECK (role IN ('vision', 'content')),
+      base_url TEXT NOT NULL,
+      model TEXT NOT NULL,
+      updated_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+    );
+    INSERT INTO settings_role_migration (role, base_url, model, updated_at)
+      SELECT 'vision', base_url, model, updated_at FROM settings WHERE id = 1;
+    INSERT INTO settings_role_migration (role, base_url, model, updated_at)
+      SELECT 'content', base_url, model, updated_at FROM settings WHERE id = 1;
+    DROP TABLE settings;
+    ALTER TABLE settings_role_migration RENAME TO settings;
   `);
 }
 
@@ -378,6 +408,7 @@ export function initializeSchema(database: Database.Database): void {
       database.exec(CREATE_REVIEWS_SQL);
       migrateReviews(database);
       database.exec(CREATE_REMAINING_SCHEMA_SQL);
+      migrateSettings(database);
       migrateAnalysisJobs(database);
       migrateLegacyReviewImages(database);
       assertForeignKeys(database);

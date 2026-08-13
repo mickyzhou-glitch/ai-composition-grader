@@ -1,12 +1,13 @@
 import type {
   SaveSettingsInput as RepositorySettingsInput,
   SettingsRepository,
+  AiModelRole,
 } from "./settings-repository";
 
 export interface SecretStore {
-  set(secret: string): Promise<void>;
-  get(): Promise<string | null>;
-  delete(): Promise<void>;
+  set(secret: string, role?: AiModelRole): Promise<void>;
+  get(role?: AiModelRole): Promise<string | null>;
+  delete(role?: AiModelRole): Promise<void>;
 }
 
 export interface SaveSettingsInput extends RepositorySettingsInput {
@@ -59,36 +60,40 @@ export class SettingsService {
     private readonly secretStore: SecretStore,
   ) {}
 
-  async save(input: SaveSettingsInput): Promise<SettingsView> {
+  async save(input: SaveSettingsInput, role: AiModelRole = "content"): Promise<SettingsView> {
     const normalized = this.normalizeInput(input);
-    return this.enqueue(() => this.saveExclusive(normalized));
+    return this.enqueue(() => this.saveExclusive(normalized, role));
   }
 
   testCandidate(
     input: SaveSettingsInput,
     tester: SettingsCandidateTester,
     save: true,
+    role?: AiModelRole,
   ): Promise<SettingsView>;
   testCandidate(
     input: SaveSettingsInput,
     tester: SettingsCandidateTester,
     save: false,
+    role?: AiModelRole,
   ): Promise<void>;
   testCandidate(
     input: SaveSettingsInput,
     tester: SettingsCandidateTester,
     save: boolean,
+    role?: AiModelRole,
   ): Promise<SettingsView | void>;
   async testCandidate(
     input: SaveSettingsInput,
     tester: SettingsCandidateTester,
     save: boolean,
+    role: AiModelRole = "content",
   ): Promise<SettingsView | void> {
     const normalized = this.normalizeInput(input);
     return this.enqueue(async () => {
       const apiKey =
         normalized.apiKey === undefined
-          ? await this.secretStore.get()
+          ? await this.getRoleSecret(role)
           : normalized.apiKey;
       if (!apiKey) throw new TypeError("apiKey must be configured");
       await tester({
@@ -96,7 +101,7 @@ export class SettingsService {
         model: normalized.model,
         apiKey,
       });
-      if (save) return this.saveExclusive(normalized);
+      if (save) return this.saveExclusive(normalized, role);
     });
   }
 
@@ -110,29 +115,29 @@ export class SettingsService {
     return { ...input, baseUrl, model };
   }
 
-  private async saveExclusive(input: SaveSettingsInput): Promise<SettingsView> {
+  private async saveExclusive(input: SaveSettingsInput, role: AiModelRole): Promise<SettingsView> {
     let previousSecret: string | null | undefined;
     let secretMutationAttempted = false;
     if (input.apiKey !== undefined) {
-      previousSecret = await this.secretStore.get();
+      previousSecret = await this.getRoleSecret(role);
     }
 
     try {
       if (input.apiKey === null) {
         secretMutationAttempted = true;
-        await this.secretStore.delete();
+        await this.deleteRoleSecret(role);
       } else if (input.apiKey !== undefined) {
         secretMutationAttempted = true;
-        await this.secretStore.set(input.apiKey);
+        await this.setRoleSecret(input.apiKey, role);
       }
-      this.repository.save({ baseUrl: input.baseUrl, model: input.model });
+      this.repository.save({ baseUrl: input.baseUrl, model: input.model }, role);
     } catch (error) {
       if (secretMutationAttempted) {
         try {
           if (previousSecret === null) {
-            await this.secretStore.delete();
+            await this.deleteRoleSecret(role);
           } else if (previousSecret !== undefined) {
-            await this.secretStore.set(previousSecret);
+            await this.setRoleSecret(previousSecret, role);
           }
         } catch (compensationError) {
           throw new AggregateError(
@@ -143,28 +148,28 @@ export class SettingsService {
       }
       throw error;
     }
-    return (await this.get()) as SettingsView;
+    return (await this.get(role)) as SettingsView;
   }
 
-  async get(): Promise<SettingsView | null> {
-    const settings = this.repository.get();
+  async get(role: AiModelRole = "content"): Promise<SettingsView | null> {
+    const settings = this.repository.get(role);
     if (!settings) return null;
     return {
       baseUrl: settings.baseUrl,
       model: settings.model,
-      keyConfigured: (await this.secretStore.get()) !== null,
+      keyConfigured: (await this.getRoleSecret(role)) !== null,
     };
   }
 
-  async getSecret(): Promise<string | null> {
-    return this.secretStore.get();
+  async getSecret(role: AiModelRole = "content"): Promise<string | null> {
+    return this.getRoleSecret(role);
   }
 
-  async getRuntimeConfig(): Promise<RuntimeSettings | null> {
+  async getRuntimeConfig(role: AiModelRole = "content"): Promise<RuntimeSettings | null> {
     return this.enqueue(async () => {
-      const settings = this.repository.get();
+      const settings = this.repository.get(role);
       if (!settings) return null;
-      const apiKey = await this.secretStore.get();
+      const apiKey = await this.getRoleSecret(role);
       if (!apiKey) return null;
       return {
         baseUrl: settings.baseUrl,
@@ -172,6 +177,18 @@ export class SettingsService {
         apiKey,
       };
     });
+  }
+
+  private getRoleSecret(role: AiModelRole): Promise<string | null> {
+    return role === "content" ? this.secretStore.get() : this.secretStore.get(role);
+  }
+
+  private setRoleSecret(secret: string, role: AiModelRole): Promise<void> {
+    return role === "content" ? this.secretStore.set(secret) : this.secretStore.set(secret, role);
+  }
+
+  private deleteRoleSecret(role: AiModelRole): Promise<void> {
+    return role === "content" ? this.secretStore.delete() : this.secretStore.delete(role);
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {

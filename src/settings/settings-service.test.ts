@@ -54,6 +54,30 @@ describe("SettingsService", () => {
     );
   });
 
+  it("独立保存视觉与内容模型配置", async () => {
+    await service.save({
+      baseUrl: "https://vision.example/v1",
+      model: "vision-model",
+      apiKey: "vision-secret",
+    }, "vision");
+    await service.save({
+      baseUrl: "https://content.example/v1",
+      model: "content-model",
+      apiKey: "content-secret",
+    }, "content");
+
+    await expect(service.get("vision")).resolves.toMatchObject({
+      baseUrl: "https://vision.example/v1",
+      model: "vision-model",
+    });
+    await expect(service.get("content")).resolves.toMatchObject({
+      baseUrl: "https://content.example/v1",
+      model: "content-model",
+    });
+    expect(repository.get("vision")?.model).toBe("vision-model");
+    expect(repository.get("content")?.model).toBe("content-model");
+  });
+
   it("不通过普通设置读取回显 key，内部调用可单独取密钥", async () => {
     await service.save({
       baseUrl: "http://localhost:11434/",
