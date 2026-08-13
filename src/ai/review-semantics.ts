@@ -9,6 +9,12 @@ const EXPECTED_PARENT_FEEDBACKS = [
   { style: "concise", title: "简短微信版" },
 ] as const;
 
+const FEEDBACK_ITEM_PREFIX = /^\s*(?:(?:[1-4]|[一二三四])[.、．)）:]|[-*•])\s*/u;
+
+function normalizeFeedbackItem(item: string): string {
+  return item.trim().replace(FEEDBACK_ITEM_PREFIX, "").trim();
+}
+
 export function validateGeneratedReportSemantics(
   input: unknown,
   config: AssignmentConfig,
@@ -36,17 +42,24 @@ export function validateGeneratedReportSemantics(
   if (report.sampleParagraphs.some((paragraph) => FORBIDDEN_TIME_OPENING.test(paragraph.text.trim()))) {
     throw new Error("sample paragraphs must not begin with a time word");
   }
-  const strengths = report.personalizedComment.split(/\r?\n/u).map((item) => item.trim()).filter(Boolean);
+  const strengths = report.personalizedComment
+    .split(/\r?\n/u)
+    .map(normalizeFeedbackItem);
+  const painPoints = report.painPoints.map(normalizeFeedbackItem);
   const concise = (item: string) => {
     const length = Array.from(item).length;
-    return length >= 10 && length <= 20;
+    return length >= 8 && length <= 40;
   };
   if (
     strengths.length < 2 || strengths.length > 4 || !strengths.every(concise) ||
-    report.painPoints.length < 2 || report.painPoints.length > 4 || !report.painPoints.every(concise) ||
+    painPoints.length < 2 || painPoints.length > 4 || !painPoints.every(concise) ||
     report.commonIssues.length !== 0 || report.revisionSuggestions.length !== 0
   ) {
     throw new Error("overall feedback must contain two to four concise strengths and improvements");
   }
-  return report;
+  return {
+    ...report,
+    personalizedComment: strengths.join("\n"),
+    painPoints,
+  };
 }

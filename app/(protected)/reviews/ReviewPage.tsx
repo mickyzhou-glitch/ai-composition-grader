@@ -167,6 +167,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       );
       if (!isLatest()) return null;
       setAnalysisJob(result.job);
+      if (result.job) {
+        setNotice((current) => current.startsWith("AI 分析已提交：") ? "" : current);
+      }
       return result.job;
     } finally {
       if (jobRequestTokenRef.current === token) jobRequestControllerRef.current = null;
@@ -434,6 +437,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       return;
     }
     invalidateLoad();
+    invalidateJobLoad();
     setBusy("analyze");
     setError("");
     setNotice("");

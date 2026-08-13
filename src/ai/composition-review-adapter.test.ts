@@ -156,6 +156,71 @@ describe("CompositionReviewAdapter", () => {
     expect(repairRequest.messages[1].content).toContain("我终于明白了坚持的意义");
   });
 
+  it("normalizes numbered feedback and accepts concise provider wording over twenty characters", async () => {
+    const harness = setup();
+    const providerReport = {
+      ...report,
+      personalizedComment: [
+        "1. 选材来自真实生活，母子之间的情感变化写得自然真切",
+        "2、篮球比赛中的坚持过程完整，结尾感悟能够回扣题目",
+      ].join("\n"),
+      painPoints: [
+        "1. 生日收到鞋子时要补充自己的神态、动作和心理变化",
+        "2、篮球比赛最后一节要写清想起妈妈后如何坚持完成比赛",
+      ],
+    };
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: providerReport,
+      annotationAnchors: [],
+    }) } }] });
+
+    await expect(harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
+      studentName: "小艾",
+    })).resolves.toMatchObject({
+      report: {
+        personalizedComment: [
+          "选材来自真实生活，母子之间的情感变化写得自然真切",
+          "篮球比赛中的坚持过程完整，结尾感悟能够回扣题目",
+        ].join("\n"),
+        painPoints: [
+          "生日收到鞋子时要补充自己的神态、动作和心理变化",
+          "篮球比赛最后一节要写清想起妈妈后如何坚持完成比赛",
+        ],
+      },
+    });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects feedback when normalization would hide an empty or extra item", async () => {
+    const harness = setup();
+    const invalidReport = {
+      ...report,
+      painPoints: [
+        "第一段补充事情发生的具体背景",
+        "第二段写清收到礼物时的心理变化",
+        "3.",
+        "第四段补充比赛最后阶段的具体动作",
+        "结尾部分要注意回扣题目中心",
+      ],
+    };
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: invalidReport,
+      annotationAnchors: [],
+    }) } }] });
+
+    await expect(harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
+      studentName: "小艾",
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "overall_feedback",
+    });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects coordinates supplied by the content model", async () => {
     const harness = setup();
     const request = harness.create.getMockImplementation();

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -531,6 +531,61 @@ describe("复核页", () => {
     expect(await screen.findByText("AI 分析：排队中")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重新分析" })).toBeDisabled();
     expect(screen.getByLabelText("替换/重拍作文图片")).toBeDisabled();
+  });
+
+  it("任务状态更新后移除提交时的排队提示", async () => {
+    const queuedJob = {
+      id: "job-1", reviewId: "review-1", status: "queued", progressStage: "queued",
+      message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    const runningJob = {
+      ...queuedJob, status: "running", progressStage: "generating_review",
+    };
+    const intervals: Array<() => void> = [];
+    vi.spyOn(window, "setInterval").mockImplementation((callback, delay) => {
+      if (delay === 1500) intervals.push(callback as () => void);
+      return (intervals.length || 1) as never;
+    });
+    vi.spyOn(window, "clearInterval").mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(queuedJob))
+      .mockImplementationOnce(() => json({ job: runningJob }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "重新分析" }));
+    expect(await screen.findByText("AI 分析已提交：排队中")).toBeInTheDocument();
+    await waitFor(() => expect(intervals).toHaveLength(1));
+    intervals[0]();
+
+    expect(await screen.findByText("AI 分析：正在生成批改内容")).toBeInTheDocument();
+    expect(screen.queryByText("AI 分析已提交：排队中")).not.toBeInTheDocument();
+  });
+
+  it("新任务提交后忽略较早发出的空任务状态响应", async () => {
+    const pendingStatus = deferred<Response>();
+    const queuedJob = {
+      id: "job-1", reviewId: "review-1", status: "queued", progressStage: "queued",
+      message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => pendingStatus.promise)
+      .mockImplementationOnce(() => json(queuedJob));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "重新分析" }));
+    expect(await screen.findByText("AI 分析：排队中")).toBeInTheDocument();
+    await act(async () => {
+      pendingStatus.resolve(await json({ job: null }));
+      await pendingStatus.promise;
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(screen.getByText("AI 分析：排队中")).toBeInTheDocument();
   });
 
   it("刷新时恢复仍在排队的任务并锁定编辑与上传", async () => {
