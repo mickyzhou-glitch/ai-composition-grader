@@ -83,7 +83,9 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
   // A 1×1 PNG verifies that the configured model accepts the same multimodal
   // request shape used by essay analysis, rather than only proving text chat.
   const visionProbe = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-  const isMiMo = new URL(input.baseUrl).hostname === "api.xiaomimimo.com";
+  const hostname = new URL(input.baseUrl).hostname;
+  const isMiMo = hostname === "api.xiaomimimo.com";
+  const isDeepSeek = hostname === "api.deepseek.com";
   const response = await fetch(`${input.baseUrl}/chat/completions`, {
     method: "POST",
     headers: aiRequestHeaders(input.baseUrl, input.apiKey),
@@ -93,6 +95,7 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
           { type: "image_url", image_url: { url: visionProbe } },
           { type: "text", text: "请确认你能读取图片，只回复 OK" },
         ] }] : [{ role: "user", content: "请只回复 OK" }],
+      ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
       ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: 16 }),
     }),
   });

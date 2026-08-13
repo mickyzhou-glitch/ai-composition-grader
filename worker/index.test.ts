@@ -128,6 +128,42 @@ describe("Cloudflare Worker", () => {
     expect(body).not.toHaveProperty("max_tokens");
   });
 
+  it("DeepSeek 内容模型连接测试关闭默认思考模式", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "admin-1",
+            username: "admin",
+            role: "admin",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM settings") ? { encrypted_api_key: null } : null),
+        })),
+      })),
+    };
+    const upstream = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "OK" } }],
+    }), { headers: { "content-type": "application/json" } }));
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash" }),
+    }), {
+      ASSETS: { fetch: async () => new Response("asset") },
+      DB: database,
+      CONTENT_AI_API_KEY: "content-secret",
+    } as never);
+
+    expect(response.status).toBe(200);
+    const body = JSON.parse((upstream.mock.calls.at(-1)?.[1] as RequestInit).body as string);
+    expect(body.thinking).toEqual({ type: "disabled" });
+  });
+
   it("保存作文内容模型时只更新 content 角色", async () => {
     const statements: Array<{ sql: string; bindings: unknown[] }> = [];
     const database = {
