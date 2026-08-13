@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import worker from "./index";
+import worker, { savePipelineResult, saveUnreadableResult } from "./index";
 
 function workerEnv(assetResponse: () => Response, database?: unknown) {
   return {
@@ -10,6 +10,78 @@ function workerEnv(assetResponse: () => Response, database?: unknown) {
 }
 
 describe("Cloudflare Worker", () => {
+  it("报告保存先校验版本，最后才把任务标记成功", async () => {
+    const prepared: Array<{ sql: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const statement = {
+          sql,
+          bindings: [] as unknown[],
+          bind(...bindings: unknown[]) {
+            this.bindings = bindings;
+            return this;
+          },
+        };
+        prepared.push(statement);
+        return statement;
+      }),
+      batch: vi.fn(async (statements: unknown[]) =>
+        (statements as unknown[]).map(() => ({ meta: { changes: 1 } }))),
+    } as unknown as D1Database;
+
+    await savePipelineResult(database, {
+      id: "job-1",
+      reviewId: "review-1",
+      ownerId: "owner-1",
+      mode: "full",
+      imageRevision: 4,
+      config: {} as never,
+    }, {
+      report: { themeFit: "fits" },
+      annotations: [],
+      ocrRevision: 2,
+    });
+
+    expect(prepared[0].sql).toContain("UPDATE reviews SET report");
+    expect(prepared.at(-1)?.sql).toContain("UPDATE analysis_jobs SET status = 'succeeded'");
+    expect(prepared[0].bindings).toEqual(expect.arrayContaining(["job-1", 4, 2]));
+  });
+
+  it("报告版本条件未命中时拒绝把旧任务结果落库", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({ sql, bind() { return this; } })),
+      batch: vi.fn(async (statements: unknown[]) =>
+        (statements as unknown[]).map(() => ({ meta: { changes: 0 } }))),
+    } as unknown as D1Database;
+
+    await expect(savePipelineResult(database, {
+      id: "job-1", reviewId: "review-1", ownerId: "owner-1", mode: "full",
+      imageRevision: 4, config: {} as never,
+    }, { report: {}, annotations: [], ocrRevision: 2 }))
+      .rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
+  });
+
+  it("不可读结果先保存重拍状态，最后才结束任务", async () => {
+    const prepared: Array<{ sql: string }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const statement = { sql, bind() { return this; } };
+        prepared.push(statement);
+        return statement;
+      }),
+      batch: vi.fn(async (statements: unknown[]) =>
+        (statements as unknown[]).map(() => ({ meta: { changes: 1 } }))),
+    } as unknown as D1Database;
+
+    await saveUnreadableResult(database, {
+      id: "job-1", reviewId: "review-1", ownerId: "owner-1", mode: "full",
+      imageRevision: 4, config: {} as never,
+    }, 2);
+
+    expect(prepared[0].sql).toContain("status = 'needs_better_images'");
+    expect(prepared[1].sql).toContain("status = 'succeeded'");
+  });
+
   it("returns the invalid review field path for an authenticated PATCH", async () => {
     const database = {
       prepare: vi.fn((sql: string) => ({

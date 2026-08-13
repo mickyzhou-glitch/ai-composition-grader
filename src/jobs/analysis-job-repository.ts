@@ -6,6 +6,7 @@ import type { AppDatabase } from "../db/client";
 import {
   analysisJobs,
   type AnalysisJobStatus,
+  type AnalysisJobMode,
   type AnalysisProgressStage,
   reviews,
 } from "../db/schema";
@@ -16,6 +17,7 @@ export interface AnalysisJobRecord {
   id: string;
   reviewId: string;
   ownerId: string;
+  mode: AnalysisJobMode;
   status: AnalysisJobStatus;
   attempt: number;
   availableAt: Date;
@@ -113,7 +115,9 @@ function activeStatusCondition() {
 
 const progressStages: readonly Exclude<AnalysisProgressStage, "queued">[] = [
   "reading_images",
+  "saving_ocr",
   "generating_review",
+  "mapping_annotations",
   "validating_result",
   "saving_result",
 ];
@@ -123,6 +127,7 @@ function toRecord(row: typeof analysisJobs.$inferSelect): AnalysisJobRecord {
     id: row.id,
     reviewId: row.reviewId,
     ownerId: row.ownerId,
+    mode: row.mode,
     status: row.status,
     attempt: row.attempt,
     availableAt: row.availableAt,
@@ -396,7 +401,14 @@ export class AnalysisJobRepository {
     const normalizedClaim = this.assertClaim(claim);
     const current = this.getInternal(normalizedClaim.id);
     if (!current) throw new AnalysisJobNotFoundError(normalizedClaim.id);
-    if (current.status !== "running") throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    if (
+      current.status !== "running" ||
+      current.attempt !== normalizedClaim.attempt ||
+      current.leaseExpiresAt?.valueOf() !== normalizedClaim.leaseExpiresAt.valueOf() ||
+      current.leaseExpiresAt <= assertDate(this.now(), "now")
+    ) {
+      throw new AnalysisJobLostClaimError(normalizedClaim.id);
+    }
     const currentIndex = progressStages.indexOf(current.progressStage as Exclude<AnalysisProgressStage, "queued">);
     const requestedIndex = progressStages.indexOf(stage);
     if (requestedIndex !== currentIndex + 1) {

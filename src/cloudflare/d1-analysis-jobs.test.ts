@@ -54,4 +54,93 @@ describe("D1AnalysisJobs", () => {
     expect(result.newlyQueued).toBe(false);
     expect(result.job).toMatchObject({ id: "job-1", status: "queued" });
   });
+
+  it("content_only requires an OCR checkpoint bound to the current image revision", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "review-1",
+            revision: 2,
+            image_revision: 4,
+            ocr_checkpoint: JSON.stringify({ sourceRevision: 3, ocrRevision: 1 }),
+            expires_at: null,
+            image_count: 1,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
+      mode: "content_only",
+    })).rejects.toThrow("OCR_NOT_FOUND");
+  });
+
+  it("stores the requested mode and exposes it in the public job view", async () => {
+    const statements: Array<{ query: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((query: string) => {
+        const statement = {
+          query,
+          bindings: [] as unknown[],
+          bind(...bindings: unknown[]) {
+            this.bindings = bindings;
+            return this;
+          },
+          async first() {
+            if (query.includes("FROM reviews")) return {
+              id: "review-1",
+              revision: 2,
+              image_revision: 4,
+              ocr_checkpoint: JSON.stringify({ sourceRevision: 4, ocrRevision: 1 }),
+              expires_at: null,
+              image_count: 1,
+            };
+            if (query.includes("ORDER BY created_at DESC")) return null;
+            return {
+              id: "job-2",
+              review_id: "review-1",
+              mode: "content_only",
+              status: "queued",
+              progress_stage: "queued",
+              error_code: null,
+              created_at: 1_700_000_000_000,
+              finished_at: null,
+            };
+          },
+        };
+        statements.push(statement);
+        return statement;
+      }),
+      batch: vi.fn(async () => []),
+    } as unknown as D1Database;
+
+    const result = await new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
+      mode: "content_only",
+      teacherGuidance: "保留原意",
+    });
+
+    expect(result.job).toMatchObject({ mode: "content_only" });
+    expect(statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings)
+      .toContain("content_only");
+  });
+
+  it("accepts the OCR and annotation mapping progress stages", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "job-1", review_id: "review-1", mode: "full", status: "running",
+            progress_stage: "mapping_annotations", error_code: null,
+            created_at: 1_700_000_000_000, finished_at: null,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
+      mode: "full",
+      progressStage: "mapping_annotations",
+    });
+  });
 });

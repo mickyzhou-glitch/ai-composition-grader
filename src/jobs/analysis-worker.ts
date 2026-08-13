@@ -12,7 +12,12 @@ export interface AnalysisJobQueue {
   claimNext(): ClaimedAnalysisJobRecord | null;
   updateProgress(
     claim: AnalysisJobClaim,
-    stage: "generating_review" | "validating_result" | "saving_result",
+    stage:
+      | "saving_ocr"
+      | "generating_review"
+      | "mapping_annotations"
+      | "validating_result"
+      | "saving_result",
   ): ClaimedAnalysisJobRecord;
   transition(
     claim: AnalysisJobClaim,
@@ -147,6 +152,7 @@ export class AnalysisWorker {
     try {
       prepared = await this.execution.prepare(claim.ownerId, claim.reviewId);
       this.assertClaimCurrent(claimLost, claim.id);
+      claim = this.jobs.updateProgress(claim, "saving_ocr");
       claim = this.jobs.updateProgress(claim, "generating_review");
 
       const envelope = await this.execution.analyze({
@@ -156,6 +162,7 @@ export class AnalysisWorker {
         studentName: prepared.studentName,
       });
       this.assertClaimCurrent(claimLost, claim.id);
+      claim = this.jobs.updateProgress(claim, "mapping_annotations");
       claim = this.jobs.updateProgress(claim, "validating_result");
       // The adapter performs schema repair and validation before returning, so
       // this stage records that the validated envelope is ready to persist.

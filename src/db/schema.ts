@@ -199,9 +199,12 @@ export type AnalysisJobStatus =
 export type AnalysisProgressStage =
   | "queued"
   | "reading_images"
+  | "saving_ocr"
   | "generating_review"
+  | "mapping_annotations"
   | "validating_result"
   | "saving_result";
+export type AnalysisJobMode = "full" | "content_only";
 
 export const analysisJobs = sqliteTable(
   "analysis_jobs",
@@ -213,6 +216,7 @@ export const analysisJobs = sqliteTable(
     ownerId: text("owner_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    mode: text("mode").$type<AnalysisJobMode>().notNull().default("full"),
     status: text("status").$type<AnalysisJobStatus>().notNull(),
     attempt: integer("attempt").notNull().default(0),
     availableAt: integer("available_at", { mode: "timestamp_ms" }).notNull(),
@@ -233,8 +237,9 @@ export const analysisJobs = sqliteTable(
     check("analysis_jobs_attempt_check", sql`${table.attempt} >= 0`),
     check(
       "analysis_jobs_progress_stage_check",
-      sql`${table.progressStage} IN ('queued', 'reading_images', 'generating_review', 'validating_result', 'saving_result')`,
+      sql`${table.progressStage} IN ('queued', 'reading_images', 'saving_ocr', 'generating_review', 'mapping_annotations', 'validating_result', 'saving_result')`,
     ),
+    check("analysis_jobs_mode_check", sql`${table.mode} IN ('full', 'content_only')`),
     index("analysis_jobs_claim_idx").on(table.status, table.availableAt, table.createdAt),
     index("analysis_jobs_owner_review_idx").on(table.ownerId, table.reviewId),
     index("analysis_jobs_review_id_idx").on(table.reviewId),

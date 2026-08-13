@@ -233,6 +233,7 @@ describe("openAppDatabase", () => {
           "id",
           "review_id",
           "owner_id",
+          "mode",
           "status",
           "attempt",
           "available_at",
@@ -250,6 +251,16 @@ describe("openAppDatabase", () => {
         expect(tableColumns(sqlite, table).map(({ name }) => name)).toEqual(columns);
       }
       expect(sqlite.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(() => sqlite.exec(`
+        INSERT INTO reviews (id, owner_id, status, config, created_at, updated_at)
+        VALUES ('stage-review', 'local-admin', 'draft', '{}', 1, 1);
+        INSERT INTO analysis_jobs (
+          id, review_id, owner_id, mode, status, available_at, progress_stage, created_at
+        ) VALUES (
+          'stage-job', 'stage-review', 'local-admin', 'content_only', 'running', 1, 'saving_ocr', 1
+        );
+        UPDATE analysis_jobs SET progress_stage = 'mapping_annotations' WHERE id = 'stage-job';
+      `)).not.toThrow();
     } finally {
       sqlite.close();
     }
@@ -477,6 +488,25 @@ describe("openAppDatabase", () => {
       expect(sqlite.prepare("SELECT path FROM review_images WHERE review_id = 'legacy'").get()).toEqual({
         path: "images/legacy.jpg",
       });
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("旧分析任务迁移后保留数据并默认使用 full 模式", () => {
+    const sqlite = new Database(":memory:");
+    try {
+      initializeSchema(sqlite);
+      sqlite.exec(`
+        INSERT INTO reviews (id, owner_id, status, config, created_at, updated_at)
+        VALUES ('review-mode', 'local-admin', 'draft', '{}', 1, 1);
+        INSERT INTO analysis_jobs (
+          id, review_id, owner_id, status, available_at, progress_stage, created_at
+        ) VALUES ('job-mode', 'review-mode', 'local-admin', 'queued', 1, 'queued', 1);
+      `);
+
+      expect(sqlite.prepare("SELECT mode FROM analysis_jobs WHERE id = 'job-mode'").get())
+        .toEqual({ mode: "full" });
     } finally {
       sqlite.close();
     }

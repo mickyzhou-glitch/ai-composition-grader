@@ -273,7 +273,8 @@ describe("AnalysisJobService", () => {
     expect(() => repository.transition(workerOne!, "succeeded")).toThrow(
       AnalysisJobLostClaimError,
     );
-    expect(repository.updateProgress(workerTwo!, "generating_review")).toMatchObject({
+    const workerTwoOcr = repository.updateProgress(workerTwo!, "saving_ocr");
+    expect(repository.updateProgress(workerTwoOcr, "generating_review")).toMatchObject({
       progressStage: "generating_review",
     });
     expect(repository.transition(workerTwo!, "succeeded")).toMatchObject({ status: "succeeded" });
@@ -285,10 +286,12 @@ describe("AnalysisJobService", () => {
     expect(job).not.toBeNull();
 
     expect(() => repository.updateProgress(job!, "reading_images")).toThrow(/非法/);
-    expect(() => repository.updateProgress(job!, "validating_result")).toThrow(/非法/);
-    const generating = repository.updateProgress(job!, "generating_review");
-    expect(() => repository.updateProgress(generating, "reading_images")).toThrow(/非法/);
-    expect(repository.updateProgress(generating, "validating_result")).toMatchObject({
+    expect(() => repository.updateProgress(job!, "generating_review")).toThrow(/非法/);
+    const savingOcr = repository.updateProgress(job!, "saving_ocr");
+    const generating = repository.updateProgress(savingOcr, "generating_review");
+    const mapping = repository.updateProgress(generating, "mapping_annotations");
+    expect(() => repository.updateProgress(mapping, "reading_images")).toThrow(/非法/);
+    expect(repository.updateProgress(mapping, "validating_result")).toMatchObject({
       progressStage: "validating_result",
     });
   });
@@ -358,8 +361,10 @@ describe("AnalysisJobService", () => {
 
     expect(analyzeInput).toMatchObject({ studentName: "艾绮" });
     expect(calls).toEqual([
+      "saving_ocr",
       "generating_review",
       "analyze",
+      "mapping_annotations",
       "validating_result",
       "saving_result",
       "save",

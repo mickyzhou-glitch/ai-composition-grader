@@ -5,14 +5,24 @@ import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
-import { createAiImageUrl, verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
+import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
 import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
+import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter";
+import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
+import { assignmentConfigSchema } from "../src/domain/contracts";
+import { D1OcrCheckpointRepository } from "../src/cloudflare/d1-ocr-checkpoint";
+import { createWorkerAiSettingsSource } from "../src/cloudflare/ai-settings";
+import {
+  CloudAnalysisConflictError,
+  CloudAnalysisPipeline,
+  type CloudAnalysisPipelineJob,
+} from "../src/cloudflare/cloud-analysis-pipeline";
 import { openSetting, sealSetting } from "../src/cloudflare/settings-secret";
 import type { ReviewView } from "../app/lib/types";
 import { ZodError } from "zod";
@@ -353,57 +363,82 @@ export default {
   },
   async queue(batch: MessageBatch<{ jobId: string }>, env: WorkerEnv): Promise<void> {
     for (const message of batch.messages) {
-      const job = await env.DB.prepare("SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id, analysis_jobs.teacher_guidance, reviews.config, reviews.student_name FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id WHERE analysis_jobs.id = ? AND analysis_jobs.status = 'queued'").bind(message.body.jobId).first<{ id: string; review_id: string; owner_id: string; teacher_guidance: string | null; config: string; student_name: string }>();
+      const job = await env.DB.prepare(`
+        SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id,
+          analysis_jobs.mode, analysis_jobs.teacher_guidance, reviews.config,
+          reviews.student_name, reviews.image_revision
+        FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id
+        WHERE analysis_jobs.id = ? AND analysis_jobs.status = 'queued'
+      `).bind(message.body.jobId).first<{
+        id: string;
+        review_id: string;
+        owner_id: string;
+        mode: "full" | "content_only";
+        teacher_guidance: string | null;
+        config: string;
+        student_name: string;
+        image_revision: number;
+      }>();
       if (!job) { message.ack(); continue; }
       try {
-        await env.DB.prepare("UPDATE analysis_jobs SET status = 'running', progress_stage = 'reading_images', started_at = ? WHERE id = ?").bind(Date.now(), job.id).run();
-        const { results = [] } = await env.DB.prepare("SELECT id FROM review_images WHERE review_id = ? ORDER BY position").bind(job.review_id).all<{ id: number }>();
-        const settings = await env.DB.prepare("SELECT base_url, model, encrypted_api_key FROM settings WHERE id = 1").first<{ base_url: string; model: string; encrypted_api_key: string | null }>();
-        if (!settings) throw new Error("AI_SETTINGS_INCOMPLETE");
-        const apiKey = await configuredApiKey(env, settings.encrypted_api_key);
-        if (!apiKey) throw new Error("AI_SETTINGS_INCOMPLETE");
-        const adapter = new OpenAIReviewAdapter(
-          { getRuntimeConfig: async () => ({ baseUrl: settings.base_url, model: settings.model, apiKey }) },
-          { clientFactory: createWorkerOpenAIClient },
-        );
-        const analysisInput = {
-          config: JSON.parse(job.config),
+        const claim = await env.DB.prepare(`
+          UPDATE analysis_jobs SET status = 'running', started_at = ?
+          WHERE id = ? AND status = 'queued'
+        `).bind(Date.now(), job.id).run();
+        if (claim.meta.changes !== 1) { message.ack(); continue; }
+        const settings = createWorkerAiSettingsSource(env);
+        const vision = new VisionOcrAdapter(settings, { clientFactory: createWorkerOpenAIClient });
+        const content = new CompositionReviewAdapter(settings, { clientFactory: createWorkerOpenAIClient });
+        const ocr = new D1OcrCheckpointRepository(env.DB);
+        const pipelineJob: CloudAnalysisPipelineJob = {
+          id: job.id,
+          reviewId: job.review_id,
+          ownerId: job.owner_id,
+          mode: job.mode,
+          imageRevision: job.image_revision,
+          config: assignmentConfigSchema.parse(JSON.parse(job.config)),
           teacherGuidance: job.teacher_guidance ?? undefined,
           studentName: job.student_name || undefined,
         };
-        const loadInlineImages = async () => {
-          const reader = new D1ReviewReader(env.DB);
-          const images = await Promise.all(results.map(async ({ id }) => {
-            const file = await reader.imageObjectKeyForAi(job.review_id, id, "ai");
-            if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
-            return { key: file.key, mimeType: file.contentType };
-          }));
-          return loadInlineAiImageUrls(env.FILES, images);
-        };
-        const isMiMo = new URL(settings.base_url).hostname === "api.xiaomimimo.com";
-        let result;
-        // MiMo supports data URLs directly. Sending private image bytes avoids
-        // depending on MiMo's servers being able to retrieve Workers URLs.
-        const initialImageUrls = isMiMo
-          ? await loadInlineImages()
-          : await Promise.all(results.map(({ id }) => createAiImageUrl({ origin: env.APP_ORIGIN, secret: env.AI_FILE_URL_SECRET, reviewId: job.review_id, imageId: id, variant: "ai", expiresAt: Date.now() + 600000 })));
-        try {
-          result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: initialImageUrls });
-        } catch (error) {
-          if (isMiMo || !(error instanceof AiAdapterError) || error.upstreamStatus !== 403) throw error;
-          // The configured model supports vision. Retry once without asking the
-          // upstream gateway to fetch our signed private Workers URLs itself.
-          const inlineImageUrls = await loadInlineImages();
-          result = await adapter.analyzeImageUrls({ ...analysisInput, imageUrls: inlineImageUrls });
-        }
-        const now = Date.now();
-        await env.DB.batch([env.DB.prepare("UPDATE reviews SET report = ?, status = ?, revision = revision + 1, updated_at = ? WHERE id = ? AND owner_id = ?").bind(result.readable ? JSON.stringify(result.report) : null, result.readable ? "ready_for_review" : "needs_better_images", now, job.review_id, job.owner_id), env.DB.prepare("DELETE FROM annotations WHERE review_id = ?").bind(job.review_id), ...result.annotations.map((annotation, position) => env.DB.prepare("INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(job.review_id, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)), env.DB.prepare("UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ? WHERE id = ?").bind(now, job.id)]);
+        const pipeline = new CloudAnalysisPipeline({
+          readCheckpoint: (ownerId, reviewId) => ocr.readInternal(ownerId, reviewId),
+          loadImageUrls: async () => {
+            const { results = [] } = await env.DB.prepare(
+              "SELECT id FROM review_images WHERE review_id = ? ORDER BY position",
+            ).bind(job.review_id).all<{ id: number }>();
+            const reader = new D1ReviewReader(env.DB);
+            const images = await Promise.all(results.map(async ({ id }) => {
+              const file = await reader.imageObjectKeyForAi(job.review_id, id, "ai");
+              if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
+              return { key: file.key, mimeType: file.contentType };
+            }));
+            return loadInlineAiImageUrls(env.FILES, images);
+          },
+          recognize: (imageUrls) => vision.recognize({ imageUrls }),
+          saveRecognized: (ownerId, reviewId, sourceRevision, pages) =>
+            ocr.saveRecognized(ownerId, reviewId, sourceRevision, pages),
+          analyzeText: (input) => content.analyzeText(input),
+          updateStage: async (jobId, stage) => {
+            const result = await env.DB.prepare(
+              "UPDATE analysis_jobs SET progress_stage = ? WHERE id = ? AND status = 'running'",
+            ).bind(stage, jobId).run();
+            if (result.meta.changes !== 1) throw new CloudAnalysisConflictError("ANALYSIS_CONFLICT");
+          },
+          saveResult: async (currentJob, result) => {
+            await savePipelineResult(env.DB, currentJob, result);
+          },
+          saveUnreadable: async (currentJob, checkpoint) => {
+            await saveUnreadableResult(env.DB, currentJob, checkpoint.ocrRevision);
+          },
+        });
+        await pipeline.run(pipelineJob);
       } catch (error) {
         const code = error instanceof AiAdapterError && error.upstreamStatus
           ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
           : error instanceof AiAdapterError
             ? `${error.code}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
-          : error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE" ? error.message : "AI_REQUEST_FAILED";
+          : error instanceof CloudAnalysisConflictError ? error.code
+          : error instanceof Error && ["AI_SETTINGS_INCOMPLETE", "OCR_NOT_FOUND"].includes(error.message) ? error.message : "AI_REQUEST_FAILED";
         const now = Date.now();
         await env.DB.batch([
           env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
@@ -414,3 +449,71 @@ export default {
     }
   },
 };
+
+export async function savePipelineResult(
+  database: D1Database,
+  job: CloudAnalysisPipelineJob,
+  result: { report: unknown; annotations: Array<{ pageIndex: number; x: number; y: number; category: string; anchorText: string; comment: string; isHighlight: boolean }>; ocrRevision: number },
+): Promise<void> {
+  const now = Date.now();
+  const savedGuard = `EXISTS (
+    SELECT 1 FROM reviews INNER JOIN analysis_jobs ON analysis_jobs.id = ?
+    WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.analysis_run_id IS NULL
+      AND reviews.image_revision = ? AND reviews.report_ocr_revision = ?
+      AND analysis_jobs.review_id = reviews.id AND analysis_jobs.status = 'running'
+  )`;
+  const savedGuardBindings = [job.id, job.reviewId, job.ownerId, job.imageRevision, result.ocrRevision];
+  const statements = [
+    database.prepare(`
+      UPDATE reviews SET report = ?, report_ocr_revision = ?, status = 'ready_for_review',
+        revision = revision + 1, analysis_run_id = NULL, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND image_revision = ?
+        AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
+        AND EXISTS (SELECT 1 FROM analysis_jobs WHERE id = ? AND status = 'running')
+    `).bind(
+      JSON.stringify(result.report), result.ocrRevision, now,
+      job.reviewId, job.ownerId, job.id, job.imageRevision, result.ocrRevision, job.id,
+    ),
+    database.prepare(`DELETE FROM annotations WHERE review_id = ? AND ${savedGuard}`)
+      .bind(job.reviewId, ...savedGuardBindings),
+    ...result.annotations.map((annotation, position) => database.prepare(`
+      INSERT INTO annotations (
+        review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${savedGuard}
+    `).bind(
+      job.reviewId, position, annotation.pageIndex, annotation.x, annotation.y,
+      annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0,
+      ...savedGuardBindings,
+    )),
+    database.prepare(`UPDATE analysis_jobs SET status = 'succeeded', finished_at = ?
+      WHERE id = ? AND status = 'running' AND ${savedGuard}`)
+      .bind(now, job.id, ...savedGuardBindings),
+  ];
+  const outcomes = await database.batch(statements);
+  if (outcomes.at(-1)?.meta.changes !== 1) throw new CloudAnalysisConflictError("ANALYSIS_CONFLICT");
+}
+
+export async function saveUnreadableResult(
+  database: D1Database,
+  job: CloudAnalysisPipelineJob,
+  ocrRevision: number,
+): Promise<void> {
+  const now = Date.now();
+  const outcomes = await database.batch([
+    database.prepare(`
+      UPDATE reviews SET status = 'needs_better_images', report = NULL, report_ocr_revision = NULL,
+        analysis_run_id = NULL, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND image_revision = ?
+        AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
+        AND EXISTS (SELECT 1 FROM analysis_jobs WHERE id = ? AND status = 'running')
+    `).bind(now, job.reviewId, job.ownerId, job.id, job.imageRevision, ocrRevision, job.id),
+    database.prepare(`
+      UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ?
+      WHERE id = ? AND status = 'running' AND EXISTS (
+        SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND analysis_run_id IS NULL
+          AND image_revision = ? AND status = 'needs_better_images'
+      )
+    `).bind(now, job.id, job.reviewId, job.ownerId, job.imageRevision),
+  ]);
+  if (outcomes.at(-1)?.meta.changes !== 1) throw new CloudAnalysisConflictError("ANALYSIS_CONFLICT");
+}
