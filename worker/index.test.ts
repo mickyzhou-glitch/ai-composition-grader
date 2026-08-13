@@ -10,7 +10,12 @@ function workerEnv(assetResponse: () => Response, database?: unknown) {
 }
 
 describe("Cloudflare Worker", () => {
-  it("内容模型连接测试只发送纯文本请求", async () => {
+  it.each([
+    ["GET", "/api/settings"],
+    ["PUT", "/api/settings/content"],
+    ["POST", "/api/settings/content/test"],
+  ])("普通教师不能访问模型设置：%s %s", async (method, pathname) => {
+    const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
     const database = {
       prepare: vi.fn((sql: string) => ({
         bind: vi.fn(() => ({
@@ -18,6 +23,43 @@ describe("Cloudflare Worker", () => {
             id: "teacher-1",
             username: "teacher",
             role: "teacher",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : null),
+          run,
+        })),
+      })),
+    };
+    const upstream = vi.spyOn(globalThis, "fetch");
+
+    const response = await worker.fetch(new Request(`https://grader.workers.dev${pathname}`, {
+      method,
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        ...(method === "GET" ? {} : { "content-type": "application/json" }),
+      },
+      ...(method === "GET" ? {} : {
+        body: JSON.stringify({ baseUrl: "https://attacker.example/v1", model: "capture" }),
+      }),
+    }), workerEnv(() => new Response("asset"), database));
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "Administrator access required" },
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("内容模型连接测试只发送纯文本请求", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1",
+            username: "teacher",
+            role: "admin",
             must_change_password: 0,
             expires_at: Date.now() + 60_000,
           } : sql.includes("FROM settings") ? { encrypted_api_key: null } : null),
@@ -61,7 +103,7 @@ describe("Cloudflare Worker", () => {
           },
           async first() {
             if (sql.includes("FROM sessions INNER JOIN users")) return {
-              id: "teacher-1", username: "teacher", role: "teacher",
+              id: "admin-1", username: "admin", role: "admin",
               must_change_password: 0, expires_at: Date.now() + 60_000,
             };
             if (sql.includes("FROM settings")) return { encrypted_api_key: "sealed-existing" };

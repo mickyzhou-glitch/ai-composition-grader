@@ -16,6 +16,8 @@ import { initializeSchema } from "../db/init";
 import { ReviewRepository } from "../db/review-repository";
 import * as schema from "../db/schema";
 import { ImageService, MAX_IMAGE_BYTES } from "../images/image-service";
+import { AnalysisJobRepository } from "../jobs/analysis-job-repository";
+import { AnalysisJobService } from "../jobs/analysis-job-service";
 import { ReviewService, type AiReviewer } from "../services/review-service";
 import { ReviewFileStore } from "../storage/review-file-store";
 import {
@@ -780,6 +782,7 @@ describe("review route handlers", () => {
       OWNER_ID,
       "review-1",
       "请重点看结尾是否真正扣题，并保留我认为有效的细节。",
+      "full",
     );
     expect(analyze).not.toHaveBeenCalled();
 
@@ -808,5 +811,42 @@ describe("review route handlers", () => {
     expect(response.status).toBe(422);
     expect(await json(response)).toMatchObject({ error: { code: "IMAGES_REQUIRED" } });
     expect(analysisJobService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("content_only 在没有当前 OCR 时同步返回冲突且不创建任务", async () => {
+    repository.create(OWNER_ID, {
+      id: "review-1",
+      config,
+      images: [{
+        position: 0,
+        originalName: "page.jpg",
+        mimeType: "image/jpeg",
+        originalPath: "images/page-original.jpg",
+        annotationPath: "images/page-annotation.jpg",
+        aiPath: "images/page-ai.jpg",
+        width: 60,
+        height: 80,
+        rotation: 0,
+        crop: null,
+      }],
+    });
+    const jobs = new AnalysisJobRepository(drizzle(sqlite, { schema }), {
+      createId: () => "job-content-only",
+    });
+    const handlers = createAnalyzeRouteHandlers({
+      reviewService,
+      analysisJobService: new AnalysisJobService(jobs),
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(jsonRequest(
+      "http://localhost/api/reviews/review-1/analyze",
+      "POST",
+      { mode: "content_only" },
+    ), { params: Promise.resolve({ id: "review-1" }) });
+
+    expect(response.status).toBe(409);
+    expect(await json(response)).toMatchObject({ error: { code: "OCR_NOT_FOUND" } });
+    expect(jobs.findLatestByReview(OWNER_ID, "review-1")).toBeNull();
   });
 });

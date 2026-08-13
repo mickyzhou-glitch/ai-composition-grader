@@ -1,4 +1,4 @@
-import type { AnalysisJobStatus, AnalysisProgressStage } from "../db/schema";
+import type { AnalysisJobMode, AnalysisJobStatus, AnalysisProgressStage } from "../db/schema";
 import {
   AnalysisJobRepository,
   type AnalysisJobRecord,
@@ -44,8 +44,13 @@ function toView(job: AnalysisJobRecord): AnalysisJobView {
 export class AnalysisJobService {
   constructor(private readonly repository: AnalysisJobRepository) {}
 
-  enqueue(ownerId: string, reviewId: string, teacherGuidance?: string): AnalysisJobView {
-    return toView(this.repository.createOrGet(ownerId, reviewId, teacherGuidance));
+  enqueue(
+    ownerId: string,
+    reviewId: string,
+    teacherGuidance?: string,
+    mode: AnalysisJobMode = "full",
+  ): AnalysisJobView {
+    return toView(this.repository.createOrGet(ownerId, reviewId, teacherGuidance, mode));
   }
 
   get(ownerId: string, jobId: string): AnalysisJobView {

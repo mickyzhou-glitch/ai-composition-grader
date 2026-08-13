@@ -2,7 +2,7 @@
 
 import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initializeSchema } from "../db/init";
 import {
@@ -127,6 +127,43 @@ describe("AnalysisJobService", () => {
     expect(repository.findLatestByReview(ownerA, "review-a")).toMatchObject({
       teacherGuidance: "请重点核对结尾主题是否由正文支撑。",
     });
+  });
+
+  it("content_only 模式写入任务并传给 Worker", () => {
+    sqlite.prepare(`
+      UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?
+    `).run(JSON.stringify({
+      version: 1,
+      sourceRevision: 0,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "作文原文", readable: true, warnings: [], blocks: [] }],
+    }), "review-a");
+    service.enqueue(ownerA, "review-a", undefined, "content_only");
+
+    expect(repository.findLatestByReview(ownerA, "review-a")).toMatchObject({
+      mode: "content_only",
+    });
+  });
+
+  it.each([
+    ["没有 OCR", null],
+    ["OCR 已落后于图片版本", JSON.stringify({
+      version: 1,
+      sourceRevision: 0,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "旧原文", readable: true, warnings: [], blocks: [] }],
+    })],
+  ])("content_only 在%s时拒绝入队", (_case, checkpoint) => {
+    sqlite.prepare(`
+      UPDATE reviews SET image_revision = 1, ocr_checkpoint = ? WHERE id = ?
+    `).run(checkpoint, "review-a");
+
+    expect(() => service.enqueue(ownerA, "review-a", undefined, "content_only")).toThrow(
+      expect.objectContaining({ code: "OCR_NOT_FOUND", status: 409 }),
+    );
+    expect(repository.findLatestByReview(ownerA, "review-a")).toBeNull();
   });
 
   it("不同教师可以排队，但全局一次只领取一篇作文", () => {
@@ -369,6 +406,117 @@ describe("AnalysisJobService", () => {
       "saving_result",
       "save",
     ]);
+  });
+
+  it("本机 Worker 先保存 OCR，再只把识别文字交给内容模型", async () => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const calls: string[] = [];
+    let contentInput: unknown;
+    const checkpoint = {
+      version: 1 as const,
+      sourceRevision: 1,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{
+        pageIndex: 0,
+        text: "我为自己鼓掌。",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "我为自己鼓掌。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+      }],
+    };
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (job, stage) => ({ ...job, progressStage: stage } as never),
+      transition: () => ({} as never),
+      renewLease: () => null,
+      retry: () => "at_limit",
+    }, {
+      prepare: async () => ({
+        token: { revision: 1, runId: "run-local" },
+        config,
+        imageRevision: 1,
+        imageDataUrls: ["data:image/jpeg;base64,QQ=="],
+        checkpoint: null,
+      }),
+      recognize: async () => {
+        calls.push("vision");
+        return { pages: checkpoint.pages };
+      },
+      saveOcr: async () => {
+        calls.push("save-ocr");
+        return checkpoint;
+      },
+      analyzeText: async (input: unknown) => {
+        calls.push("content");
+        contentInput = input;
+        return { report: readyEnvelope.report, annotationAnchors: [] };
+      },
+      save: async () => calls.push("save-report"),
+      fail: async () => { throw new Error("unreachable"); },
+      analyze: async () => { throw new Error("旧的图片直批入口不应被调用"); },
+    } as never);
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "succeeded" });
+
+    expect(calls).toEqual(["vision", "save-ocr", "content", "save-report"]);
+    expect(contentInput).toMatchObject({
+      pages: [{ pageIndex: 0, text: "我为自己鼓掌。" }],
+    });
+    expect(JSON.stringify(contentInput)).not.toContain("data:image");
+  });
+
+  it("本机 content_only 复用 OCR，不读取图片也不调用视觉模型", async () => {
+    const checkpoint = {
+      version: 1 as const,
+      sourceRevision: 0,
+      ocrRevision: 3,
+      editedAt: "2026-07-21T00:00:00.000Z",
+      pages: [{
+        pageIndex: 0,
+        text: "老师修正后的作文。",
+        readable: true,
+        warnings: [],
+        blocks: [],
+      }],
+    };
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?")
+      .run(JSON.stringify(checkpoint), "review-a");
+    service.enqueue(ownerA, "review-a", undefined, "content_only");
+    const claimed = repository.claimNext()!;
+    const recognize = vi.fn();
+    const analyzeText = vi.fn(async () => ({ report: readyEnvelope.report, annotationAnchors: [] }));
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (job, stage) => ({ ...job, progressStage: stage } as never),
+      transition: () => ({} as never),
+      renewLease: () => null,
+      retry: () => "at_limit",
+    }, {
+      prepare: async (_ownerId, _reviewId, mode) => {
+        expect(mode).toBe("content_only");
+        return {
+          token: { revision: 2, runId: "run-content-only" },
+          config,
+          imageRevision: 0,
+          imageDataUrls: [],
+          checkpoint,
+        };
+      },
+      recognize,
+      saveOcr: async () => { throw new Error("不应重复保存 OCR"); },
+      analyzeText,
+      save: async () => undefined,
+      fail: async () => { throw new Error("unreachable"); },
+      analyze: async () => { throw new Error("旧入口不应被调用"); },
+    });
+
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "succeeded" });
+    expect(recognize).not.toHaveBeenCalled();
+    expect(analyzeText).toHaveBeenCalledWith(expect.objectContaining({
+      pages: [{ pageIndex: 0, text: "老师修正后的作文。" }],
+    }));
   });
 
   it("图片不可辨认时 Worker 保存 needs_better_images 并正常结束任务", async () => {

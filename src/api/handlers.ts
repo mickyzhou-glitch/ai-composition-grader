@@ -598,6 +598,7 @@ export function createAnalyzeRouteHandlers(dependencies: {
         const id = (await context.params).id;
         const input = z.object({
           teacherGuidance: z.string().trim().max(1000).optional(),
+          mode: z.enum(["full", "content_only"]).default("full"),
         }).parse(_request.headers.get("content-type")?.includes("application/json")
           ? await readJson(_request)
           : {});
@@ -613,6 +614,7 @@ export function createAnalyzeRouteHandlers(dependencies: {
           dependencies.ownerId,
           id,
           input.teacherGuidance,
+          input.mode,
         ), 202);
       } catch (error) {
         return failure(error);

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
+import { ocrCheckpointSchema } from "../ocr/contracts";
 import {
   analysisJobs,
   type AnalysisJobStatus,
@@ -80,6 +81,16 @@ export class AnalysisJobUnavailableReviewError extends Error {
   constructor(reviewId: string) {
     super(`Review is unavailable for analysis: ${reviewId}`);
     this.name = "AnalysisJobUnavailableReviewError";
+  }
+}
+
+export class AnalysisJobOcrNotFoundError extends Error {
+  readonly code = "OCR_NOT_FOUND";
+  readonly status = 409;
+
+  constructor(reviewId: string) {
+    super(`识别原文不存在或已失效：${reviewId}`);
+    this.name = "AnalysisJobOcrNotFoundError";
   }
 }
 
@@ -163,10 +174,16 @@ export class AnalysisJobRepository {
     this.leaseMs = assertPositiveInteger(options.leaseMs ?? 180_000, "leaseMs");
   }
 
-  createOrGet(ownerId: string, reviewId: string, teacherGuidance?: string): AnalysisJobRecord {
+  createOrGet(
+    ownerId: string,
+    reviewId: string,
+    teacherGuidance?: string,
+    mode: AnalysisJobMode = "full",
+  ): AnalysisJobRecord {
     assertId(ownerId, "ownerId");
     assertId(reviewId, "reviewId");
     const normalizedGuidance = teacherGuidance?.trim() || null;
+    if (mode !== "full" && mode !== "content_only") throw new TypeError("invalid analysis mode");
     if (normalizedGuidance && normalizedGuidance.length > 1000) {
       throw new TypeError("teacherGuidance must be at most 1000 characters");
     }
@@ -174,7 +191,13 @@ export class AnalysisJobRepository {
 
     const outcome = this.database.transaction((transaction): AnalysisJobRecord | "unavailable" => {
       const review = transaction
-        .select({ id: reviews.id, deletingAt: reviews.deletingAt, expiresAt: reviews.expiresAt })
+        .select({
+          id: reviews.id,
+          deletingAt: reviews.deletingAt,
+          expiresAt: reviews.expiresAt,
+          imageRevision: reviews.imageRevision,
+          ocrCheckpoint: reviews.ocrCheckpoint,
+        })
         .from(reviews)
         .where(and(eq(reviews.id, reviewId), eq(reviews.ownerId, ownerId)))
         .get();
@@ -201,6 +224,13 @@ export class AnalysisJobRepository {
         return "unavailable";
       }
 
+      if (mode === "content_only") {
+        const checkpoint = ocrCheckpointSchema.safeParse(review.ocrCheckpoint);
+        if (!checkpoint.success || checkpoint.data.sourceRevision !== review.imageRevision) {
+          throw new AnalysisJobOcrNotFoundError(reviewId);
+        }
+      }
+
       const existing = this.findActive(transaction, ownerId, reviewId);
       if (existing) return existing;
 
@@ -211,6 +241,7 @@ export class AnalysisJobRepository {
           id,
           ownerId,
           reviewId,
+          mode,
           status: "queued",
           attempt: 0,
           availableAt: now,

@@ -140,6 +140,11 @@ export default {
     }
     const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);
+    const settingsEndpoint = url.pathname === "/api/settings"
+      || /^\/api\/settings\/(?:vision|content)(?:\/test)?$/u.test(url.pathname);
+    if (settingsEndpoint && user && user.role !== "admin") {
+      return apiError("FORBIDDEN", "Administrator access required", 403);
+    }
     if (request.method === "GET" && url.pathname === "/" && request.headers.get("accept")?.includes("text/html") && !user) {
       return new Response(null, {
         status: 302,

@@ -308,6 +308,127 @@ describe("ReviewRepository", () => {
     expect(updated).toMatchObject({ status: "draft", report: null, annotations: [] });
   });
 
+  it("持久化 OCR 检查点并绑定报告版本，内容失败后仍可复用", () => {
+    const image = {
+      position: 0,
+      originalName: "第一页.jpg",
+      mimeType: "image/jpeg",
+      originalPath: "images/page-1-original.jpg",
+      annotationPath: "images/page-1-annotation.jpg",
+      aiPath: "images/page-1-ai.jpg",
+      width: 1200,
+      height: 1600,
+      rotation: 0 as const,
+      crop: null,
+    };
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const withImage = repository.replaceImages(OWNER_ID, "review-1", 0, [image]);
+    const withOldReport = repository.updateReport(OWNER_ID, "review-1", report);
+    const firstToken = repository.beginAnalysis(
+      OWNER_ID,
+      "review-1",
+      "run-ocr",
+      withOldReport.revision,
+    );
+    const checkpoint = repository.saveRecognizedOcr(
+      OWNER_ID,
+      "review-1",
+      firstToken,
+      1,
+      [{
+        pageIndex: 0,
+        text: "我为自己喝彩。",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "我为自己喝彩。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+      }],
+    );
+
+    expect(withImage.revision).toBe(1);
+    expect(checkpoint).toMatchObject({ sourceRevision: 1, ocrRevision: 0 });
+    expect(repository.getById(OWNER_ID, "review-1")).not.toHaveProperty("ocrCheckpoint");
+    const firstLeaseExpiresAt = new Date("2026-07-20T11:00:00.000Z");
+    sqlite.prepare(`
+      INSERT INTO analysis_jobs (
+        id, review_id, owner_id, mode, status, attempt, available_at,
+        lease_expires_at, progress_stage, created_at, started_at
+      ) VALUES (?, ?, ?, 'full', 'running', 1, ?, ?, 'generating_review', ?, ?)
+    `).run(
+      "job-failed-content",
+      "review-1",
+      OWNER_ID,
+      Date.parse("2026-07-20T10:00:00.000Z"),
+      firstLeaseExpiresAt.valueOf(),
+      Date.parse("2026-07-20T10:00:00.000Z"),
+      Date.parse("2026-07-20T10:00:00.000Z"),
+    );
+    repository.failAnalysisAndFailJob(
+      OWNER_ID,
+      "review-1",
+      firstToken,
+      { id: "job-failed-content", attempt: 1, leaseExpiresAt: firstLeaseExpiresAt },
+      "AI_REQUEST_FAILED",
+    );
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "failed",
+      report,
+    });
+    expect(sqlite.prepare(
+      "SELECT status, error_code FROM analysis_jobs WHERE id = ?",
+    ).get("job-failed-content")).toEqual({
+      status: "failed",
+      error_code: "AI_REQUEST_FAILED",
+    });
+    expect(repository.getAnalysisSource(OWNER_ID, "review-1").checkpoint).toEqual(checkpoint);
+
+    const secondToken = repository.beginAnalysis(
+      OWNER_ID,
+      "review-1",
+      "run-content",
+      withOldReport.revision,
+    );
+    const leaseExpiresAt = new Date("2026-07-20T11:00:00.000Z");
+    sqlite.prepare(`
+      INSERT INTO analysis_jobs (
+        id, review_id, owner_id, mode, status, attempt, available_at,
+        lease_expires_at, progress_stage, created_at, started_at
+      ) VALUES (?, ?, ?, 'content_only', 'running', 1, ?, ?, 'saving_result', ?, ?)
+    `).run(
+      "job-content",
+      "review-1",
+      OWNER_ID,
+      Date.parse("2026-07-20T10:00:00.000Z"),
+      leaseExpiresAt.valueOf(),
+      Date.parse("2026-07-20T10:00:00.000Z"),
+      Date.parse("2026-07-20T10:00:00.000Z"),
+    );
+    const saved = repository.saveAnalysisAndCompleteJob(
+      OWNER_ID,
+      "review-1",
+      secondToken,
+      { readable: true, pageWarnings: [], report, annotations: [annotation] },
+      { id: "job-content", attempt: 1, leaseExpiresAt },
+      checkpoint.ocrRevision,
+    );
+    expect(sqlite.prepare(
+      "SELECT image_revision, report_ocr_revision FROM reviews WHERE id = ?",
+    ).get("review-1")).toEqual({ image_revision: 1, report_ocr_revision: 0 });
+
+    repository.replaceImages(
+      OWNER_ID,
+      "review-1",
+      saved.revision,
+      [{ ...image, originalName: "重拍第一页.jpg" }],
+    );
+    expect(sqlite.prepare(
+      "SELECT image_revision, ocr_checkpoint, report_ocr_revision FROM reviews WHERE id = ?",
+    ).get("review-1")).toEqual({
+      image_revision: 2,
+      ocr_checkpoint: null,
+      report_ocr_revision: null,
+    });
+  });
+
   it("原子保存可辨认或不可辨认的 AI 分析结果", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const firstRun = repository.beginAnalysis(OWNER_ID, "review-1", "run-1", 0);

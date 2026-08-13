@@ -18,6 +18,7 @@ import type {
   AnalysisToken,
   AnalysisJobCompletionClaim,
 } from "../db/review-repository";
+import type { OcrCheckpoint, OcrPage } from "../ocr/contracts";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
 import { InMemoryReviewLock, type ReviewLock } from "./review-lock";
@@ -39,6 +40,8 @@ export interface AiReviewer {
 export interface PreparedReviewAnalysis {
   token: AnalysisToken;
   config: AssignmentConfig;
+  imageRevision: number;
+  checkpoint: OcrCheckpoint | null;
   imageDataUrls: string[];
   studentName?: string;
 }
@@ -323,7 +326,11 @@ export class ReviewService {
   }
 
   /** Prepares local data under the review lock; no network model call happens here. */
-  async prepareAnalysis(ownerId: string, id: string): Promise<PreparedReviewAnalysis> {
+  async prepareAnalysis(
+    ownerId: string,
+    id: string,
+    mode: "full" | "content_only" = "full",
+  ): Promise<PreparedReviewAnalysis> {
     await this.recovery;
     return this.lock.runExclusive(id, () => this.fileStore.withReviewLock(ownerId, id, async () => {
       const review = this.get(ownerId, id);
@@ -345,7 +352,12 @@ export class ReviewService {
         await this.fileStore.queuePdfCleanup(ownerId, id, [review.pdfFilename]);
       }
       try {
-        const imageDataUrls = await Promise.all(
+        const source = this.repository.getAnalysisSource(ownerId, id);
+        const checkpoint = source.checkpoint;
+        if (mode === "content_only" && !checkpoint) {
+          throw Object.assign(new Error("OCR_NOT_FOUND"), { code: "OCR_NOT_FOUND" });
+        }
+        const imageDataUrls = checkpoint ? [] : await Promise.all(
           review.images.map(async (image) => {
             const filename = image.aiPath.replace(/^images\//, "");
             const data = await this.fileStore.readFile(ownerId, id, "images", filename);
@@ -355,6 +367,8 @@ export class ReviewService {
         return {
           token,
           config: review.config,
+          imageRevision: source.imageRevision,
+          checkpoint,
           imageDataUrls,
           studentName: review.studentName || undefined,
         };
@@ -392,9 +406,29 @@ export class ReviewService {
     token: AnalysisToken,
     envelope: AiReviewEnvelope,
     claim: AnalysisJobCompletionClaim,
+    expectedOcrRevision?: number,
   ): Promise<ReviewRecord> {
     return this.lock.runExclusive(id, async () =>
-      this.repository.saveAnalysisAndCompleteJob(ownerId, id, token, envelope, claim),
+      this.repository.saveAnalysisAndCompleteJob(
+        ownerId,
+        id,
+        token,
+        envelope,
+        claim,
+        expectedOcrRevision,
+      ),
+    );
+  }
+
+  async savePreparedOcr(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    imageRevision: number,
+    pages: OcrPage[],
+  ): Promise<OcrCheckpoint> {
+    return this.lock.runExclusive(id, async () =>
+      this.repository.saveRecognizedOcr(ownerId, id, token, imageRevision, pages),
     );
   }
 

@@ -18,6 +18,7 @@ import {
   reviewExpiryAt,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import { ocrCheckpointSchema, type OcrCheckpoint, type OcrPage } from "../ocr/contracts";
 import type { AppDatabase } from "./client";
 import { analysisJobs, annotations, reviewImages, reviews, savedAssignments } from "./schema";
 
@@ -231,6 +232,9 @@ export class ReviewRepository {
         status,
         report: null,
         revision: 0,
+        imageRevision: 0,
+        ocrCheckpoint: null,
+        reportOcrRevision: null,
         analysisRunId: null,
         pdfFilename: null,
         pdfPath: null,
@@ -386,7 +390,6 @@ export class ReviewRepository {
         throw new CorruptReviewDataError(id, "report");
       }
     }
-
     const storedImages = database
       .select()
       .from(reviewImages)
@@ -441,6 +444,33 @@ export class ReviewRepository {
 
   getReview(ownerId: string, id: string): ReviewRecord | null {
     return this.getById(ownerId, id);
+  }
+
+  getAnalysisSource(ownerId: string, id: string): {
+    imageRevision: number;
+    checkpoint: OcrCheckpoint | null;
+  } {
+    const row = this.database.select({
+      imageRevision: reviews.imageRevision,
+      ocrCheckpoint: reviews.ocrCheckpoint,
+    }).from(reviews).where(and(
+      eq(reviews.id, id),
+      eq(reviews.ownerId, ownerId),
+      isNull(reviews.deletingAt),
+    )).get();
+    if (!row) throw new ReviewNotFoundError(id);
+    if (row.ocrCheckpoint === null) {
+      return { imageRevision: row.imageRevision, checkpoint: null };
+    }
+    try {
+      const checkpoint = ocrCheckpointSchema.parse(row.ocrCheckpoint);
+      return {
+        imageRevision: row.imageRevision,
+        checkpoint: checkpoint.sourceRevision === row.imageRevision ? checkpoint : null,
+      };
+    } catch {
+      throw new CorruptReviewDataError(id, "ocrCheckpoint");
+    }
   }
 
   list(ownerId: string): ReviewRecord[] {
@@ -620,6 +650,9 @@ export class ReviewRepository {
         report: null,
         revision: sql`${reviews.revision} + 1`,
         analysisRunId: null,
+        imageRevision: sql`${reviews.imageRevision} + 1`,
+        ocrCheckpoint: null,
+        reportOcrRevision: null,
         pdfFilename: null,
         pdfPath: null,
         pdfRevision: null,
@@ -696,6 +729,36 @@ export class ReviewRepository {
     return { revision: expectedRevision, runId };
   }
 
+  saveRecognizedOcr(
+    ownerId: string,
+    id: string,
+    token: AnalysisToken,
+    sourceRevision: number,
+    pages: OcrPage[],
+  ): OcrCheckpoint {
+    const checkpoint = ocrCheckpointSchema.parse({
+      version: 1,
+      sourceRevision,
+      ocrRevision: 0,
+      editedAt: null,
+      pages,
+    });
+    const update = this.database.update(reviews).set({
+      ocrCheckpoint: checkpoint,
+      reportOcrRevision: null,
+      updatedAt: this.now(),
+    }).where(and(
+      eq(reviews.id, id),
+      eq(reviews.ownerId, ownerId),
+      isNull(reviews.deletingAt),
+      eq(reviews.revision, token.revision),
+      eq(reviews.analysisRunId, token.runId),
+      eq(reviews.imageRevision, sourceRevision),
+    )).run();
+    if (update.changes === 0) throw new AnalysisConflictError(id);
+    return checkpoint;
+  }
+
   saveAnalysis(
     ownerId: string,
     id: string,
@@ -762,6 +825,7 @@ export class ReviewRepository {
     token: AnalysisToken,
     input: AiReviewEnvelope,
     claim: AnalysisJobCompletionClaim,
+    expectedOcrRevision?: number,
   ): ReviewRecord {
     const review = this.requireById(ownerId, id);
     const parsedAnnotations = input.annotations.map((annotation) =>
@@ -782,6 +846,9 @@ export class ReviewRepository {
         .update(reviews)
         .set({
           report,
+          ...(expectedOcrRevision === undefined
+            ? {}
+            : { reportOcrRevision: input.readable ? expectedOcrRevision : null }),
           status,
           updatedAt: now,
           analysisRunId: null,
@@ -798,6 +865,9 @@ export class ReviewRepository {
             isNull(reviews.deletingAt),
             eq(reviews.revision, token.revision),
             eq(reviews.analysisRunId, token.runId),
+            ...(expectedOcrRevision === undefined ? [] : [
+              sql`json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision') = ${expectedOcrRevision}`,
+            ]),
           ),
         )
         .run();

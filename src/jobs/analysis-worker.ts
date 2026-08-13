@@ -1,5 +1,9 @@
 import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
+import type { CompositionReviewResult } from "../ai/composition-review-adapter";
+import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { AnalysisToken } from "../db/review-repository";
+import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
+import type { OcrCheckpoint } from "../ocr/contracts";
 import { ReviewPreparationError } from "../services/review-service";
 import type { AnalysisJobStatus } from "../db/schema";
 import {
@@ -29,10 +33,12 @@ export interface AnalysisJobQueue {
 }
 
 export interface AnalysisExecutionService {
-  prepare(ownerId: string, reviewId: string): Promise<{
+  prepare(ownerId: string, reviewId: string, mode?: "full" | "content_only"): Promise<{
     token: AnalysisToken;
     config: AssignmentConfig;
     imageDataUrls: string[];
+    imageRevision?: number;
+    checkpoint?: OcrCheckpoint | null;
     studentName?: string;
   }>;
   analyze(input: {
@@ -41,12 +47,27 @@ export interface AnalysisExecutionService {
     teacherGuidance?: string;
     studentName?: string;
   }): Promise<AiReviewEnvelope>;
+  recognize?(imageDataUrls: string[]): Promise<VisionOcrResult>;
+  saveOcr?(
+    ownerId: string,
+    reviewId: string,
+    token: AnalysisToken,
+    imageRevision: number,
+    pages: VisionOcrResult["pages"],
+  ): Promise<OcrCheckpoint>;
+  analyzeText?(input: {
+    config: AssignmentConfig;
+    pages: Array<{ pageIndex: number; text: string }>;
+    teacherGuidance?: string;
+    studentName?: string;
+  }): Promise<CompositionReviewResult>;
   save(
     ownerId: string,
     reviewId: string,
     token: AnalysisToken,
     envelope: AiReviewEnvelope,
     claim: AnalysisJobClaim,
+    expectedOcrRevision?: number,
   ): Promise<unknown>;
   fail(
     ownerId: string,
@@ -78,6 +99,7 @@ function safeErrorCode(error: unknown): string {
       if (code === "AI_INVALID_RESPONSE") return code;
       if (code === "AI_REQUEST_FAILED") return code;
       if (code === "IMAGES_REQUIRED") return code;
+      if (code === "OCR_NOT_FOUND") return code;
       if (code === "JOB_CLAIM_LOST") return code;
       if (code === "ANALYSIS_CONFLICT" || code === "REVISION_CONFLICT") return code;
       if (code === "REVIEW_NOT_FOUND" || code === "NOT_FOUND") return "REVIEW_UNAVAILABLE";
@@ -150,24 +172,78 @@ export class AnalysisWorker {
     };
     const timer = setInterval(renew, this.renewEveryMs);
     try {
-      prepared = await this.execution.prepare(claim.ownerId, claim.reviewId);
+      prepared = await this.execution.prepare(claim.ownerId, claim.reviewId, claim.mode);
       this.assertClaimCurrent(claimLost, claim.id);
-      claim = this.jobs.updateProgress(claim, "saving_ocr");
-      claim = this.jobs.updateProgress(claim, "generating_review");
-
-      const envelope = await this.execution.analyze({
-        config: prepared.config,
-        imageDataUrls: prepared.imageDataUrls,
-        teacherGuidance: claim.teacherGuidance ?? undefined,
-        studentName: prepared.studentName,
-      });
+      const dualModel = this.execution.recognize && this.execution.saveOcr && this.execution.analyzeText;
+      let checkpoint = prepared.checkpoint ?? null;
+      let envelope: AiReviewEnvelope;
+      if (dualModel) {
+        if (!checkpoint) {
+          if (claim.mode === "content_only") {
+            throw Object.assign(new Error("OCR_NOT_FOUND"), { code: "OCR_NOT_FOUND" });
+          }
+          if (prepared.imageRevision === undefined) throw new TypeError("imageRevision is required");
+          const recognized = await this.execution.recognize!(prepared.imageDataUrls);
+          this.assertClaimCurrent(claimLost, claim.id);
+          claim = this.jobs.updateProgress(claim, "saving_ocr");
+          checkpoint = await this.execution.saveOcr!(
+            claim.ownerId,
+            claim.reviewId,
+            prepared.token,
+            prepared.imageRevision,
+            recognized.pages,
+          );
+        } else {
+          claim = this.jobs.updateProgress(claim, "saving_ocr");
+        }
+        if (checkpoint.pages.some((page) => !page.readable)) {
+          envelope = {
+            readable: false,
+            pageWarnings: checkpoint.pages.flatMap(({ warnings }) => warnings),
+            annotations: [],
+          };
+        } else {
+          claim = this.jobs.updateProgress(claim, "generating_review");
+          const result = await this.execution.analyzeText!({
+            config: prepared.config,
+            pages: checkpoint.pages.map(({ pageIndex, text }) => ({ pageIndex, text })),
+            teacherGuidance: claim.teacherGuidance ?? undefined,
+            studentName: prepared.studentName,
+          });
+          envelope = {
+            readable: true,
+            pageWarnings: checkpoint.pages.flatMap(({ warnings }) => warnings),
+            report: result.report,
+            annotations: mapAnnotationAnchors(checkpoint, result.annotationAnchors),
+          };
+        }
+      } else {
+        claim = this.jobs.updateProgress(claim, "saving_ocr");
+        claim = this.jobs.updateProgress(claim, "generating_review");
+        envelope = await this.execution.analyze({
+          config: prepared.config,
+          imageDataUrls: prepared.imageDataUrls,
+          teacherGuidance: claim.teacherGuidance ?? undefined,
+          studentName: prepared.studentName,
+        });
+      }
       this.assertClaimCurrent(claimLost, claim.id);
+      if (claim.progressStage === "saving_ocr") {
+        claim = this.jobs.updateProgress(claim, "generating_review");
+      }
       claim = this.jobs.updateProgress(claim, "mapping_annotations");
       claim = this.jobs.updateProgress(claim, "validating_result");
       // The adapter performs schema repair and validation before returning, so
       // this stage records that the validated envelope is ready to persist.
       claim = this.jobs.updateProgress(claim, "saving_result");
-      await this.execution.save(claim.ownerId, claim.reviewId, prepared.token, envelope, claim);
+      await this.execution.save(
+        claim.ownerId,
+        claim.reviewId,
+        prepared.token,
+        envelope,
+        claim,
+        checkpoint?.ocrRevision,
+      );
       this.assertClaimCurrent(claimLost, claim.id);
       return { jobId: claim.id, outcome: "succeeded" };
     } catch (error) {

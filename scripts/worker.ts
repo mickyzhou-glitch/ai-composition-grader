@@ -1,6 +1,7 @@
 import { pathToFileURL } from "node:url";
 
-import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter.ts";
+import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter.ts";
+import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter.ts";
 import { openAppDatabase } from "../src/db/client.ts";
 import { ReviewRepository } from "../src/db/review-repository.ts";
 import { AnalysisJobRepository } from "../src/jobs/analysis-job-repository.ts";
@@ -28,13 +29,26 @@ export async function runWorker(): Promise<void> {
   const reviews = new ReviewService(
     new ReviewRepository(opened.db),
     new ReviewFileStore(),
-    new OpenAIReviewAdapter(settings),
+    { analyze: async () => { throw new Error("LEGACY_IMAGE_ANALYSIS_DISABLED"); } },
   );
+  const vision = new VisionOcrAdapter(settings);
+  const content = new CompositionReviewAdapter(settings);
   const worker = new AnalysisWorker(jobs, {
-    prepare: (ownerId, reviewId) => reviews.prepareAnalysis(ownerId, reviewId),
+    prepare: (ownerId, reviewId, mode) => reviews.prepareAnalysis(ownerId, reviewId, mode),
     analyze: (input) => reviews.analyzePrepared(input),
-    save: (ownerId, reviewId, token, envelope, claim) =>
-      reviews.savePreparedAnalysisAndCompleteJob(ownerId, reviewId, token, envelope, claim),
+    recognize: (imageDataUrls) => vision.recognize({ imageUrls: imageDataUrls }),
+    saveOcr: (ownerId, reviewId, token, imageRevision, pages) =>
+      reviews.savePreparedOcr(ownerId, reviewId, token, imageRevision, pages),
+    analyzeText: (input) => content.analyzeText(input),
+    save: (ownerId, reviewId, token, envelope, claim, expectedOcrRevision) =>
+      reviews.savePreparedAnalysisAndCompleteJob(
+        ownerId,
+        reviewId,
+        token,
+        envelope,
+        claim,
+        expectedOcrRevision,
+      ),
     fail: (ownerId, reviewId, token, claim, errorCode) =>
       reviews.failPreparedAnalysisAndFailJob(ownerId, reviewId, token, claim, errorCode),
   });
