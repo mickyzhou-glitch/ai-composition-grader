@@ -93,7 +93,7 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
           { type: "image_url", image_url: { url: visionProbe } },
           { type: "text", text: "请确认你能读取图片，只回复 OK" },
         ] }] : [{ role: "user", content: "请只回复 OK" }],
-      ...(isMiMo ? { max_completion_tokens: 16 } : { max_tokens: 16 }),
+      ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: 16 }),
     }),
   });
   if (!response.ok) throw new Error("AI_CONNECTION_FAILED");

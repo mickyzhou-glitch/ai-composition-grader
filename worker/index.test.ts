@@ -85,9 +85,47 @@ describe("Cloudflare Worker", () => {
 
     expect(response.status).toBe(200);
     expect(upstream).toHaveBeenCalledOnce();
-    const body = JSON.parse((upstream.mock.calls[0][1] as RequestInit).body as string);
+    const body = JSON.parse((upstream.mock.calls.at(-1)?.[1] as RequestInit).body as string);
     expect(body.messages).toEqual([{ role: "user", content: "请只回复 OK" }]);
     expect(JSON.stringify(body)).not.toContain("image_url");
+  });
+
+  it("MiMo 视觉连接测试为推理和可见回复预留足够 token", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "admin-1",
+            username: "admin",
+            role: "admin",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM settings") ? { encrypted_api_key: null } : null),
+        })),
+      })),
+    };
+    const upstream = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "OK" } }],
+    }), { headers: { "content-type": "application/json" } }));
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/settings/vision/test", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ baseUrl: "https://api.xiaomimimo.com/v1", model: "mimo-v2.5" }),
+    }), {
+      ASSETS: { fetch: async () => new Response("asset") },
+      DB: database,
+      VISION_AI_API_KEY: "vision-secret",
+    } as never);
+
+    expect(response.status).toBe(200);
+    const body = JSON.parse((upstream.mock.calls.at(-1)?.[1] as RequestInit).body as string);
+    expect(JSON.stringify(body.messages)).toContain("image_url");
+    expect(body.max_completion_tokens).toBeGreaterThanOrEqual(256);
+    expect(body).not.toHaveProperty("max_tokens");
   });
 
   it("保存作文内容模型时只更新 content 角色", async () => {
