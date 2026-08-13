@@ -49,7 +49,7 @@ export class AssignmentGuidanceAdapter {
 
   async generate(input: AssignmentGuidanceInput): Promise<AssignmentGuidance> {
     const requestInput = inputSchema.parse(input);
-    const settings = await this.settings.getRuntimeConfig();
+    const settings = await this.settings.getRuntimeConfig("content");
     if (!settings) {
       throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
     }

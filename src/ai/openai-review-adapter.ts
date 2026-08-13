@@ -10,6 +10,7 @@ import {
   type EvaluationReport,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import { validateGeneratedReportSemantics } from "./review-semantics";
 
 const AI_TIMEOUT_MS = 180_000;
 const AI_MAX_RETRIES = 1;
@@ -40,7 +41,7 @@ const defaultClientFactory: OpenAIClientFactory = (options) =>
   new OpenAI(options) as unknown as OpenAICompatibleClient;
 
 export interface AiSettingsSource {
-  getRuntimeConfig(): Promise<{
+  getRuntimeConfig(role?: "vision" | "content"): Promise<{
     baseUrl: string;
     model: string;
     apiKey: string;
@@ -135,8 +136,6 @@ function buildStudentNameRule(studentName?: string): string {
 
 const GRADE_RULE =
   "不使用分数，也不输出任何 40 分制字段。只给最终等级：A+、A、A-、B+、B、B-、C。A 档代表结构完整、真实具体且有较成熟的细节与感悟；B 档代表基础达标但需要明确修改；C 代表必须重写。偏题、核心事件缺失、无法形成五段完整叙事，或正文无法支撑结尾主题时，必须给 C。diagnostics 必须逐项输出四维诊断：authenticityAndRelevance（真实度与切题）、materialAndDetails（素材与细节）、structure（五段结构与段落衔接）、language（语言流畅度）。每维 finding 精确指出原文中的一个句子或段落问题，action 给学生一条能直接完成的增删改动作。";
-
-const FORBIDDEN_TIME_OPENING = /^(?:那天(?:以后)?|后来|最后|第二天|第二日|一天(?:以后)?|早晨|清晨|上午|中午|下午|傍晚|晚上|放学后|回家后|过了(?:一会|几天|不久))/u;
 
 function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, studentName?: string): string {
   const fiveParagraphRule =
@@ -405,33 +404,7 @@ function validateEnvelope(
 ): AiReviewEnvelope {
   const envelope = validateUsableEnvelope(value, config, pageCount, studentName);
   if (!envelope.readable) return envelope;
-  const report = validateReport(
-    envelope.report,
-    { templateType: config.templateType },
-  );
-  if (report.sampleParagraphs.some((paragraph) => FORBIDDEN_TIME_OPENING.test(paragraph.text.trim()))) {
-    throw new Error("sample paragraphs must not begin with a time word");
-  }
-  const strengths = report.personalizedComment
-    .split(/\r?\n/u)
-    .map((item) => item.trim())
-    .filter(Boolean);
-  const isShortPoint = (item: string) => {
-    const length = Array.from(item).length;
-    return length >= 10 && length <= 20;
-  };
-  if (
-    strengths.length < 2 ||
-    strengths.length > 4 ||
-    !strengths.every(isShortPoint) ||
-    report.painPoints.length < 2 ||
-    report.painPoints.length > 4 ||
-    !report.painPoints.every(isShortPoint) ||
-    report.commonIssues.length !== 0 ||
-    report.revisionSuggestions.length !== 0
-  ) {
-    throw new Error("overall feedback must contain two to four concise strengths and improvements");
-  }
+  const report = validateGeneratedReportSemantics(envelope.report, config, studentName);
   return {
     ...envelope,
     report,
@@ -504,7 +477,7 @@ export class OpenAIReviewAdapter {
     if (input.imageUrls.length < 1 || input.imageUrls.length > MAX_REVIEW_IMAGES) {
       throw new TypeError(`imageUrls must contain 1 to ${MAX_REVIEW_IMAGES} pages`);
     }
-    const settings = await this.settings.getRuntimeConfig();
+    const settings = await this.settings.getRuntimeConfig("vision");
     if (!settings) {
       throw new AiAdapterError(
         "AI_SETTINGS_INCOMPLETE",
@@ -620,7 +593,7 @@ export class OpenAIReviewAdapter {
     if (!Number.isInteger(input.index) || input.index < 0 || input.index >= input.sampleParagraphs.length) {
       throw new TypeError("sample paragraph index is invalid");
     }
-    const settings = await this.settings.getRuntimeConfig();
+    const settings = await this.settings.getRuntimeConfig("content");
     if (!settings) {
       throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
     }
@@ -655,7 +628,7 @@ export class OpenAIReviewAdapter {
   }
 
   async rewriteFeedback(input: RewriteFeedbackInput): Promise<{ items: string[] }> {
-    const settings = await this.settings.getRuntimeConfig();
+    const settings = await this.settings.getRuntimeConfig("content");
     if (!settings) {
       throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
     }
@@ -698,7 +671,7 @@ export class OpenAIReviewAdapter {
   async rewriteAllSamples(input: Omit<RewriteSampleInput, "index">): Promise<{
     sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
   }> {
-    const settings = await this.settings.getRuntimeConfig();
+    const settings = await this.settings.getRuntimeConfig("content");
     if (!settings) {
       throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
     }
