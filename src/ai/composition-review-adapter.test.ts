@@ -85,6 +85,36 @@ describe("CompositionReviewAdapter", () => {
     expect(serialized).not.toContain('"y"');
   });
 
+  it("describes the complete report contract instead of relying on TypeScript type names", async () => {
+    const harness = setup();
+    const request = harness.create.getMockImplementation();
+    harness.create.mockImplementation(async (...args) => {
+      const result = await request!(...args);
+      const payload = JSON.parse(result.choices[0].message.content);
+      payload.report.sampleParagraphs = Array.from({ length: 5 }, (_, index) => ({
+        title: `第${index + 1}段`,
+        text: "坚持让我懂得珍惜".repeat(15),
+        suggestion: "围绕核心事件补充具体细节。",
+      }));
+      return { choices: [{ message: { content: JSON.stringify(payload) } }] };
+    });
+
+    await harness.adapter.analyzeText({
+      config: { ...config, templateType: "preset_self_applause" },
+      pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
+      studentName: "小艾",
+    });
+
+    const sentRequest = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };
+    const prompt = sentRequest.messages[0].content;
+    expect(prompt).toContain("themeFit:fits|partial|off_topic");
+    expect(prompt).toContain("authenticityAndRelevance:{finding:string,action:string}");
+    expect(prompt).toContain("parentFeedbacks 必须按固定顺序生成恰好三份");
+    expect(prompt).toContain("小艾家长");
+    expect(prompt).toContain("sampleParagraphs 必须恰好五段");
+    expect(prompt).toContain("annotationAnchors={pageIndex:integer");
+  });
+
   it("rejects coordinates supplied by the content model", async () => {
     const harness = setup();
     const request = harness.create.getMockImplementation();
