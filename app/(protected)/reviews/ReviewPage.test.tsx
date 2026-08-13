@@ -634,6 +634,152 @@ describe("复核页", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("任务完成后拉取最终批改遇到短暂断线时自动重试", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    const retryTimers: Array<() => void> = [];
+    const setTimeout = window.setTimeout.bind(window);
+    vi.spyOn(window, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === 1500) retryTimers.push(callback as () => void);
+      if (delay === 1500) return (retryTimers.length || 1) as never;
+      return setTimeout(callback, delay, ...args);
+    });
+    vi.spyOn(window, "clearTimeout").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockImplementationOnce(() => json({
+        ...review,
+        revision: 2,
+        report: { ...review.report, personalizedComment: "断线恢复后的最终批改" },
+      }));
+    render(<ReviewPage />);
+
+    expect(await screen.findByText("AI 分析已完成，正在加载批改结果。")).toBeInTheDocument();
+    await waitFor(() => expect(retryTimers).toHaveLength(1));
+    expect(screen.queryByText("Failed to fetch")).not.toBeInTheDocument();
+    await act(async () => retryTimers[0]());
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(await screen.findByLabelText("优点一")).toHaveValue("断线恢复后的最终批改");
+    expect(screen.queryByText("AI 分析：正在保存结果")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI 分析已完成，正在加载批改结果。")).not.toBeInTheDocument();
+  });
+
+  it("最终批改不存在时停止自动重试并提供手动重新加载", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    const retryTimers: Array<() => void> = [];
+    const setTimeout = window.setTimeout.bind(window);
+    vi.spyOn(window, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === 1500 || delay === 3000 || delay === 6000) retryTimers.push(callback as () => void);
+      if (delay === 1500 || delay === 3000 || delay === 6000) return (retryTimers.length || 1) as never;
+      return setTimeout(callback, delay, ...args);
+    });
+    vi.spyOn(window, "clearTimeout").mockImplementation(() => undefined);
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockImplementationOnce(() => json({ code: "NOT_FOUND", message: "批改记录不存在" }, 404))
+      .mockImplementationOnce(() => json({
+        ...review,
+        revision: 2,
+        report: { ...review.report, personalizedComment: "手动恢复后的最终批改" },
+      }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("批改结果加载失败，请重新加载。");
+    expect(retryTimers).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "重新分析" })).toBeEnabled();
+    expect(screen.queryByText("AI 分析：正在保存结果")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重新加载结果" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    expect(await screen.findByLabelText("优点一")).toHaveValue("手动恢复后的最终批改");
+  });
+
+  it("手动重新加载最终批改前保护未保存的本地修改", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockImplementationOnce(() => json({ code: "NOT_FOUND", message: "批改记录不存在" }, 404));
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("批改结果加载失败，请重新加载。");
+    await user.clear(screen.getByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "尚未保存的本地评语");
+    await user.click(screen.getByRole("button", { name: "重新加载结果" }));
+
+    expect(confirm).toHaveBeenCalledWith("将放弃当前未保存的复核修改并加载服务器最新内容，确定继续吗？");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(screen.getByLabelText("优点一")).toHaveValue("尚未保存的本地评语");
+  });
+
+  it("结果加载失败后重新分析会清除旧的手动加载状态", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockImplementationOnce(() => json({ code: "NOT_FOUND", message: "批改记录不存在" }, 404))
+      .mockImplementationOnce(() => json({ code: "ANALYSIS_CONFLICT", message: "冲突" }, 409));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    expect(await screen.findByRole("button", { name: "重新加载结果" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重新分析" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("分析结果与当前内容冲突，请刷新后重试。");
+    expect(screen.queryByRole("button", { name: "重新加载结果" })).not.toBeInTheDocument();
+  });
+
+  it("最终批改连续断线时按上限退避重试后解除锁定", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    const retryTimers: Array<{ callback: () => void; delay: number }> = [];
+    const setTimeout = window.setTimeout.bind(window);
+    vi.spyOn(window, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === 1500 || delay === 3000 || delay === 6000) {
+        retryTimers.push({ callback: callback as () => void, delay });
+        return (retryTimers.length || 1) as never;
+      }
+      return setTimeout(callback, delay, ...args);
+    });
+    vi.spyOn(window, "clearTimeout").mockImplementation(() => undefined);
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json({ ...review, status: "analyzing" as const }))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<ReviewPage />);
+
+    await waitFor(() => expect(retryTimers.map(({ delay }) => delay)).toEqual([1500]));
+    await act(async () => retryTimers[0].callback());
+    await waitFor(() => expect(retryTimers.map(({ delay }) => delay)).toEqual([1500, 3000]));
+    await act(async () => retryTimers[1].callback());
+    await waitFor(() => expect(retryTimers.map(({ delay }) => delay)).toEqual([1500, 3000, 6000]));
+    await act(async () => retryTimers[2].callback());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("网络连接不稳定，批改结果暂时无法加载。");
+    expect(screen.getByRole("button", { name: "重新分析" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "重新加载结果" })).toBeInTheDocument();
+  });
+
   it("刷新后按后台任务状态轮询，并在完成时刷新批改结果", async () => {
     const runningJob = {
       id: "job-1", reviewId: "review-1", status: "running", progressStage: "generating_review",

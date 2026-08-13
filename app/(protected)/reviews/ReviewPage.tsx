@@ -33,6 +33,8 @@ interface AnalysisJobView {
   finishedAt: string | null;
 }
 
+type ReviewLoadResult = { ok: true } | { ok: false; error: unknown };
+
 const stageLabels: Record<AnalysisJobView["progressStage"], string> = {
   queued: "排队中",
   reading_images: "正在识别作文",
@@ -126,6 +128,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [loadingAnalysisResult, setLoadingAnalysisResult] = useState(false);
+  const [analysisResultLoadFailed, setAnalysisResultLoadFailed] = useState(false);
+  const [analysisResultRetry, setAnalysisResultRetry] = useState(0);
   const mountedRef = useRef(false);
   const requestTokenRef = useRef(0);
   const requestControllerRef = useRef<AbortController | null>(null);
@@ -176,7 +181,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
   }, [reviewId]);
 
-  const loadReview = useCallback(async (showLoading = true) => {
+  const loadReview = useCallback(async (showLoading = true, reportError = true): Promise<ReviewLoadResult> => {
     const token = requestTokenRef.current + 1;
     requestTokenRef.current = token;
     requestControllerRef.current?.abort();
@@ -197,8 +202,10 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         applyReview(loaded);
         setDirty(false);
       }
+      return isLatest() ? { ok: true } : { ok: false, error: new DOMException("Request superseded", "AbortError") };
     } catch (caught) {
-      if (isLatest() && !isAbortError(caught)) setError(errorMessage(caught));
+      if (isLatest() && !isAbortError(caught) && reportError) setError(errorMessage(caught));
+      return { ok: false, error: caught };
     } finally {
       if (showLoading && isLatest()) setLoading(false);
     }
@@ -259,13 +266,49 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
 
   useEffect(() => {
     if (!analysisJob) return;
-    if (analysisJob.status === "succeeded" || analysisJob.status === "failed" || analysisJob.status === "canceled") {
+    if (analysisJob.status === "succeeded") {
+      const terminalKey = `${analysisJob.id}:${analysisJob.status}:${analysisJob.finishedAt ?? "pending"}`;
+      if (refreshedTerminalJobRef.current === terminalKey) return;
+      let canceled = false;
+      let retryTimer: number | null = null;
+      let retryCount = 0;
+      setLoadingAnalysisResult(true);
+      setAnalysisResultLoadFailed(false);
+      setError("");
+      const loadFinalResult = async () => {
+        const result = await loadReview(false, false);
+        if (canceled) return;
+        if (result.ok) {
+          refreshedTerminalJobRef.current = terminalKey;
+          setLoadingAnalysisResult(false);
+          setAnalysisJob((current) => current?.id === analysisJob.id ? null : current);
+          return;
+        }
+        const retryable = result.error instanceof TypeError ||
+          (result.error instanceof ApiError && result.error.status >= 500);
+        if (retryable && retryCount < 3) {
+          const delay = 1500 * (2 ** retryCount);
+          retryCount += 1;
+          retryTimer = window.setTimeout(() => void loadFinalResult(), delay);
+          return;
+        }
+        setLoadingAnalysisResult(false);
+        setAnalysisResultLoadFailed(true);
+        setError(retryable
+          ? "网络连接不稳定，批改结果暂时无法加载。"
+          : "批改结果加载失败，请重新加载。");
+      };
+      void loadFinalResult();
+      return () => {
+        canceled = true;
+        if (retryTimer !== null) window.clearTimeout(retryTimer);
+      };
+    }
+    if (analysisJob.status === "failed" || analysisJob.status === "canceled") {
       const terminalKey = `${analysisJob.id}:${analysisJob.status}:${analysisJob.finishedAt ?? "pending"}`;
       if (refreshedTerminalJobRef.current === terminalKey) return;
       refreshedTerminalJobRef.current = terminalKey;
-      // The review read can race a just-finished worker. The durable job is
-      // authoritative here, so re-read once to avoid showing stale analysis.
-      void refresh(false, true);
+      void loadReview(false);
       return;
     }
     const timer = window.setInterval(() => {
@@ -274,7 +317,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       });
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [analysisJob, loadJob, refresh]);
+  }, [analysisJob, analysisResultRetry, loadJob, loadReview]);
 
   useEffect(() => {
     if (!dirty) return;
@@ -438,6 +481,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
     invalidateLoad();
     invalidateJobLoad();
+    setAnalysisResultLoadFailed(false);
     setBusy("analyze");
     setError("");
     setNotice("");
@@ -521,7 +565,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
   }
 
-  const analysisActive = analysisJob?.status === "queued" || analysisJob?.status === "running";
+  const analysisActive = loadingAnalysisResult ||
+    (analysisJob?.status === "succeeded" && !analysisResultLoadFailed) ||
+    analysisJob?.status === "queued" || analysisJob?.status === "running";
 
   function replacementControl(className = "button button--quiet") {
     return <label className={`${className} file-label`}>
@@ -582,9 +628,20 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
           </div>
         </header>
-        {error ? <ErrorBanner message={error} onRetry={error.includes("冲突") ? () => void forceRefresh() : undefined} retryLabel={error.includes("冲突") ? "放弃本地修改并刷新" : undefined} /> : null}
+        {error ? <ErrorBanner
+          message={error}
+          onRetry={analysisResultLoadFailed
+            ? () => {
+                if (dirty && !window.confirm("将放弃当前未保存的复核修改并加载服务器最新内容，确定继续吗？")) return;
+                setAnalysisResultLoadFailed(false);
+                setAnalysisResultRetry((current) => current + 1);
+              }
+            : error.includes("冲突") ? () => void forceRefresh() : undefined}
+          retryLabel={analysisResultLoadFailed ? "重新加载结果" : error.includes("冲突") ? "放弃本地修改并刷新" : undefined}
+        /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
-        {analysisJob ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
+        {loadingAnalysisResult ? <div className="success-banner" role="status">AI 分析已完成，正在加载批改结果。</div> : null}
+        {analysisJob && !loadingAnalysisResult && !analysisResultLoadFailed ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
         {review.reportStale && report ? <div className="stale-report-banner" role="alert"><span>批改报告基于旧版识别原文</span><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成批改</AsyncButton></div> : null}
         <div className={`privacy-note ${expiresSoon(review.expiresAt) ? "expiry-notice--urgent" : ""}`} role="note">{expiryNotice(review.expiresAt ?? null)}</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
