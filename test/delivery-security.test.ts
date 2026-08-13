@@ -77,11 +77,46 @@ describe("最终交付的本机安全默认值", () => {
     expect(readme).toContain("面向一线语文教师");
     expect(readme).toContain("教师负责最终判断");
     expect(readme).toContain("不提供公开注册");
-    expect(readme).toContain("OpenAI 兼容模型");
+    expect(readme).toContain("OpenAI 兼容视觉模型");
+    expect(readme).toContain("OpenAI 兼容内容模型");
     expect(readme).toContain("Cloudflare D1");
     expect(readme).toContain("Cloudflare R2");
     expect(readme).toContain("30 天到期时间");
-    expect(readme).toContain("第三方 AI 服务");
+    expect(readme).toContain("第三方如何保存和处理数据，以其服务条款为准");
     expect(readme).toContain("不要把真实密钥、学生作文或数据库导出提交到 Git");
+  });
+
+  it("双模型环境示例和 README 明确职责、密钥与 OCR 复核流程", () => {
+    const variables = readWorkspaceFile(".dev.vars.example");
+    const readme = readWorkspaceFile("README.md");
+    const workerEnv = readWorkspaceFile("src/cloudflare/env.ts");
+    const generatedBindings = readWorkspaceFile("worker-configuration.d.ts");
+
+    expect(variables).toContain("VISION_AI_API_KEY=");
+    expect(variables).toContain("CONTENT_AI_API_KEY=");
+    expect(variables).toContain("AI_API_KEY=");
+    expect(readme).toContain("视觉模型只负责 OCR");
+    expect(readme).toContain("内容模型只接收识别文字");
+    expect(readme).toContain("重新生成批改");
+    expect(readme).toContain("VISION_AI_API_KEY");
+    expect(readme).toContain("CONTENT_AI_API_KEY");
+    expect(readme).toContain("AI_API_KEY");
+    expect(workerEnv).toContain("VISION_AI_API_KEY?: string");
+    expect(workerEnv).toContain("CONTENT_AI_API_KEY?: string");
+    expect(generatedBindings).toContain("ANALYSIS_QUEUE: Queue");
+    expect(generatedBindings).toContain("ANALYSIS_DLQ: Queue");
+    expect(generatedBindings).not.toContain("VISION_AI_API_KEY");
+    expect(generatedBindings).not.toContain("CONTENT_AI_API_KEY");
+  });
+
+  it("内容模型适配器不包含图片载荷、坐标或作文日志", () => {
+    const adapter = readWorkspaceFile("src/ai/composition-review-adapter.ts");
+    const pipeline = readWorkspaceFile("src/cloudflare/cloud-analysis-pipeline.ts");
+
+    expect(adapter).not.toContain("image_url");
+    expect(adapter).not.toContain("data:image");
+    expect(adapter).not.toMatch(/\b(x|y|width|height):/u);
+    expect(adapter).not.toContain("console.");
+    expect(pipeline).not.toContain("console.");
   });
 });

@@ -2,4 +2,8 @@
 APP_ORIGIN=http://127.0.0.1:8787
 AUTH_PROOF_ENCRYPTION_KEY=
 AUTH_IP_HMAC_SECRET=
+# Preferred: configure independent secrets for the vision and content roles.
+VISION_AI_API_KEY=
+CONTENT_AI_API_KEY=
+# Legacy fallback for both roles. Keep only while migrating existing deployments.
 AI_API_KEY=
