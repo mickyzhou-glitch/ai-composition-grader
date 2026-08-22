@@ -7,7 +7,7 @@ const EXPECTED_PARENT_FEEDBACKS = [
   { style: "concise", title: "简短微信版" },
 ] as const;
 
-const FEEDBACK_ITEM_PREFIX = /^\s*(?:(?:[1-4]|[一二三四])[.、．)）:]|[-*•])\s*/u;
+const FEEDBACK_ITEM_PREFIX = /^\s*(?:(?:[1-9]\d*|[一二三四五六七八九十百千万两〇零]+)[.．:、)）](?![0-9一二三四五六七八九十百千万两〇零])|[-*•](?![0-9一二三四五六七八九十百千万两〇零]))\s*/u;
 
 function normalizeFeedbackItem(item: string): string {
   return item.trim().replace(FEEDBACK_ITEM_PREFIX, "").trim();
@@ -41,12 +41,6 @@ export function validateGeneratedReportSemantics(
   const painPoints = report.painPoints
     .map(normalizeFeedbackItem)
     .filter(Boolean);
-  if (
-    strengths.length < 2 || strengths.length > 4 ||
-    painPoints.length < 2 || painPoints.length > 4
-  ) {
-    throw new Error("overall feedback must contain two to four non-empty strengths and improvements");
-  }
   return {
     ...report,
     personalizedComment: strengths.join("\n"),

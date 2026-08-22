@@ -131,6 +131,8 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("parentFeedbacks 必须按固定顺序生成恰好三份");
     expect(prompt).toContain("小艾家长");
     expect(prompt).toContain("sampleParagraphs 必须恰好 5 段");
+    expect(prompt).not.toContain("2-4 条");
+    expect(prompt).toContain("根据作文实际内容生成优点和修改项");
     expect(prompt).toContain("annotationAnchors={pageIndex:integer");
     for (const phrase of [
       "少见但可能",
@@ -413,7 +415,7 @@ describe("CompositionReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects feedback with more than four non-empty improvements", async () => {
+  it("accepts more than four non-empty improvements", async () => {
     const harness = setup();
     const invalidReport = {
       ...report,
@@ -422,8 +424,16 @@ describe("CompositionReviewAdapter", () => {
         "2、第三段写清比赛过程中的心理变化",
         "3.",
         "第四段补充冲线前后的具体动作",
-        "结尾部分要注意回扣题目中心",
-        "开头部分压缩起床和到校的过程",
+        "5. 结尾部分要注意回扣题目中心",
+        "五、开头部分压缩起床和到校的过程",
+        "10) 第六段补充比赛结束后的真实感受",
+        "10.5公里长跑过程描写具体",
+        "2026.8月参加比赛的经历很真实",
+        "8:30比赛开始时的紧张感写得真实",
+        "5、6公里长跑过程描写具体",
+        "3）4班同学配合默契",
+        "五、六公里路程并不算远",
+        "-10°C环境描写真实",
       ],
     };
     harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
@@ -435,11 +445,26 @@ describe("CompositionReviewAdapter", () => {
       config,
       pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({
-      code: "AI_INVALID_RESPONSE",
-      upstreamCode: "overall_feedback",
+    })).resolves.toMatchObject({
+      report: {
+        painPoints: [
+          "第二段补充事情发生的具体背景",
+          "第三段写清比赛过程中的心理变化",
+          "第四段补充冲线前后的具体动作",
+          "结尾部分要注意回扣题目中心",
+          "开头部分压缩起床和到校的过程",
+          "第六段补充比赛结束后的真实感受",
+          "10.5公里长跑过程描写具体",
+          "2026.8月参加比赛的经历很真实",
+          "8:30比赛开始时的紧张感写得真实",
+          "5、6公里长跑过程描写具体",
+          "3）4班同学配合默契",
+          "五、六公里路程并不算远",
+          "-10°C环境描写真实",
+        ],
+      },
     });
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("rejects coordinates supplied by the content model", async () => {

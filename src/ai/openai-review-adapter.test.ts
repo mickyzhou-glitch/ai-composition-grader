@@ -402,8 +402,10 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("600-660");
     expect(serialized).toContain("人物称呼、材料关系和前后逻辑要一致");
     expect(serialized).toContain("不得为了套用通用叙事结构而删改教师要求");
-    expect(serialized).toContain("personalizedComment 包含 2-4 条优点");
-    expect(serialized).toContain("painPoints 包含 2-4 条需要修改");
+    expect(serialized).not.toContain("2-4 条");
+    expect(serialized).toContain("根据作文实际内容列出优点和需要修改");
+    expect(serialized).not.toContain("一、二、三、四");
+    expect(serialized).toContain("不加序号");
     expect(serialized).toContain("每条 10-20 个汉字");
     expect(serialized).toContain("选材、内容表达、情感、题目要求完成度");
     expect(serialized).toContain("特别出彩");
@@ -595,7 +597,7 @@ describe("OpenAIReviewAdapter", () => {
     ).resolves.toEqual(successEnvelope);
   });
 
-  it("总体评价不是四条短句时修复后再保存", async () => {
+  it("总体评价条数不固定时直接保存", async () => {
     const verboseEnvelope = {
       ...successEnvelope,
       report: {
@@ -604,21 +606,18 @@ describe("OpenAIReviewAdapter", () => {
         painPoints: ["修改内容也没有拆成四个清楚的小点。"],
       },
     };
-    const harness = setup([
-      JSON.stringify(verboseEnvelope),
-      JSON.stringify(successEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(verboseEnvelope)]);
 
     await expect(
       harness.adapter.analyze({
         config,
         imageDataUrls: ["data:image/jpeg;base64,eA=="],
       }),
-    ).resolves.toEqual(successEnvelope);
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    ).resolves.toEqual(verboseEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("修复后评语仅超出推荐字数时仍保留可用批改结果", async () => {
+  it("评语超出推荐字数时仍保留可用批改结果", async () => {
     const verboseEnvelope = {
       ...successEnvelope,
       report: {
@@ -627,10 +626,7 @@ describe("OpenAIReviewAdapter", () => {
         painPoints: ["第三段需要继续补充收到礼物时的动作、神态和心理变化，让转折过程更加具体。"],
       },
     };
-    const harness = setup([
-      JSON.stringify(verboseEnvelope),
-      JSON.stringify(verboseEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(verboseEnvelope)]);
 
     await expect(
       harness.adapter.analyze({
@@ -638,7 +634,7 @@ describe("OpenAIReviewAdapter", () => {
         imageDataUrls: ["data:image/jpeg;base64,eA=="],
       }),
     ).resolves.toEqual(verboseEnvelope);
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("修复后五段范文仍未达到目标字数时拒绝保存", async () => {
@@ -692,8 +688,14 @@ describe("OpenAIReviewAdapter", () => {
     });
   });
 
-  it("可以只重新生成优点或需要修改", async () => {
-    const items = ["选材真实贴近自己的生活", "礼物线索贯穿全文始终"];
+  it("可以只重新生成五条优点，数量由文章内容决定", async () => {
+    const items = [
+      "选材真实贴近自己的生活",
+      "礼物线索贯穿全文始终",
+      "人物动作描写具体生动",
+      "情感变化写得自然真切",
+      "结尾感悟紧扣文章主题",
+    ];
     const harness = setup([JSON.stringify({ items })]);
 
     await expect(harness.adapter.rewriteFeedback({
@@ -704,10 +706,30 @@ describe("OpenAIReviewAdapter", () => {
 
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("只重新生成“优点”");
-    expect(serialized).toContain("由你判断生成 2-4 条");
+    expect(serialized).not.toContain("2-4 条");
+    expect(serialized).toContain("根据文章实际内容生成");
+    expect(serialized).not.toContain("第一条");
+    expect(serialized).not.toContain("第二条");
+    expect(serialized).toContain("items 字符串数组");
     expect(serialized).toContain("10-20 个汉字");
     expect(serialized).toContain("只写夸奖，不解释理由");
     expect(serialized).toContain("选材、内容表达、情感、题目要求完成度");
+  });
+
+  it("可以只重新生成一条优点，数量由文章内容决定", async () => {
+    const items = ["选材真实贴近自己的生活"];
+    const harness = setup([JSON.stringify({ items })]);
+
+    await expect(harness.adapter.rewriteFeedback({
+      config,
+      report,
+      section: "strengths",
+    })).resolves.toEqual({ items });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).not.toContain("2-4 条");
+    expect(serialized).toContain("根据文章实际内容生成");
+    expect(serialized).toContain("10-20 个汉字");
   });
 
   it("重新生成修改建议时给六年级学生明确的修改指导", async () => {

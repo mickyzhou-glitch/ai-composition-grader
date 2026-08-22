@@ -70,7 +70,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     LIFE_LOGIC_REVIEW_RULE,
     "themeFit 只能是 fits、partial、off_topic；偏题时 grade 必须为 C。grade 只能是 A+、A、A-、B+、B、B-、C。",
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
-    "personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条修改项。每条 10-20 个汉字，只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
+    "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条 10-20 个汉字，只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
     buildSampleWritingRule(input.config),
     "示范段落必须保留原文的核心材料，不得编造关键内容；文体、结构、段落顺序和衔接方式必须服从教师填写的要求。",
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",

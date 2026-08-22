@@ -121,7 +121,7 @@ function buildTransitionRule(config: AssignmentConfig): string {
 }
 
 function buildConciseFeedbackRule(config: AssignmentConfig): string {
-  return `给学生的评价必须简洁、直观：personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加“一、二、三、四”等序号，不重复解释，条数由文章实际内容决定。优点从选材、内容表达、情感、题目要求完成度以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；使用${JSON.stringify(config.grade)}学生能直接看懂的短句。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。`;
+  return `给学生的评价必须简洁、直观：根据作文实际内容列出优点和需要修改；personalizedComment 用换行分隔优点，painPoints 使用数组列出需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加序号，不重复解释。优点从选材、内容表达、情感、题目要求完成度以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；使用${JSON.stringify(config.grade)}学生能直接看懂的短句。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。`;
 }
 
 function buildAssignmentDrivenReviewRule(config: AssignmentConfig): string {
@@ -698,12 +698,12 @@ export class OpenAIReviewAdapter {
           `你是熟悉${JSON.stringify(input.config.grade)}写作教学的作文老师。请只重新生成“${sectionLabel}”，不要改动报告中的其他内容。`,
           `作文要求：${JSON.stringify(input.config)}`,
           `当前批改报告：${JSON.stringify(input.report)}`,
-          "由你判断生成 2-4 条，不要固定凑成四条。",
+          "根据文章实际内容生成，不要为凑数添加重复或空泛内容。",
           "每条必须是 10-20 个汉字，只说一个具体要点，不加序号，不写总评段落。",
           input.section === "improvements"
             ? `每条都要指出哪一段有问题、问题是什么、具体怎么改；给出修改指导，不是评价，并让${JSON.stringify(input.config.grade)}学生能直接看懂。`
             : "从选材、内容表达、情感、题目要求完成度及特别出彩的部分中选择真实明显的维度。只写夸奖，不解释理由，不夹带修改建议，不要空泛。",
-          "只返回 JSON：{\"items\":[\"第一条\",\"第二条\"]}。",
+          "只返回包含 items 字符串数组的 JSON 对象。",
         ].join("\n\n"),
       }],
     });
@@ -712,7 +712,7 @@ export class OpenAIReviewAdapter {
         const length = Array.from(item).length;
         return length >= 10 && length <= 20;
       });
-      return z.object({ items: z.array(itemSchema).min(2).max(4) }).parse(parseJsonResponse(content));
+      return z.object({ items: z.array(itemSchema) }).parse(parseJsonResponse(content));
     } catch {
       throw new AiAdapterError("AI_INVALID_RESPONSE", `AI 返回的${sectionLabel}无效`, 502);
     }
