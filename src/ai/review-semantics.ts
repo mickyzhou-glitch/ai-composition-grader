@@ -1,8 +1,4 @@
-import {
-  expectedSampleParagraphCount,
-  type AssignmentConfig,
-  type EvaluationReport,
-} from "../domain/contracts";
+import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 
 const EXPECTED_PARENT_FEEDBACKS = [
@@ -22,7 +18,7 @@ export function validateGeneratedReportSemantics(
   config: AssignmentConfig,
   studentName?: string,
 ): EvaluationReport {
-  const report = validateReport(input, { templateType: config.templateType });
+  const report = validateReport(input, { config });
   const feedbacks = report.parentFeedbacks ?? [];
   if (feedbacks.length !== EXPECTED_PARENT_FEEDBACKS.length) {
     throw new Error("parent feedback count must be three");
@@ -38,10 +34,6 @@ export function validateGeneratedReportSemantics(
       throw new Error("parent feedback semantics are invalid");
     }
   });
-  const expectedParagraphs = expectedSampleParagraphCount(config);
-  if (report.sampleParagraphs.length !== expectedParagraphs) {
-    throw new Error(`composition requires ${expectedParagraphs} sample paragraphs`);
-  }
   const strengths = report.personalizedComment
     .split(/\r?\n/u)
     .map(normalizeFeedbackItem)

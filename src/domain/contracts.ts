@@ -229,37 +229,9 @@ export type EvaluationReport = Omit<CurrentEvaluationReport, "grade" | "diagnost
   parentFeedbacks?: ParentFeedback[];
 };
 
-function countChineseCharacters(value: string): number {
-  return value.match(/\p{Script=Han}/gu)?.length ?? 0;
-}
-
 export function createEvaluationReportSchema(templateType: TemplateType) {
-  return evaluationReportSchema.superRefine((report, context) => {
-    if (templateType !== "preset_self_applause") {
-      return;
-    }
-
-    if (report.sampleParagraphs.length !== 5) {
-      context.addIssue({
-        code: "custom",
-        path: ["sampleParagraphs"],
-        message: "preset_self_applause requires exactly 5 sample paragraphs",
-      });
-    }
-
-    const totalCharacters = report.sampleParagraphs.reduce(
-      (total, paragraph) => total + countChineseCharacters(paragraph.text),
-      0,
-    );
-    if (totalCharacters < 600 || totalCharacters > 700) {
-      context.addIssue({
-        code: "custom",
-        path: ["sampleParagraphs"],
-        message:
-          "preset_self_applause sample paragraphs require 600-700 Chinese characters in total",
-      });
-    }
-  });
+  void templateType;
+  return evaluationReportSchema;
 }
 
 // PascalCase aliases keep schemas easy to discover alongside their inferred types.

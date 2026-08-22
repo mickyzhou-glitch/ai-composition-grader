@@ -422,6 +422,26 @@ describe("review route handlers", () => {
     });
   });
 
+  it("教师 PATCH 保存不符合题目字数的范文时返回参数错误", async () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const item = createReviewRouteHandlers({ reviewService, ownerId: OWNER_ID });
+
+    const response = await item.PATCH(
+      jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
+        expectedRevision: ready.revision,
+        report: { ...report, sampleParagraphs: report.sampleParagraphs.slice(0, 1) },
+      }),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({
+      ok: false,
+      error: { code: "VALIDATION_ERROR" },
+    });
+  });
+
   it("提供待审核队列、原子教师确认和整批导出预检", async () => {
     repository.create(OWNER_ID, { id: "review-1", config, studentName: "张小明" });
     repository.updateReport(OWNER_ID, "review-1", report);

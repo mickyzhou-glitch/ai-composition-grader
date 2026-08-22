@@ -114,4 +114,22 @@ describe("ReportEditor", () => {
     fireEvent.click(screen.getByRole("button", { name: "AI 按整体要求修改" }));
     expect(onRewriteAllSamples).toHaveBeenLastCalledWith("删去无关人物");
   });
+
+  it("历史段落数不符合题目配置时禁用单段重写并保留全文生成", () => {
+    render(
+      <ReportEditor
+        report={report}
+        onChange={vi.fn()}
+        expectedSampleParagraphCount={3}
+        onRewriteSample={vi.fn(async () => undefined)}
+        onRewriteAllSamples={vi.fn(async () => undefined)}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "AI 全文重新生成" })).toBeEnabled();
+    for (const button of screen.getAllByRole("button", { name: "AI 重新生成" })) {
+      expect(button).toBeDisabled();
+    }
+    expect(screen.getByText("当前为 5 段，题目要求 3 段，请先使用 AI 全文重新生成。")).toBeInTheDocument();
+  });
 });

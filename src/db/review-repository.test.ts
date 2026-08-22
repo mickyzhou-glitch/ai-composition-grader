@@ -63,6 +63,8 @@ const annotation: Annotation = {
 const customConfig: AssignmentConfig = {
   ...config,
   templateType: "custom",
+  targetCharacters: 5,
+  sampleParagraphCount: 1,
 };
 
 const customReport: EvaluationReport = {
@@ -226,6 +228,17 @@ describe("ReviewRepository", () => {
     });
   });
 
+  it("教师审核版本冲突优先于示范作文配置校验", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+
+    expect(() => repository.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: ready.revision - 1,
+      report: { ...report, sampleParagraphs: report.sampleParagraphs.slice(0, 1) },
+      annotations: [],
+    })).toThrow(expect.objectContaining({ code: "REVISION_CONFLICT" }));
+  });
+
   it("普通编辑保留审核状态，重新分析、改配置和换图会清空审核状态", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const ready = repository.updateReport(OWNER_ID, "review-1", report);
@@ -291,6 +304,21 @@ describe("ReviewRepository", () => {
     expect(() =>
       repository.updateReport(OWNER_ID, "review-1", report, { incompleteEvent: true }),
     ).toThrow(/grade C/);
+  });
+
+  it("教师保存报告时按完整作业配置校验示范作文字数和段落数", () => {
+    repository.create(OWNER_ID, {
+      id: "review-1",
+      config: {
+        ...customConfig,
+        targetCharacters: 300,
+        sampleParagraphCount: 3,
+      },
+    });
+
+    expect(() => repository.updateReport(OWNER_ID, "review-1", report)).toThrow(
+      /sample paragraphs invalid/u,
+    );
   });
 
   it("从 custom 改为 preset 时清理不合规报告与批注并降级为 draft", () => {

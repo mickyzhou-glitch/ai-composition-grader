@@ -10,7 +10,7 @@ const config: AssignmentConfig = {
   title: "一次难忘的经历",
   grade: "六年级",
   writingRequirements: "写一件真实的事。",
-  targetCharacters: 500,
+  targetCharacters: 10,
   structureRequirements: "起因、经过、结果完整。",
   scoringFocus: "内容具体。",
   templateType: "custom",
@@ -18,9 +18,11 @@ const config: AssignmentConfig = {
 };
 
 function sampleParagraphs(count: number) {
+  const baseLength = Math.floor(10 / count);
+  const remainder = 10 - baseLength * count;
   return Array.from({ length: count }, (_, index) => ({
     title: `第${index + 1}段`,
-    text: "围绕礼物展开具体描写。",
+    text: "文".repeat(baseLength + (index === count - 1 ? remainder : 0)),
     suggestion: "补充动作与心理。",
   }));
 }
@@ -48,7 +50,9 @@ const report: EvaluationReport = {
 };
 
 function setup() {
-  const create = vi.fn(async () => ({
+  const create = vi.fn(async (input: unknown) => {
+    void input;
+    return {
     choices: [{ message: { content: JSON.stringify({
       report,
       annotationAnchors: [{
@@ -59,7 +63,8 @@ function setup() {
         isHighlight: false,
       }],
     }) } }],
-  }));
+    };
+  });
   const factory = vi.fn((options: Parameters<OpenAIClientFactory>[0]): OpenAICompatibleClient => {
     void options;
     return { chat: { completions: { create } } };
@@ -102,14 +107,19 @@ describe("CompositionReviewAdapter", () => {
       const payload = JSON.parse(result.choices[0].message.content);
       payload.report.sampleParagraphs = Array.from({ length: 5 }, (_, index) => ({
         title: `第${index + 1}段`,
-        text: "坚持让我懂得珍惜".repeat(15),
+        text: "我".repeat(120),
         suggestion: "围绕核心事件补充具体细节。",
       }));
       return { choices: [{ message: { content: JSON.stringify(payload) } }] };
     });
 
     await harness.adapter.analyzeText({
-      config: { ...config, templateType: "preset_self_applause", sampleParagraphCount: 5 },
+      config: {
+        ...config,
+        templateType: "preset_self_applause",
+        targetCharacters: 600,
+        sampleParagraphCount: 5,
+      },
       pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
       studentName: "小艾",
     });
@@ -130,7 +140,7 @@ describe("CompositionReviewAdapter", () => {
       "原因是否足以推出结果",
       "请向学生核实",
       "不得虚构关键经历",
-      "严重矛盾导致核心事件无法成立时 grade 必须为 C",
+      "严重矛盾导致题目要求的核心内容无法成立时 grade 必须为 C",
     ]) {
       expect(prompt).toContain(phrase);
     }
@@ -229,14 +239,98 @@ describe("CompositionReviewAdapter", () => {
     expect(request.messages[0].content).toContain("sampleParagraphs 必须恰好 3 段");
   });
 
-  it("accepts a valid custom report when a sample paragraph begins with a time word", async () => {
+  it("以教师填写的年级、字数和格式作为唯一示范标准", async () => {
     const harness = setup();
     harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
       report: {
         ...report,
         sampleParagraphs: [{
+          title: "完整范文",
+          text: "我".repeat(600),
+          suggestion: "按教师要求完成全文。",
+        }],
+      },
+      annotationAnchors: [],
+    }) } }] });
+
+    await harness.adapter.analyzeText({
+      config: {
+        ...config,
+        grade: "五升六",
+        targetCharacters: 600,
+        writingRequirements: "写一次真实活动。",
+        structureRequirements: "按开头、经过、高潮、结果、感受展开。",
+        scoringFocus: "过程具体。",
+      },
+      pages: [{ pageIndex: 0, text: "我参加了跳绳比赛。" }],
+      studentName: "小艾",
+    });
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("五升六");
+    expect(prompt).toContain("600-660");
+    expect(prompt).toContain("不得写成初中生或成人范文");
+    expect(prompt).toContain("按开头、经过、高潮、结果、感受展开");
+  });
+
+  it("书信题不追加小学记叙文和禁用时间词规则", async () => {
+    const harness = setup();
+
+    await harness.adapter.analyzeText({
+      config: {
+        ...config,
+        grade: "初二",
+        writingRequirements: "给未来的自己写一封信。",
+        structureRequirements: "包含称呼、正文、祝福语、署名和日期。",
+        scoringFocus: "格式正确，表达真诚。",
+      },
+      pages: [{ pageIndex: 0, text: "亲爱的未来的我：你好！" }],
+      studentName: "小艾",
+    });
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("给未来的自己写一封信");
+    expect(prompt).toContain("称呼、正文、祝福语、署名和日期");
+    expect(prompt).not.toContain("不得写成初中生");
+    expect(prompt).not.toContain("段首不要使用");
+  });
+
+  it("短范文只修复一次，修复后仍不足目标字数则拒绝保存", async () => {
+    const harness = setup();
+    const shortReport = {
+      ...report,
+      sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+        title: `第 ${index + 1} 段`,
+        text: "我".repeat(100),
+        suggestion: "补充具体细节。",
+      })),
+    };
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: shortReport,
+      annotationAnchors: [],
+    }) } }] });
+
+    await expect(harness.adapter.analyzeText({
+      config: { ...config, targetCharacters: 600, sampleParagraphCount: 5 },
+      pages: [{ pageIndex: 0, text: "我参加了跳绳比赛。" }],
+      studentName: "小艾",
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "sample_paragraphs",
+    });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("actualCharacters=500");
+  });
+
+  it("accepts a valid custom report when a sample paragraph begins with a time word", async () => {
+    const harness = setup();
+    const text = "清晨的阳光透过窗帘，我看着准备好的跑鞋，心里充满期待。";
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: {
+        ...report,
+        sampleParagraphs: [{
           title: "运动会开场",
-          text: "清晨的阳光透过窗帘，我看着准备好的跑鞋，心里充满期待。",
+          text,
           suggestion: "用环境描写交代活动背景。",
         }],
       },
@@ -244,7 +338,7 @@ describe("CompositionReviewAdapter", () => {
     }) } }] });
 
     await expect(harness.adapter.analyzeText({
-      config,
+      config: { ...config, targetCharacters: text.match(/\p{Script=Han}/gu)?.length ?? 1 },
       pages: [{ pageIndex: 0, text: "清晨的阳光透过窗帘，我准备参加运动会。" }],
       studentName: "小艾",
     })).resolves.toMatchObject({

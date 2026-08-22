@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { annotationSchema, assignmentConfigSchema, evaluationReportSchema, studentNameSchema } from "../domain/contracts";
+import { validateReport } from "../domain/report-validation";
 
 export class D1ReviewWriter {
   constructor(private readonly database: D1Database) {}
@@ -44,7 +45,13 @@ export class D1ReviewWriter {
     if (!current) return null;
     if (current.revision !== parsed.expectedRevision) throw new RevisionConflictError();
     const config = parsed.config ?? assignmentConfigSchema.parse(JSON.parse(current.config));
-    const report = parsed.config ? null : parsed.report ?? (current.report === null ? null : evaluationReportSchema.parse(JSON.parse(current.report)));
+    const report = parsed.config
+      ? null
+      : parsed.report !== undefined
+        ? validateReport(parsed.report, { config })
+        : current.report === null
+          ? null
+          : evaluationReportSchema.parse(JSON.parse(current.report));
     const annotations = parsed.config ? [] : parsed.annotations;
     const status = parsed.config ? "draft" : parsed.report !== undefined || parsed.annotations !== undefined ? (report === null ? "draft" : "ready_for_review") : current.status;
     const now = Date.now();
@@ -79,6 +86,13 @@ export class D1ReviewWriter {
       report: evaluationReportSchema,
       annotations: z.array(annotationSchema),
     }).strict().parse(input);
+    const current = await this.database.prepare(
+      "SELECT config, revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
+    ).bind(reviewId, ownerId).first<{ config: string; revision: number }>();
+    if (!current) return null;
+    if (current.revision !== parsed.expectedRevision) throw new RevisionConflictError();
+    const config = assignmentConfigSchema.parse(JSON.parse(current.config));
+    const report = validateReport(parsed.report, { config });
     const now = Date.now();
     const nextRevision = parsed.expectedRevision + 1;
     const eligibility = `
@@ -99,7 +113,7 @@ export class D1ReviewWriter {
           AND status IN ('ready_for_review', 'exported')
       `).bind(
         parsed.studentName,
-        JSON.stringify(parsed.report),
+        JSON.stringify(report),
         now,
         now,
         reviewId,

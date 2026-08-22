@@ -19,7 +19,7 @@ const lifeLogicPhrases = [
   "原因是否足以推出结果",
   "请向学生核实",
   "不得虚构关键经历",
-  "严重矛盾导致核心事件无法成立时 grade 必须为 C",
+  "严重矛盾导致题目要求的核心内容无法成立时 grade 必须为 C",
 ];
 
 function expectLifeLogicRule(value: string): void {
@@ -90,13 +90,15 @@ const successEnvelope = {
 };
 
 function envelopeWithParagraphCount(count: number) {
+  const baseLength = Math.floor(600 / count);
+  const remainder = 600 - baseLength * count;
   return {
     ...successEnvelope,
     report: {
       ...report,
       sampleParagraphs: Array.from({ length: count }, (_, index) => ({
         title: `第 ${index + 1} 段`,
-        text: "围绕礼物展开具体描写。",
+        text: "我".repeat(baseLength + (index === count - 1 ? remainder : 0)),
         suggestion: "补充动作与心理。",
       })),
     },
@@ -160,7 +162,9 @@ describe("OpenAIReviewAdapter", () => {
       imageDataUrls: ["data:image/jpeg;base64,eA=="],
     });
 
-    expect(result.report?.sampleParagraphs[0].suggestion).toBe("补充人物动作；写清心理变化");
+    expect(result.readable).toBe(true);
+    if (!result.readable) throw new Error("expected readable result");
+    expect(result.report.sampleParagraphs[0].suggestion).toBe("补充人物动作；写清心理变化");
     expect(harness.create).toHaveBeenCalledOnce();
   });
 
@@ -225,8 +229,8 @@ describe("OpenAIReviewAdapter", () => {
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("重写整篇 5 段考场范文");
     expect(serialized).toContain("删去无关人物");
-    expect(serialized).toContain("600-700");
-    expect(serialized).toContain("第一段不得以时间词开头");
+    expect(serialized).toContain("600-660");
+    expect(serialized).toContain("段落顺序和衔接必须服从教师填写的结构要求");
     expect(serialized).toContain("生日那天");
     expect(serialized).toContain("对比、照应、因果");
     expectLifeLogicRule(serialized);
@@ -252,21 +256,72 @@ describe("OpenAIReviewAdapter", () => {
   });
 
   it("单段重写也避免流水账式时间衔接", async () => {
-    const harness = setup([JSON.stringify({ text: "虽然别人的礼物十分贵重，但这份礼物更让我珍惜。" })]);
+    const opening = "虽然别人的礼物十分贵重但这份礼物更让我珍惜";
+    const text = `${opening}${"我".repeat(120 - opening.length)}`;
+    const harness = setup([JSON.stringify({ text })]);
 
     await expect(harness.adapter.rewriteSample({
       config,
       sampleParagraphs: report.sampleParagraphs,
       index: 0,
     })).resolves.toEqual({
-      text: "虽然别人的礼物十分贵重，但这份礼物更让我珍惜。",
+      text,
     });
 
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
-    expect(serialized).toContain("第一段不得以时间词开头");
+    expect(serialized).toContain("若题目要求按时间推进，可以自然使用");
     expect(serialized).toContain("第二天放学后");
     expect(serialized).toContain("情感变化");
     expectLifeLogicRule(serialized);
+  });
+
+  it("单段重写提示给出扣除其余段落后的可用字数", async () => {
+    const harness = setup([JSON.stringify({ text: "我".repeat(120) })]);
+
+    await harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+      index: 0,
+    });
+
+    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("120-180");
+  });
+
+  it("当前段落数不符合配置时不发起单段重写", async () => {
+    const harness = setup([JSON.stringify({ text: "我".repeat(120) })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: report.sampleParagraphs.slice(0, 3),
+      index: 0,
+    })).rejects.toThrow(/全文重新生成/u);
+    expect(harness.create).not.toHaveBeenCalled();
+  });
+
+  it("单段目标超过两千字时仍按动态配置接受合法结果", async () => {
+    const text = "我".repeat(3_000);
+    const harness = setup([JSON.stringify({ text })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config: { ...config, targetCharacters: 3_000, sampleParagraphCount: 1 },
+      sampleParagraphs: [{ title: "全文", text, suggestion: "按题目要求修改。" }],
+      index: 0,
+    })).resolves.toEqual({ text });
+  });
+
+  it("其余段落已占满最大字数时不发起单段重写", async () => {
+    const paragraphs = report.sampleParagraphs.map((paragraph, index) => ({
+      ...paragraph,
+      text: index === 0 ? "我" : "我".repeat(165),
+    }));
+    const harness = setup([JSON.stringify({ text: "我" })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: paragraphs,
+      index: 0,
+    })).rejects.toThrow(/全文重新生成/u);
+    expect(harness.create).not.toHaveBeenCalled();
   });
 
   it("只读取 SettingsService 的原子运行时快照", async () => {
@@ -341,22 +396,22 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("typo");
     expect(serialized).toContain("0..1");
     expect(serialized).toContain("尽最大努力完成批改");
-    expect(serialized).toContain("六年级学生能直接看懂");
-    expect(serialized).toContain("五段");
-    expect(serialized).toContain("600-700");
-    expect(serialized).toContain("人物关系");
-    expect(serialized).toContain("多余人物");
+    expect(serialized).toContain("上海五四学制六年级");
+    expect(serialized).toContain("学生能直接看懂");
+    expect(serialized).toContain("5 段");
+    expect(serialized).toContain("600-660");
+    expect(serialized).toContain("人物称呼、材料关系和前后逻辑要一致");
+    expect(serialized).toContain("不得为了套用通用叙事结构而删改教师要求");
     expect(serialized).toContain("personalizedComment 包含 2-4 条优点");
     expect(serialized).toContain("painPoints 包含 2-4 条需要修改");
     expect(serialized).toContain("每条 10-20 个汉字");
-    expect(serialized).toContain("选材、内容表达、情感、情节完整性");
+    expect(serialized).toContain("选材、内容表达、情感、题目要求完成度");
     expect(serialized).toContain("特别出彩");
     expect(serialized).toContain("优点只写夸奖，不解释理由");
     expect(serialized).toContain("修改建议必须指出具体段落、问题和修改方法");
-    expect(serialized).toContain("结尾部分要注意扣题");
-    expect(serialized).toContain("中间段落不要啰嗦");
+    expect(serialized).toContain("学生能直接看懂的短句");
     expect(serialized).toContain("commonIssues 和 revisionSuggestions 返回空数组");
-    expect(serialized).toContain("第一段不得以时间词开头");
+    expect(serialized).toContain("段落顺序和衔接必须服从教师填写的结构要求");
     expect(serialized).toContain("半小时后");
     expect(serialized).toContain("对比、照应、因果");
     expect(serialized).toContain("坐标拿不准时不要生成 annotation");
@@ -385,9 +440,71 @@ describe("OpenAIReviewAdapter", () => {
       imageDataUrls: ["data:image/jpeg;base64,eA=="],
     });
 
-    expect(result.report?.sampleParagraphs).toHaveLength(3);
+    expect(result.readable).toBe(true);
+    if (!result.readable) throw new Error("expected readable result");
+    expect(result.report.sampleParagraphs).toHaveLength(3);
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("sampleParagraphs 必须恰好 3 段");
+  });
+
+  it("兼容分析提示也以教师填写的年级和目标字数为准", async () => {
+    const harness = setup([JSON.stringify(successEnvelope)]);
+
+    await harness.adapter.analyze({
+      config: { ...config, grade: "五升六" },
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("五升六");
+    expect(prompt).toContain("600-660");
+    expect(prompt).toContain("不得写成初中生或成人范文");
+    expect(prompt).toContain(config.structureRequirements);
+  });
+
+  it("初中书信题不被通用记叙文规则覆盖", async () => {
+    const harness = setup([JSON.stringify(successEnvelope)]);
+
+    await harness.adapter.analyze({
+      config: {
+        ...config,
+        grade: "初二",
+        writingRequirements: "给未来的自己写一封信。",
+        structureRequirements: "包含称呼、正文、祝福语、署名和日期。",
+        scoringFocus: "格式正确，表达真诚。",
+      },
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("给未来的自己写一封信");
+    expect(prompt).not.toContain("完整记叙文");
+    expect(prompt).not.toContain("单一事件线");
+    expect(prompt).not.toContain("不得写成初中生");
+    expect(prompt).not.toContain("每段正文不得以时间词开头");
+  });
+
+  it("单段重写后整篇不足目标字数时拒绝结果", async () => {
+    const harness = setup([JSON.stringify({ text: "我".repeat(20) })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+      index: 0,
+    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+  });
+
+  it("全文重写不足目标字数时拒绝结果", async () => {
+    const sampleParagraphs = report.sampleParagraphs.map((paragraph) => ({
+      ...paragraph,
+      text: "我".repeat(100),
+    }));
+    const harness = setup([JSON.stringify({ sampleParagraphs })]);
+
+    await expect(harness.adapter.rewriteAllSamples({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
   });
 
   it("兼容链路拒绝与显式配置不符的段落数", async () => {
@@ -524,7 +641,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
-  it("修复后五段范文仅未达到推荐总字数时仍保留可用批改结果", async () => {
+  it("修复后五段范文仍未达到目标字数时拒绝保存", async () => {
     const shortSampleEnvelope = {
       ...successEnvelope,
       report: {
@@ -540,13 +657,15 @@ describe("OpenAIReviewAdapter", () => {
       JSON.stringify(shortSampleEnvelope),
     ]);
 
-    await expect(
-      harness.adapter.analyze({
-        config,
-        imageDataUrls: ["data:image/jpeg;base64,eA=="],
-      }),
-    ).resolves.toEqual(shortSampleEnvelope);
+    await expect(harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "sample_paragraphs",
+    });
     expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("actualCharacters=500");
   });
 
   it("兼容 MiMo 将需要修改返回为换行分隔字符串", async () => {
@@ -588,7 +707,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("由你判断生成 2-4 条");
     expect(serialized).toContain("10-20 个汉字");
     expect(serialized).toContain("只写夸奖，不解释理由");
-    expect(serialized).toContain("选材、内容表达、情感、情节完整性");
+    expect(serialized).toContain("选材、内容表达、情感、题目要求完成度");
   });
 
   it("重新生成修改建议时给六年级学生明确的修改指导", async () => {
@@ -605,7 +724,8 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("只重新生成“需要修改”");
     expect(serialized).toContain("指出哪一段有问题、问题是什么、具体怎么改");
     expect(serialized).toContain("修改指导，不是评价");
-    expect(serialized).toContain("六年级学生能直接看懂");
+    expect(serialized).toContain("上海五四学制六年级");
+    expect(serialized).toContain("学生能直接看懂");
   });
 
   it("兼容无语言标签的完整 fenced JSON", async () => {
@@ -729,8 +849,8 @@ describe("OpenAIReviewAdapter", () => {
     expect(prompt).toContain("A+");
     expect(prompt).toContain("C");
     expect(prompt).toContain("偏题");
-    expect(prompt).toContain("五段");
-    expect(prompt).toContain("600-700");
+    expect(prompt).toContain("5 段");
+    expect(prompt).toContain("600-660");
   });
 
   it("等级与四维诊断有效时不浪费修复请求", async () => {
@@ -889,7 +1009,9 @@ describe("OpenAIReviewAdapter", () => {
       studentName: "艾绮",
     });
 
-    expect(result.report?.parentFeedbacks?.[0].content).toBe("艾绮家长，我来反馈本次作文。");
+    expect(result.readable).toBe(true);
+    if (!result.readable) throw new Error("expected readable result");
+    expect(result.report.parentFeedbacks?.[0].content).toBe("艾绮家长，我来反馈本次作文。");
     expect(harness.create).toHaveBeenCalledOnce();
   });
 
@@ -906,7 +1028,9 @@ describe("OpenAIReviewAdapter", () => {
 
     const result = await harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] });
 
-    expect(result.report?.parentFeedbacks?.[0].content).toBe("家长您好，我来反馈本次作文。");
+    expect(result.readable).toBe(true);
+    if (!result.readable) throw new Error("expected readable result");
+    expect(result.report.parentFeedbacks?.[0].content).toBe("家长您好，我来反馈本次作文。");
     expect(harness.create).toHaveBeenCalledOnce();
   });
 

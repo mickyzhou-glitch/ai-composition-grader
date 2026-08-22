@@ -220,11 +220,11 @@ describe("evaluationReportSchema", () => {
     ).toMatchObject({ sampleParagraphs: samples });
   });
 
-  it("预设模板只计算示范正文的中文字符数", () => {
-    const samples = Array.from({ length: 5 }, (_, index) => ({
-      title: "题".repeat(200),
-      text: "文".repeat(index === 4 ? 120 : 120),
-      suggestion: "建议".repeat(200),
+  it("报告基础结构不硬编码特定题目的段落数和目标字数", () => {
+    const samples = Array.from({ length: 3 }, (_, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: "文".repeat(100),
+      suggestion: "修改建议。",
     }));
 
     expect(
@@ -234,38 +234,6 @@ describe("evaluationReportSchema", () => {
       }),
     ).toMatchObject({ sampleParagraphs: samples });
   });
-
-  it("接受预设模板的5段、600个中文字范文", () => {
-    expect(
-      createEvaluationReportSchema("preset_self_applause").parse(validReport),
-    ).toEqual(validReport);
-  });
-
-  it("拒绝预设模板的非5段范文", () => {
-    expect(() =>
-      createEvaluationReportSchema("preset_self_applause").parse({
-        ...validReport,
-        sampleParagraphs: validReport.sampleParagraphs.slice(0, 4),
-      }),
-    ).toThrow();
-  });
-
-  it.each([599, 701])(
-    "拒绝预设模板合计 %i 个中文字的范文",
-    (totalCharacters) => {
-      const lengths = [120, 120, 120, 120, totalCharacters - 480];
-      expect(() =>
-        createEvaluationReportSchema("preset_self_applause").parse({
-          ...validReport,
-          sampleParagraphs: lengths.map((length, index) => ({
-            title: `第 ${index + 1} 段`,
-            text: "文".repeat(length),
-            suggestion: "修改建议。",
-          })),
-        }),
-      ).toThrow();
-    },
-  );
 
   it("允许自定义模板包含1至10段", () => {
     expect(

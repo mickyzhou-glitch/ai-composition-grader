@@ -21,8 +21,17 @@ const report = {
     structure: { finding: "衔接清楚。", action: "强化转折。" },
     language: { finding: "语言通顺。", action: "精简长句。" },
   },
-  sampleParagraphs: [{ title: "示范", text: "示范正文", suggestion: "补充动作" }],
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第 ${index + 1} 段`,
+    text: "我".repeat(120),
+    suggestion: "补充动作",
+  })),
   parentFeedbacks: [],
+};
+
+const invalidReport = {
+  ...report,
+  sampleParagraphs: [{ title: "示范", text: "示范正文", suggestion: "补充动作" }],
 };
 
 describe("D1ReviewWriter", () => {
@@ -76,6 +85,26 @@ describe("D1ReviewWriter", () => {
     expect(update).not.toContain("ocr_checkpoint");
   });
 
+  it("rejects report edits that violate the stored assignment config", async () => {
+    const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+    const database = {
+      prepare: vi.fn((query: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(query.startsWith("SELECT student_name") ? {
+            student_name: "小明", config: JSON.stringify(config), report: null, status: "draft", revision: 4,
+          } : null),
+          run,
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).update("teacher-1", "review-1", {
+      expectedRevision: 4,
+      report: invalidReport,
+    })).rejects.toThrow(/sample paragraphs invalid/u);
+    expect(run).not.toHaveBeenCalled();
+  });
+
   it("marks a completed review as exported only for its owner", async () => {
     const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
     const database = {
@@ -100,7 +129,11 @@ describe("D1ReviewWriter", () => {
             this.bindings = bindings;
             return this;
           },
-          first: vi.fn().mockResolvedValue({ id: "review-1" }),
+          first: vi.fn().mockResolvedValue(
+            sql.includes("SELECT config")
+              ? { config: JSON.stringify(config), revision: 4 }
+              : { id: "review-1" },
+          ),
         };
         statements.push(statement);
         return statement;
@@ -120,6 +153,46 @@ describe("D1ReviewWriter", () => {
     expect(update?.sql).toContain("revision = revision + 1");
     expect(update?.sql).toContain("revision = ?");
     expect(statements.some(({ sql }) => sql.includes("DELETE FROM annotations") && sql.includes("EXISTS"))).toBe(true);
+  });
+
+  it("rejects completed teacher reviews that violate the stored assignment config", async () => {
+    const batch = vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]);
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({ config: JSON.stringify(config), revision: 4 }),
+        })),
+      })),
+      batch,
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).completeTeacherReview("teacher-1", "review-1", {
+      expectedRevision: 4,
+      studentName: "张小明",
+      report: invalidReport,
+      annotations: [],
+    })).rejects.toThrow(/sample paragraphs invalid/u);
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it("rejects stale completed reviews before validating their sample content", async () => {
+    const batch = vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]);
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({ config: JSON.stringify(config), revision: 5 }),
+        })),
+      })),
+      batch,
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).completeTeacherReview("teacher-1", "review-1", {
+      expectedRevision: 4,
+      studentName: "张小明",
+      report: invalidReport,
+      annotations: [],
+    })).rejects.toMatchObject({ name: "RevisionConflictError" });
+    expect(batch).not.toHaveBeenCalled();
   });
 
   it("returns only the deleted review's stored image paths", async () => {
