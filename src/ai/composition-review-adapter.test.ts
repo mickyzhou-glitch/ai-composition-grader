@@ -277,7 +277,7 @@ describe("CompositionReviewAdapter", () => {
         annotationAnchors: [],
       }) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        sampleParagraphs: sampleParagraphs(3),
+        texts: sampleParagraphs(3).map(({ text }) => text),
       }) } }] });
 
     await expect(harness.adapter.analyzeText({
@@ -388,18 +388,14 @@ describe("CompositionReviewAdapter", () => {
       text: "我".repeat(100),
       suggestion: "补充具体细节。",
     }));
-    const repairedParagraphs = Array.from({ length: 5 }, (_, index) => ({
-      title: `第 ${index + 1} 段`,
-      text: "我".repeat(120),
-      suggestion: "补充具体细节。",
-    }));
+    const repairedTexts = Array.from({ length: 5 }, () => "我".repeat(120));
     harness.create
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
         report: { ...report, sampleParagraphs: shortParagraphs },
         annotationAnchors: [],
       }) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        sampleParagraphs: repairedParagraphs,
+        texts: repairedTexts,
       }) } }] });
 
     await expect(harness.adapter.analyzeText({
@@ -409,13 +405,19 @@ describe("CompositionReviewAdapter", () => {
     })).resolves.toMatchObject({
       report: {
         themeReason: report.themeReason,
-        sampleParagraphs: repairedParagraphs,
+        sampleParagraphs: shortParagraphs.map((paragraph, index) => ({
+          ...paragraph,
+          text: repairedTexts[index],
+        })),
       },
       annotationAnchors: [],
     });
 
     expect(harness.create).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("只修复示范作文");
+    const repairRequest = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(repairRequest).toContain("只修复示范作文正文");
+    expect(repairRequest).toContain("每段 text 各写 110-140 个汉字");
+    expect(repairRequest).toContain('{\\"texts\\":[\\"第一段正文\\"');
   });
 
   it("短范文只修复一次，修复后仍不足目标字数则拒绝保存", async () => {
@@ -434,7 +436,7 @@ describe("CompositionReviewAdapter", () => {
         annotationAnchors: [],
       }) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        sampleParagraphs: shortReport.sampleParagraphs,
+        texts: shortReport.sampleParagraphs.map(({ text }) => text),
       }) } }] });
 
     await expect(harness.adapter.analyzeText({

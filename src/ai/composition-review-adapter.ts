@@ -3,7 +3,6 @@ import { z } from "zod";
 
 import {
   evaluationReportSchema,
-  sampleParagraphSchema,
   type AssignmentConfig,
   type EvaluationReport,
 } from "../domain/contracts";
@@ -18,6 +17,7 @@ import {
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import {
   buildSampleWritingRule,
+  resolveSampleWritingRequirements,
   validateSampleWritingRequirements,
 } from "./sample-writing-requirements";
 import { buildStructureReviewRule } from "./structure-review-requirements";
@@ -28,7 +28,7 @@ const resultSchema = z.object({
 }).strict();
 
 const sampleParagraphRepairSchema = z.object({
-  sampleParagraphs: z.array(sampleParagraphSchema).min(1).max(10),
+  texts: z.array(z.string().min(1)).min(1).max(10),
 }).strict();
 
 export interface AnalyzeOcrTextInput {
@@ -94,13 +94,23 @@ function sampleParagraphRepairPrompt(
   input: AnalyzeOcrTextInput,
   validationError: string,
 ): string {
+  const expected = resolveSampleWritingRequirements(input.config);
+  const minimumCharactersPerParagraph = Math.ceil(
+    expected.minimumCharacters / expected.paragraphCount,
+  );
+  const maximumCharactersPerParagraph = Math.floor(
+    expected.maximumCharacters / expected.paragraphCount,
+  );
+
   return [
-    "你只修复示范作文，不要返回报告其他字段。",
+    "你只修复示范作文正文，不要返回标题、修改建议或报告其他字段。",
     `作文要求：${JSON.stringify(input.config)}`,
     buildSampleWritingRule(input.config),
+    `每段 text 各写 ${minimumCharactersPerParagraph}-${maximumCharactersPerParagraph} 个汉字，` +
+      `${expected.paragraphCount} 段合计必须为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字。`,
     "保留原文的核心材料，不得编造关键内容；文体、结构、段落顺序和衔接方式必须服从教师配置。",
     `校验失败原因：${validationError}`,
-    '只返回 JSON：{"sampleParagraphs":[{"title":"","text":"","suggestion":""}]}。',
+    '只返回 JSON：{"texts":["第一段正文","第二段正文"]}。',
   ].join("\n\n");
 }
 
@@ -197,9 +207,19 @@ export class CompositionReviewAdapter {
               },
             ],
           });
-          const { sampleParagraphs } = sampleParagraphRepairSchema.parse(
+          const { texts } = sampleParagraphRepairSchema.parse(
             parseJsonResponse(repaired),
           );
+          if (texts.length !== original.report.sampleParagraphs.length) {
+            throw new Error(
+              `sample paragraphs invalid: expectedParagraphs=${original.report.sampleParagraphs.length}; ` +
+              `actualParagraphs=${texts.length}`,
+            );
+          }
+          const sampleParagraphs = original.report.sampleParagraphs.map((paragraph, index) => ({
+            ...paragraph,
+            text: texts[index],
+          }));
           validateSampleWritingRequirements(sampleParagraphs, input.config);
           return validateContentResult(JSON.stringify({
             ...original,
