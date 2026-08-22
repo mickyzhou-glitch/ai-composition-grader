@@ -20,8 +20,8 @@ export function resolveSampleWritingRequirements(
 ): SampleWritingRequirements {
   return {
     paragraphCount: expectedSampleParagraphCount(config),
-    minimumCharacters: config.targetCharacters,
-    maximumCharacters: Math.ceil(config.targetCharacters * 1.1),
+    minimumCharacters: Math.max(1, config.targetCharacters - 50),
+    maximumCharacters: config.targetCharacters + 100,
   };
 }
 

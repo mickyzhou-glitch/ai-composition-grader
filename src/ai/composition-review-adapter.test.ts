@@ -350,7 +350,7 @@ describe("CompositionReviewAdapter", () => {
 
     const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(prompt).toContain("五升六");
-    expect(prompt).toContain("600-660");
+    expect(prompt).toContain("550-700");
     expect(prompt).toContain("不得写成初中生或成人范文");
     expect(prompt).toContain("按开头、经过、高潮、结果、感受展开");
   });

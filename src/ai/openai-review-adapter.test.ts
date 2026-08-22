@@ -252,7 +252,7 @@ describe("OpenAIReviewAdapter", () => {
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("重写整篇 5 段考场范文");
     expect(serialized).toContain("删去无关人物");
-    expect(serialized).toContain("600-660");
+    expect(serialized).toContain("550-700");
     expect(serialized).toContain("段落顺序和衔接必须服从教师填写的结构要求");
     expect(serialized).toContain("生日那天");
     expect(serialized).toContain("对比、照应、因果");
@@ -307,7 +307,7 @@ describe("OpenAIReviewAdapter", () => {
       index: 0,
     });
 
-    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("120-180");
+    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("70-220");
   });
 
   it("当前段落数不符合配置时不发起单段重写", async () => {
@@ -335,7 +335,7 @@ describe("OpenAIReviewAdapter", () => {
   it("其余段落已占满最大字数时不发起单段重写", async () => {
     const paragraphs = report.sampleParagraphs.map((paragraph, index) => ({
       ...paragraph,
-      text: index === 0 ? "我" : "我".repeat(165),
+      text: index === 0 ? "我" : "我".repeat(175),
     }));
     const harness = setup([JSON.stringify({ text: "我" })]);
 
@@ -422,7 +422,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("上海五四学制六年级");
     expect(serialized).toContain("学生能直接看懂");
     expect(serialized).toContain("5 段");
-    expect(serialized).toContain("600-660");
+    expect(serialized).toContain("550-700");
     expect(serialized).toContain("人物称呼、材料关系和前后逻辑要一致");
     expect(serialized).toContain("不得为了套用通用叙事结构而删改教师要求");
     expect(serialized).not.toContain("2-4 条");
@@ -482,7 +482,7 @@ describe("OpenAIReviewAdapter", () => {
 
     const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(prompt).toContain("五升六");
-    expect(prompt).toContain("600-660");
+    expect(prompt).toContain("550-700");
     expect(prompt).toContain("不得写成初中生或成人范文");
     expect(prompt).toContain(config.structureRequirements);
   });
@@ -969,7 +969,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(prompt).toContain("C");
     expect(prompt).toContain("偏题");
     expect(prompt).toContain("5 段");
-    expect(prompt).toContain("600-660");
+    expect(prompt).toContain("550-700");
   });
 
   it("等级与四维诊断有效时不浪费修复请求", async () => {

@@ -30,11 +30,11 @@ function paragraphs(totalCharacters: number) {
 }
 
 describe("sample writing requirements", () => {
-  it("按教师目标字数生成 600 至 660 个汉字的动态范围", () => {
+  it("按教师目标字数下浮 50、上浮 100 生成动态范围", () => {
     expect(resolveSampleWritingRequirements(config)).toEqual({
       paragraphCount: 5,
-      minimumCharacters: 600,
-      maximumCharacters: 660,
+      minimumCharacters: 550,
+      maximumCharacters: 700,
     });
   });
 
@@ -42,9 +42,14 @@ describe("sample writing requirements", () => {
     expect(countSampleTextCharacters(paragraphs(600))).toBe(600);
   });
 
-  it.each([599, 661])("拒绝合计 %i 个汉字的示范正文", (totalCharacters) => {
+  it.each([550, 700])("接受合计 %i 个汉字的示范正文", (totalCharacters) => {
     expect(() => validateSampleWritingRequirements(paragraphs(totalCharacters), config))
-      .toThrow(/expectedCharacters=600\.\.660/u);
+      .not.toThrow();
+  });
+
+  it.each([549, 701])("拒绝合计 %i 个汉字的示范正文", (totalCharacters) => {
+    expect(() => validateSampleWritingRequirements(paragraphs(totalCharacters), config))
+      .toThrow(/expectedCharacters=550\.\.700/u);
   });
 
   it("拒绝段落数不符合题目配置的示范正文", () => {
@@ -56,7 +61,7 @@ describe("sample writing requirements", () => {
     const rule = buildSampleWritingRule(config);
 
     expect(rule).toContain("五升六");
-    expect(rule).toContain("600-660");
+    expect(rule).toContain("550-700");
     expect(rule).toContain(config.writingRequirements);
     expect(rule).toContain(config.structureRequirements);
     expect(rule).toContain(config.scoringFocus);
