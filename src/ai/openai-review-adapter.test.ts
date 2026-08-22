@@ -90,13 +90,15 @@ const successEnvelope = {
 };
 
 function envelopeWithParagraphCount(count: number) {
+  const baseLength = Math.floor(600 / count);
+  const remainder = 600 - baseLength * count;
   return {
     ...successEnvelope,
     report: {
       ...report,
       sampleParagraphs: Array.from({ length: count }, (_, index) => ({
         title: `第 ${index + 1} 段`,
-        text: "围绕礼物展开具体描写。",
+        text: "我".repeat(baseLength + (index === count - 1 ? remainder : 0)),
         suggestion: "补充动作与心理。",
       })),
     },
@@ -225,7 +227,7 @@ describe("OpenAIReviewAdapter", () => {
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("重写整篇 5 段考场范文");
     expect(serialized).toContain("删去无关人物");
-    expect(serialized).toContain("600-700");
+    expect(serialized).toContain("600-660");
     expect(serialized).toContain("第一段不得以时间词开头");
     expect(serialized).toContain("生日那天");
     expect(serialized).toContain("对比、照应、因果");
@@ -252,14 +254,16 @@ describe("OpenAIReviewAdapter", () => {
   });
 
   it("单段重写也避免流水账式时间衔接", async () => {
-    const harness = setup([JSON.stringify({ text: "虽然别人的礼物十分贵重，但这份礼物更让我珍惜。" })]);
+    const opening = "虽然别人的礼物十分贵重但这份礼物更让我珍惜";
+    const text = `${opening}${"我".repeat(120 - opening.length)}`;
+    const harness = setup([JSON.stringify({ text })]);
 
     await expect(harness.adapter.rewriteSample({
       config,
       sampleParagraphs: report.sampleParagraphs,
       index: 0,
     })).resolves.toEqual({
-      text: "虽然别人的礼物十分贵重，但这份礼物更让我珍惜。",
+      text,
     });
 
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
@@ -342,8 +346,8 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("0..1");
     expect(serialized).toContain("尽最大努力完成批改");
     expect(serialized).toContain("六年级学生能直接看懂");
-    expect(serialized).toContain("五段");
-    expect(serialized).toContain("600-700");
+    expect(serialized).toContain("5 段");
+    expect(serialized).toContain("600-660");
     expect(serialized).toContain("人物关系");
     expect(serialized).toContain("多余人物");
     expect(serialized).toContain("personalizedComment 包含 2-4 条优点");
@@ -388,6 +392,44 @@ describe("OpenAIReviewAdapter", () => {
     expect(result.report?.sampleParagraphs).toHaveLength(3);
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("sampleParagraphs 必须恰好 3 段");
+  });
+
+  it("兼容分析提示也以教师填写的年级和目标字数为准", async () => {
+    const harness = setup([JSON.stringify(successEnvelope)]);
+
+    await harness.adapter.analyze({
+      config: { ...config, grade: "五升六" },
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("五升六");
+    expect(prompt).toContain("600-660");
+    expect(prompt).toContain("不得写成初中生或成人范文");
+    expect(prompt).toContain(config.structureRequirements);
+  });
+
+  it("单段重写后整篇不足目标字数时拒绝结果", async () => {
+    const harness = setup([JSON.stringify({ text: "我".repeat(20) })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+      index: 0,
+    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+  });
+
+  it("全文重写不足目标字数时拒绝结果", async () => {
+    const sampleParagraphs = report.sampleParagraphs.map((paragraph) => ({
+      ...paragraph,
+      text: "我".repeat(100),
+    }));
+    const harness = setup([JSON.stringify({ sampleParagraphs })]);
+
+    await expect(harness.adapter.rewriteAllSamples({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
   });
 
   it("兼容链路拒绝与显式配置不符的段落数", async () => {
@@ -524,7 +566,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
-  it("修复后五段范文仅未达到推荐总字数时仍保留可用批改结果", async () => {
+  it("修复后五段范文仍未达到目标字数时拒绝保存", async () => {
     const shortSampleEnvelope = {
       ...successEnvelope,
       report: {
@@ -540,13 +582,15 @@ describe("OpenAIReviewAdapter", () => {
       JSON.stringify(shortSampleEnvelope),
     ]);
 
-    await expect(
-      harness.adapter.analyze({
-        config,
-        imageDataUrls: ["data:image/jpeg;base64,eA=="],
-      }),
-    ).resolves.toEqual(shortSampleEnvelope);
+    await expect(harness.adapter.analyze({
+      config,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "sample_paragraphs",
+    });
     expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("actualCharacters=500");
   });
 
   it("兼容 MiMo 将需要修改返回为换行分隔字符串", async () => {
@@ -729,8 +773,8 @@ describe("OpenAIReviewAdapter", () => {
     expect(prompt).toContain("A+");
     expect(prompt).toContain("C");
     expect(prompt).toContain("偏题");
-    expect(prompt).toContain("五段");
-    expect(prompt).toContain("600-700");
+    expect(prompt).toContain("5 段");
+    expect(prompt).toContain("600-660");
   });
 
   it("等级与四维诊断有效时不浪费修复请求", async () => {
