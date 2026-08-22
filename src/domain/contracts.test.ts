@@ -5,6 +5,7 @@ import {
   assignmentConfigSchema,
   createEvaluationReportSchema,
   evaluationReportSchema,
+  expectedSampleParagraphCount,
   privacyUploadConsentSchema,
   scoreLevelSchema,
 } from "./contracts";
@@ -51,6 +52,30 @@ describe("assignmentConfigSchema", () => {
 
     expect(config.grade).toBe("上海五四学制六年级");
     expect(config.targetCharacters).toBe(600);
+  });
+
+  it("历史配置默认要求5段，显式配置保留指定段落数", () => {
+    const historical = assignmentConfigSchema.parse({
+      title: "珍贵的礼物",
+      writingRequirements: "写一件真实的事。",
+      structureRequirements: "分五段展开。",
+      scoringFocus: "细节与真情实感。",
+      templateType: "custom",
+    });
+
+    expect(expectedSampleParagraphCount(historical)).toBe(5);
+    expect(expectedSampleParagraphCount({ ...historical, sampleParagraphCount: 3 })).toBe(3);
+  });
+
+  it.each([0, 1.5, 11])("拒绝非法示例段落数 %s", (sampleParagraphCount) => {
+    expect(() => assignmentConfigSchema.parse({
+      title: "珍贵的礼物",
+      writingRequirements: "写一件真实的事。",
+      structureRequirements: "分五段展开。",
+      scoringFocus: "细节与真情实感。",
+      templateType: "custom",
+      sampleParagraphCount,
+    })).toThrow();
   });
 });
 

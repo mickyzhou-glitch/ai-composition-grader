@@ -24,8 +24,13 @@ export const assignmentConfigSchema = z.object({
   structureRequirements: z.string().trim().min(1),
   scoringFocus: z.string().trim().min(1),
   templateType: templateTypeSchema,
+  sampleParagraphCount: z.number().int().min(1).max(10).optional(),
 });
 export type AssignmentConfig = z.infer<typeof assignmentConfigSchema>;
+
+export function expectedSampleParagraphCount(config: AssignmentConfig): number {
+  return config.sampleParagraphCount ?? 5;
+}
 
 export const reviewStatusSchema = z.enum([
   "draft",
