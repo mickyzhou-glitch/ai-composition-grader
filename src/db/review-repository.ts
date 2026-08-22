@@ -545,7 +545,7 @@ export class ReviewRepository {
   ): ReviewRecord {
     const review = this.requireById(ownerId, id);
     const report = validateReport(input, {
-      templateType: review.config.templateType,
+      config: review.config,
       incompleteEvent: options.incompleteEvent,
     });
     this.database
@@ -624,6 +624,9 @@ export class ReviewRepository {
     markReviewed: boolean,
   ): ReviewRecord {
     const current = this.requireById(ownerId, id);
+    if (current.revision !== input.expectedRevision) {
+      throw new RevisionConflictError(id);
+    }
     const studentName =
       input.studentName !== undefined
         ? studentNameSchema.parse(input.studentName)
@@ -633,7 +636,7 @@ export class ReviewRepository {
       : current.config;
     const report =
       input.report !== undefined
-        ? validateReport(input.report, { templateType: config.templateType })
+        ? validateReport(input.report, { config })
         : input.config !== undefined
           ? null
           : current.report;
@@ -843,7 +846,7 @@ export class ReviewRepository {
       annotationSchema.parse(annotation),
     );
     const report = input.readable
-      ? validateReport(input.report, { templateType: review.config.templateType })
+      ? validateReport(input.report, { config: review.config })
       : null;
     const status = input.readable ? "ready_for_review" : "needs_better_images";
     const savedAnnotations = input.readable ? parsedAnnotations : [];
@@ -905,7 +908,7 @@ export class ReviewRepository {
       annotationSchema.parse(annotation),
     );
     const report = input.readable
-      ? validateReport(input.report, { templateType: review.config.templateType })
+      ? validateReport(input.report, { config: review.config })
       : null;
     const status = input.readable ? "ready_for_review" : "needs_better_images";
     const savedAnnotations = input.readable ? parsedAnnotations : [];

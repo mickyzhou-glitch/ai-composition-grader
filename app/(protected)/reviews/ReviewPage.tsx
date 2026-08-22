@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   evaluationReportSchema,
+  expectedSampleParagraphCount,
   MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
   type Annotation,
@@ -418,7 +419,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         },
       );
       changeReport({ ...report, sampleParagraphs: result.sampleParagraphs });
-      setNotice("整篇五段示范正文已由 AI 更新，请复核后保存。");
+      setNotice(`整篇 ${expectedSampleParagraphCount(review.config)} 段示范正文已由 AI 更新，请复核后保存。`);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -655,7 +656,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} expectedSampleParagraphCount={expectedSampleParagraphCount(review.config)} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
           </div>
         </section>

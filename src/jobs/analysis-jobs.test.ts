@@ -54,7 +54,11 @@ const readyEnvelope = {
       total: 36,
       level: "优秀作文" as const,
     },
-    sampleParagraphs: [{ title: "示范", text: "我为自己鼓掌。", suggestion: "补充细节。" }],
+    sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: "我".repeat(120),
+      suggestion: "补充细节。",
+    })),
   },
   annotations: [],
 };

@@ -13,6 +13,7 @@ import { validateReport } from "../domain/report-validation";
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import {
   buildSampleWritingRule,
+  countSampleTextCharacters,
   resolveSampleWritingRequirements,
   validateSampleWritingRequirements,
 } from "./sample-writing-requirements";
@@ -115,22 +116,25 @@ const ENVELOPE_SCHEMA_SUMMARY = [
   "EvaluationReport={themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},sampleParagraphs:{title:string,text:string,suggestion:string}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
 ].join("\n");
 
-const SAMPLE_PARAGRAPH_TRANSITION_RULE =
-  "范文段落衔接不得依赖流水账式的时间推进：不要连续用“生日那天”“第二天放学后”“半小时后”等时间短语开启段落，第一段不得以时间词开头。优先使用对比、照应、因果、情感变化、人物动作或核心物件来承接上下文；例如可以借鉴“虽然别人的礼物……，但……”这种对比入题的方法，但不要机械照抄固定句式。只有时间变化确实推动关键情节时，才可偶尔在段中简洁交代。";
+function buildTransitionRule(config: AssignmentConfig): string {
+  return `段落顺序和衔接必须服从教师填写的结构要求：${JSON.stringify(config.structureRequirements)}。若题目要求按时间推进，可以自然使用“生日那天”“第二天放学后”“半小时后”等时间提示；若题目没有这种要求，应避免连续使用时间短语造成流水账，可用对比、照应、因果、情感变化、人物动作或核心物件承接。任何通用衔接建议都不得覆盖教师要求。`;
+}
 
-const CONCISE_FEEDBACK_RULE =
-  "给学生的评价必须简洁、直观：personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加“一、二、三、四”等序号，不重复解释，条数由文章实际内容决定。优点从选材、内容表达、情感、情节完整性以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；用六年级学生能直接看懂的短句，例如“结尾部分要注意扣题”“中间段落不要啰嗦”。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。";
+function buildConciseFeedbackRule(config: AssignmentConfig): string {
+  return `给学生的评价必须简洁、直观：personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加“一、二、三、四”等序号，不重复解释，条数由文章实际内容决定。优点从选材、内容表达、情感、题目要求完成度以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；使用${JSON.stringify(config.grade)}学生能直接看懂的短句。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。`;
+}
 
-const ADVANCED_NARRATIVE_RULE =
-  "你是一名有十五年上海小升初教学经验的语文老师，做一对一修改辅导。评价必须专业、具体、可操作，绝不空泛表扬或批评。核心目标是把学生原文修改成符合本次题目配置的完整记叙文：围绕一个真实生活事件，有清晰的起因、转折、自己的行动、结果和感悟；关键情节必须写出可感知的动作、心理、语言或环境细节，而不是只做概括。优先检查真实生活和真情实感，不能编造脱离原文的故事；倒叙、插叙仅在自然且符合指定年级水平时作为加分项。";
+function buildAssignmentDrivenReviewRule(config: AssignmentConfig): string {
+  return `你是一名熟悉${JSON.stringify(config.grade)}写作教学的语文老师，做一对一修改辅导。评价必须专业、具体、可操作，绝不空泛表扬或批评。文体、材料范围、结构、表达方式和评分标准全部以教师填写的作业配置为准；不得擅自把说明文、书信、应用文或其他题目改成记叙文，也不得强加单一事件、固定转折或结尾感悟。只依据原文证据批改，不虚构关键内容。`;
+}
 
 const LIFE_LOGIC_REVIEW_RULE = [
-  "必须先核对时间、地点和行动能否同时成立。",
-  "核对人物年龄、身份、关系与行为能力是否符合日常生活。",
-  "核对人物称呼、物品归属与状态、事件顺序，以及原因是否足以推出结果。",
+  "原文涉及事件时，必须先核对时间、地点和行动能否同时成立。",
+  "原文涉及人物时，核对人物年龄、身份、关系与行为能力是否符合日常生活。",
+  "按题目涉及的内容核对人物称呼、物品归属与状态、事件顺序，以及原因是否足以推出结果。",
   "必须区分少见但可能与明显矛盾；没有原文证据时不得判错。",
   "无法确认时在 diagnostics 的 action 写明“请向学生核实”，不得虚构关键经历。",
-  "严重矛盾导致核心事件无法成立时 grade 必须为 C。",
+  "严重矛盾导致题目要求的核心内容无法成立时 grade 必须为 C。",
 ].join("\n");
 
 const PARENT_FEEDBACK_RULE =
@@ -149,32 +153,32 @@ function buildStudentNameRule(studentName?: string): string {
 }
 
 const GRADE_RULE =
-  "不使用分数，也不输出任何 40 分制字段。只给最终等级：A+、A、A-、B+、B、B-、C。A 档代表结构完整、真实具体且有较成熟的细节与感悟；B 档代表基础达标但需要明确修改；C 代表必须重写。偏题、核心事件缺失、无法形成题目要求的完整叙事，或正文无法支撑结尾主题时，必须给 C。diagnostics 必须逐项输出四维诊断：authenticityAndRelevance（真实度与切题）、materialAndDetails（素材与细节）、structure（题目要求的结构与段落衔接）、language（语言流畅度）。每维 finding 精确指出原文中的一个句子或段落问题，action 给学生一条能直接完成的增删改动作。";
+  "不使用分数，也不输出任何 40 分制字段。只给最终等级：A+、A、A-、B+、B、B-、C。A 档代表充分完成教师填写的内容、结构和表达要求；B 档代表基础达标但需要明确修改；C 代表必须重写。偏题或缺少题目明确要求的核心内容时，必须给 C。diagnostics 必须逐项输出四维诊断：authenticityAndRelevance（真实度与切题）、materialAndDetails（素材与细节）、structure（题目要求的结构与段落衔接）、language（语言流畅度）。每维 finding 精确指出原文中的一个句子或段落问题，action 给学生一条能直接完成的增删改动作。";
 
 function buildSampleParagraphRule(config: AssignmentConfig): string {
-  return `${buildSampleWritingRule(config)}\n每段 title 要能说明段落任务，suggestion 给出一句可执行的写法提醒。示范文须保留学生原有核心事件和表达气质，不虚构关键经历。每一段正文开头严禁使用“那天、后来、最后、第二天、一天、早晨、上午、中午、下午、傍晚、晚上、放学后、回家后”等时间词，必须用承接上一段的动作、情绪、对比、因果或核心物件开篇。写前先理清“谁、和谁、因为什么、经过什么、结果怎样”的单一事件线：同一关系只用同一个称呼和人物，不得把朋友、同学、老师等无关人物混入同一事件；原文出现人物关系断裂、无关争吵或枝节时，示范文必须直接删去、合并或改写为与核心人物一致的情节，绝不保留多余人物。`;
+  return `${buildSampleWritingRule(config)}\n每段 title 要能说明段落任务，suggestion 给出一句可执行的写法提醒。示范文须保留学生原有核心材料和表达气质，不虚构关键内容。人物称呼、材料关系和前后逻辑要一致，但不得为了套用通用叙事结构而删改教师要求的内容。`;
 }
 
 function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, studentName?: string): string {
   const structureReviewRule =
-    `必须按照教师填写的 structureRequirements 逐段核对学生原文：${JSON.stringify(config.structureRequirements)}。缺少题目要求的部分、合段混乱、转折缺失或结尾未完成要求时，必须在对应原文位置给出 structure 批注。`;
+    `必须按照教师填写的 structureRequirements 逐段核对学生原文：${JSON.stringify(config.structureRequirements)}。缺少题目要求的部分、合段混乱、顺序错误或格式未完成要求时，必须在对应原文位置给出 structure 批注。`;
   return [
-    ADVANCED_NARRATIVE_RULE,
+    buildAssignmentDrivenReviewRule(config),
     LIFE_LOGIC_REVIEW_RULE,
     `作业模板与自定义要求：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
     teacherGuidance?.trim()
       ? `老师补充观点（必须作为本次批改的重要依据；与可辨认原文冲突时，以原文为准）：${teacherGuidance.trim()}`
       : "",
-    "请逐页阅读全部图片。先尽最大努力完成批改：手写字、局部阴影、个别字词或标点不确定，都不构成停止批改的理由；可以不批注无法确认的位置，但仍必须输出 report。只有整页空白、图片损坏，或核心事件与大部分正文完全无法读取时，才可设置 readable=false 并说明重拍方法。",
+    "请逐页阅读全部图片。先尽最大努力完成批改：手写字、局部阴影、个别字词或标点不确定，都不构成停止批改的理由；可以不批注无法确认的位置，但仍必须输出 report。只有整页空白、图片损坏，或题目要求的核心内容与大部分正文完全无法读取时，才可设置 readable=false 并说明重拍方法。",
     GRADE_RULE,
-    "这版批改只检查段落结构、事件完整性与前后衔接。不要批改错别字、书写、标点、病句或普通字词表达的小问题。annotation 只能使用 structure（结构），anchorText 必须来自可辨认原文；不要臆造。",
+    "这版批改只检查题目要求的结构、内容完整性与前后衔接。不要批改错别字、书写、标点、病句或普通字词表达的小问题。annotation 只能使用 structure（结构），anchorText 必须来自可辨认原文；不要臆造。",
     "对结构问题使用 annotation，批注要短而可执行，能明确指出缺少哪一段、该补什么或该如何调整。原稿导出时只会显示红圈与红线，不会显示文字批注；因此每条 annotation 必须定位到确实能辨认的整句或段落起点。坐标拿不准时不要生成 annotation，绝不圈画单个字或猜测的位置。",
     "图片上有 10x10 网格。每条批注用 pageIndex 和相对整页的 x/y 0..1 归一化坐标定位，坐标必须落在 0..1。",
     structureReviewRule,
     buildSampleParagraphRule(config),
-    SAMPLE_PARAGRAPH_TRANSITION_RULE,
-    CONCISE_FEEDBACK_RULE,
+    buildTransitionRule(config),
+    buildConciseFeedbackRule(config),
     PARENT_FEEDBACK_RULE,
     "只返回一个 JSON 对象，不要 Markdown，不要解释。结构如下：",
     ENVELOPE_SCHEMA_SUMMARY,
@@ -187,8 +191,8 @@ function buildContinueAnalysisPrompt(
   studentName?: string,
 ): string {
   return [
-    "系统已接收到完整作文图片。请继续完成批改，不要因为手写字、局部阴影、个别字词或标点不确定而要求重拍。无法确认的位置可以跳过批注，但必须依据可读内容输出完整 report。只有整页空白、图片损坏，或核心事件与大部分正文完全无法读取时，才允许 readable=false。",
-    ADVANCED_NARRATIVE_RULE,
+    "系统已接收到完整作文图片。请继续完成批改，不要因为手写字、局部阴影、个别字词或标点不确定而要求重拍。无法确认的位置可以跳过批注，但必须依据可读内容输出完整 report。只有整页空白、图片损坏，或题目要求的核心内容与大部分正文完全无法读取时，才允许 readable=false。",
+    buildAssignmentDrivenReviewRule(config),
     LIFE_LOGIC_REVIEW_RULE,
     GRADE_RULE,
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
@@ -220,11 +224,11 @@ function buildRepairPrompt(
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
     `结构核对必须遵循教师要求：${JSON.stringify(config.structureRequirements)}。结构问题要用 annotation.category=structure 标注在原文确实能辨认的整句或段落起点；坐标不确定则不要标注。`,
-    `${ADVANCED_NARRATIVE_RULE}\n\n${GRADE_RULE}`,
+    `${buildAssignmentDrivenReviewRule(config)}\n\n${GRADE_RULE}`,
     LIFE_LOGIC_REVIEW_RULE,
     sampleRule,
-    SAMPLE_PARAGRAPH_TRANSITION_RULE,
-    CONCISE_FEEDBACK_RULE,
+    buildTransitionRule(config),
+    buildConciseFeedbackRule(config),
     PARENT_FEEDBACK_RULE,
     `schema 摘要：\n${ENVELOPE_SCHEMA_SUMMARY}`,
   ].join("\n\n");
@@ -413,10 +417,9 @@ function validateUsableEnvelope(
   if (!envelope.readable) return envelope;
   const report = validateReport(
     envelope.report,
-    { templateType: "custom" },
+    { config },
   );
   validateParentFeedbackSemantics(report, studentName);
-  validateSampleWritingRequirements(report.sampleParagraphs, config);
   return {
     ...envelope,
     report,
@@ -620,6 +623,17 @@ export class OpenAIReviewAdapter {
     if (!Number.isInteger(input.index) || input.index < 0 || input.index >= input.sampleParagraphs.length) {
       throw new TypeError("sample paragraph index is invalid");
     }
+    const expected = resolveSampleWritingRequirements(input.config);
+    if (input.sampleParagraphs.length !== expected.paragraphCount) {
+      throw new TypeError("当前示范文段落数与题目要求不一致，请使用全文重新生成");
+    }
+    const otherParagraphs = input.sampleParagraphs.filter((_, index) => index !== input.index);
+    const otherCharacters = countSampleTextCharacters(otherParagraphs);
+    const minimumCharacters = Math.max(0, expected.minimumCharacters - otherCharacters);
+    const maximumCharacters = expected.maximumCharacters - otherCharacters;
+    if (maximumCharacters < minimumCharacters || maximumCharacters < 1) {
+      throw new TypeError("当前其余段落字数已超出题目要求，请使用全文重新生成");
+    }
     const settings = await this.settings.getRuntimeConfig("content");
     if (!settings) {
       throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
@@ -631,7 +645,6 @@ export class OpenAIReviewAdapter {
       maxRetries: AI_MAX_RETRIES,
     });
     const current = input.sampleParagraphs[input.index];
-    const expected = resolveSampleWritingRequirements(input.config);
     const content = await completionContent(client, {
       model: settings.model,
       response_format: { type: "json_object" },
@@ -643,15 +656,16 @@ export class OpenAIReviewAdapter {
           buildSampleWritingRule(input.config),
           `当前整篇范文：${JSON.stringify(input.sampleParagraphs)}`,
           `要重写第 ${input.index + 1} 段：${JSON.stringify(current)}`,
+          `其余段落正文合计 ${otherCharacters} 个汉字；本段 text 必须写 ${minimumCharacters}-${maximumCharacters} 个汉字，title、suggestion 和标点不计入。`,
           `教师附加要求：${input.instruction?.trim() || "请换一种更具体、更自然的写法。"}`,
-          SAMPLE_PARAGRAPH_TRANSITION_RULE,
+          buildTransitionRule(input.config),
           LIFE_LOGIC_REVIEW_RULE,
-          "必须坚持一条清楚的事件线，统一人物称呼和关系；删除无关人物、无关争吵与枝节，不得凭空增添关键经历。只返回 JSON：{\"text\":\"重写后的这一段正文\"}。",
+          "本段必须服从教师填写的文体、结构和材料要求，与其他段落前后衔接，不得凭空增添关键内容。只返回 JSON：{\"text\":\"重写后的这一段正文\"}。",
         ].join("\n\n"),
       }],
     });
     try {
-      const parsed = z.object({ text: z.string().trim().min(1).max(2_000) })
+      const parsed = z.object({ text: z.string().trim().min(1) })
         .parse(parseJsonResponse(content));
       const nextParagraphs = input.sampleParagraphs.map((paragraph, index) =>
         index === input.index ? { ...paragraph, text: parsed.text } : paragraph,
@@ -681,14 +695,14 @@ export class OpenAIReviewAdapter {
       messages: [{
         role: "user",
         content: [
-          `你是上海五升六学生的作文老师。请只重新生成“${sectionLabel}”，不要改动报告中的其他内容。`,
+          `你是熟悉${JSON.stringify(input.config.grade)}写作教学的作文老师。请只重新生成“${sectionLabel}”，不要改动报告中的其他内容。`,
           `作文要求：${JSON.stringify(input.config)}`,
           `当前批改报告：${JSON.stringify(input.report)}`,
           "由你判断生成 2-4 条，不要固定凑成四条。",
           "每条必须是 10-20 个汉字，只说一个具体要点，不加序号，不写总评段落。",
           input.section === "improvements"
-            ? "每条都要指出哪一段有问题、问题是什么、具体怎么改；给出修改指导，不是评价，并让六年级学生能直接看懂。句式可参考“结尾部分要注意扣题”“中间段落不要啰嗦”，但要结合本篇作文。"
-            : "从选材、内容表达、情感、情节完整性及特别出彩的部分中选择真实明显的维度。只写夸奖，不解释理由，不夹带修改建议，不要空泛。",
+            ? `每条都要指出哪一段有问题、问题是什么、具体怎么改；给出修改指导，不是评价，并让${JSON.stringify(input.config.grade)}学生能直接看懂。`
+            : "从选材、内容表达、情感、题目要求完成度及特别出彩的部分中选择真实明显的维度。只写夸奖，不解释理由，不夹带修改建议，不要空泛。",
           "只返回 JSON：{\"items\":[\"第一条\",\"第二条\"]}。",
         ].join("\n\n"),
       }],
@@ -729,9 +743,9 @@ export class OpenAIReviewAdapter {
           buildSampleWritingRule(input.config),
           `当前 ${expected.paragraphCount} 段范文：${JSON.stringify(input.sampleParagraphs)}`,
           `教师附加要求：${input.instruction?.trim() || "请整体提升细节、逻辑和前后衔接。"}`,
-          SAMPLE_PARAGRAPH_TRANSITION_RULE,
+          buildTransitionRule(input.config),
           LIFE_LOGIC_REVIEW_RULE,
-          `必须输出严格 ${expected.paragraphCount} 段。人物称呼、关系、时间顺序和事件因果必须统一；只保留一条核心事件线，删去无关人物、无关争吵和枝节，不得凭空增加关键经历。每段正文不得以时间词开头。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。`,
+          `必须输出严格 ${expected.paragraphCount} 段。文体、材料、段落顺序和衔接方式必须服从教师填写的要求，前后逻辑保持一致，不得凭空增加关键内容。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。`,
         ].join("\n\n"),
       }],
     });

@@ -140,7 +140,7 @@ describe("CompositionReviewAdapter", () => {
       "原因是否足以推出结果",
       "请向学生核实",
       "不得虚构关键经历",
-      "严重矛盾导致核心事件无法成立时 grade 必须为 C",
+      "严重矛盾导致题目要求的核心内容无法成立时 grade 必须为 C",
     ]) {
       expect(prompt).toContain(phrase);
     }
@@ -271,6 +271,28 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("600-660");
     expect(prompt).toContain("不得写成初中生或成人范文");
     expect(prompt).toContain("按开头、经过、高潮、结果、感受展开");
+  });
+
+  it("书信题不追加小学记叙文和禁用时间词规则", async () => {
+    const harness = setup();
+
+    await harness.adapter.analyzeText({
+      config: {
+        ...config,
+        grade: "初二",
+        writingRequirements: "给未来的自己写一封信。",
+        structureRequirements: "包含称呼、正文、祝福语、署名和日期。",
+        scoringFocus: "格式正确，表达真诚。",
+      },
+      pages: [{ pageIndex: 0, text: "亲爱的未来的我：你好！" }],
+      studentName: "小艾",
+    });
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("给未来的自己写一封信");
+    expect(prompt).toContain("称呼、正文、祝福语、署名和日期");
+    expect(prompt).not.toContain("不得写成初中生");
+    expect(prompt).not.toContain("段首不要使用");
   });
 
   it("短范文只修复一次，修复后仍不足目标字数则拒绝保存", async () => {

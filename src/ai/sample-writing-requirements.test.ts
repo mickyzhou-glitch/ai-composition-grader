@@ -62,4 +62,12 @@ describe("sample writing requirements", () => {
     expect(rule).toContain(config.scoringFocus);
     expect(rule).toContain("不得写成初中生或成人范文");
   });
+
+  it("初中年级只限制为指定年级水平，不误写成小学生规则", () => {
+    const rule = buildSampleWritingRule({ ...config, grade: "初二" });
+
+    expect(rule).toContain("初二");
+    expect(rule).not.toContain("不得写成初中生");
+    expect(rule).not.toContain("小学生");
+  });
 });

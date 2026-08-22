@@ -33,7 +33,11 @@ const teacherReviewedReport = {
     structure: { finding: "衔接清楚。", action: "强化转折。" },
     language: { finding: "语言通顺。", action: "精简长句。" },
   },
-  sampleParagraphs: [{ title: "示范", text: "示范正文", suggestion: "补充动作" }],
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第 ${index + 1} 段`,
+    text: "我".repeat(120),
+    suggestion: "补充动作",
+  })),
   parentFeedbacks: [],
 };
 
@@ -506,6 +510,8 @@ describe("Cloudflare Worker", () => {
           sql.includes("FROM sessions INNER JOIN users") ? {
             id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
             expires_at: Date.now() + 60_000,
+          } : sql.includes("SELECT config, revision FROM reviews") ? {
+            config: JSON.stringify(reviewConfig), revision: 3,
           } : sql.includes("FROM reviews WHERE id") ? {
             id: "review-1", status: "ready_for_review", student_name: "张小明",
             config: JSON.stringify(reviewConfig), report: JSON.stringify(teacherReviewedReport),

@@ -18,15 +18,19 @@ const report = {
     structure: { finding: "转折略快。", action: "补充前后因果。" },
     language: { finding: "语言通顺。", action: "精简长句。" },
   },
-  sampleParagraphs: [{ title: "示范", text: "示范正文", suggestion: "补充动作" }],
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `第 ${index + 1} 段`,
+    text: "我".repeat(120),
+    suggestion: "补充动作",
+  })),
   parentFeedbacks: [],
 };
 
-function detail(id: string, studentName: string, revision: number) {
+function detail(id: string, studentName: string, revision: number, currentReport = report) {
   return {
     id, studentName, revision, status: "ready_for_review", teacherReviewedAt: null,
     config: { title: `作文${id.at(-1)}`, grade: "六年级", writingRequirements: "叙事", targetCharacters: 600, structureRequirements: "完整", scoringFocus: "细节", templateType: "custom" },
-    report, createdAt: "2026-08-22T01:00:00.000Z", updatedAt: "2026-08-22T01:00:00.000Z",
+    report: currentReport, createdAt: "2026-08-22T01:00:00.000Z", updatedAt: "2026-08-22T01:00:00.000Z",
     images: [{ id: revision, position: 0, originalName: "作文.jpg", mimeType: "image/jpeg", width: 1200, height: 1600, rotation: 0, crop: null }],
     annotations: [], ocr: { ocrRevision: 1, editedAt: null, pages: [{ pageIndex: 0, text: `${studentName}的作文原文`, readable: true, warnings: [] }] }, reportStale: false, hasPdf: false, pdfFilename: null,
   };
@@ -45,9 +49,12 @@ function queueItem(id: string, studentName: string, revision: number) {
 
 function mockReviewApi(
   queue: ReturnType<typeof queueItem>[],
-  options: { rejectTeacherReview?: boolean } = {},
+  options: { rejectTeacherReview?: boolean; currentReport?: typeof report } = {},
 ) {
-  const details = new Map(queue.map((item) => [item.id, detail(item.id, item.studentName, item.revision)]));
+  const details = new Map(queue.map((item) => [
+    item.id,
+    detail(item.id, item.studentName, item.revision, options.currentReport),
+  ]));
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
@@ -170,5 +177,23 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "待审核队列已完成" })).toBeVisible();
     expect(screen.getByRole("button", { name: "待导出清单 (1)" })).toBeVisible();
+  });
+
+  it("历史段落数不符合题目配置时引导到单篇复核且禁止审核", async () => {
+    mockReviewApi([queueItem("review-1", "张小明", 1)], {
+      currentReport: {
+        ...report,
+        sampleParagraphs: report.sampleParagraphs.slice(0, 3),
+      },
+    });
+    render(<BatchReviewPage />);
+
+    await screen.findByRole("heading", { name: "张小明" });
+    expect(screen.getByText("当前为 3 段，题目要求 5 段，请先使用 AI 全文重新生成。")).toBeVisible();
+    expect(screen.getByRole("button", { name: "审核通过并进入下一篇" })).toBeDisabled();
+    expect(screen.getByRole("link", { name: "前往单篇复核" })).toHaveAttribute(
+      "href",
+      "/reviews?id=review-1",
+    );
   });
 });

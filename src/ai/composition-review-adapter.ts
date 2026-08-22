@@ -41,12 +41,12 @@ const CONTENT_RESULT_SCHEMA = [
 ].join("\n");
 
 const LIFE_LOGIC_REVIEW_RULE = [
-  "必须先核对时间、地点和行动能否同时成立。",
-  "核对人物年龄、身份、关系与行为能力是否符合日常生活。",
-  "核对人物称呼、物品归属与状态、事件顺序，以及原因是否足以推出结果。",
+  "原文涉及事件时，必须先核对时间、地点和行动能否同时成立。",
+  "原文涉及人物时，核对人物年龄、身份、关系与行为能力是否符合日常生活。",
+  "按题目涉及的内容核对人物称呼、物品归属与状态、事件顺序，以及原因是否足以推出结果。",
   "必须区分少见但可能与明显矛盾；没有原文证据时不得判错。",
   "无法确认时在 diagnostics 的 action 写明“请向学生核实”，不得虚构关键经历。",
-  "严重矛盾导致核心事件无法成立时 grade 必须为 C。",
+  "严重矛盾导致题目要求的核心内容无法成立时 grade 必须为 C。",
 ].join("\n");
 
 function studentNameRule(studentName?: string): string {
@@ -63,7 +63,7 @@ function studentNameRule(studentName?: string): string {
 
 function contentPrompt(input: AnalyzeOcrTextInput): string {
   return [
-    "你是一名有十五年上海小升初教学经验的语文老师，负责依据已识别的作文原文完成批改。",
+    `你是一名熟悉${JSON.stringify(input.config.grade)}写作教学的语文老师，负责依据已识别的作文原文和教师配置完成批改。`,
     `作文要求：${JSON.stringify(input.config)}`,
     studentNameRule(input.studentName),
     input.teacherGuidance?.trim() ? `教师补充意见（与原文冲突时以原文为准）：${input.teacherGuidance.trim()}` : "",
@@ -72,7 +72,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
     "personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条修改项。每条 10-20 个汉字，只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
     buildSampleWritingRule(input.config),
-    "示范段落必须保留原文的核心事件，不得编造关键经历；段首不要使用“那天、后来、最后、第二天、早晨、上午、中午、下午、傍晚、晚上、放学后、回家后”等时间词。",
+    "示范段落必须保留原文的核心材料，不得编造关键内容；文体、结构、段落顺序和衔接方式必须服从教师填写的要求。",
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 pageIndex、category、anchorText、comment、isHighlight；不得返回 x、y 或其他图片坐标。anchorText 必须逐字来自相应页原文。",
     "只返回一个 JSON 对象，不要 Markdown，不要解释。严格结构如下：",

@@ -1,5 +1,6 @@
-import type { EvaluationReport, TemplateType } from "./contracts";
+import type { AssignmentConfig, EvaluationReport, TemplateType } from "./contracts";
 import { createEvaluationReportSchema, gradeFromLegacyTotal } from "./contracts";
+import { validateSampleWritingRequirements } from "./sample-writing-requirements";
 
 export class ReportValidationError extends Error {
   readonly code = "VALIDATION_ERROR";
@@ -11,6 +12,7 @@ export const deriveLevel = gradeFromLegacyTotal;
 
 export interface ReportValidationOptions {
   templateType?: TemplateType;
+  config?: AssignmentConfig;
   incompleteEvent?: boolean;
 }
 
@@ -21,6 +23,15 @@ export function validateReport(
   const report = createEvaluationReportSchema(
     options.templateType ?? "preset_self_applause",
   ).parse(input);
+  if (options.config) {
+    try {
+      validateSampleWritingRequirements(report.sampleParagraphs, options.config);
+    } catch (error) {
+      throw new ReportValidationError(
+        error instanceof Error ? error.message : "sample paragraphs invalid",
+      );
+    }
+  }
   if (
     (report.themeFit === "off_topic" || options.incompleteEvent === true) &&
     report.grade !== "C"
