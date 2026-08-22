@@ -321,6 +321,35 @@ describe("复核页", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it("结构诊断为空时使用通用结构要求文案", async () => {
+    const currentReview = {
+      ...review,
+      report: {
+        ...review.report,
+        scores: undefined,
+        grade: "B" as const,
+        diagnostics: {
+          authenticityAndRelevance: { finding: "事件真实。", action: "保留真实细节。" },
+          materialAndDetails: { finding: "细节具体。", action: "继续写清动作。" },
+          structure: { finding: "结构完整。", action: "保持段落顺序。" },
+          language: { finding: "表达通顺。", action: "精简重复句。" },
+        },
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(currentReview))
+      .mockImplementationOnce(() => json({ job: null }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.clear(await screen.findByLabelText("前后逻辑与结构精准定位"));
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("结构要求的精准定位不能为空");
+    expect(screen.queryByText(/五段结构/u)).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("保存被 Worker 拒绝时使用安全字段路径显示具体问题", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
