@@ -10,9 +10,12 @@ import {
   AnalysisJobLostClaimError,
   type AnalysisJobClaim,
   type ClaimedAnalysisJobRecord,
+  type PendingPdfCleanup,
 } from "./analysis-job-repository";
 
 export interface AnalysisJobQueue {
+  findPendingPdfCleanup?(): PendingPdfCleanup | null;
+  ackPdfCleanup?(jobId: string, marker: string): boolean;
   claimNext(): ClaimedAnalysisJobRecord | null;
   updateProgress(
     claim: AnalysisJobClaim,
@@ -33,7 +36,14 @@ export interface AnalysisJobQueue {
 }
 
 export interface AnalysisExecutionService {
-  prepare(ownerId: string, reviewId: string, mode?: "full" | "content_only"): Promise<{
+  cleanupPdf?(ownerId: string, reviewId: string, filename: string): Promise<void>;
+  prepare(
+    ownerId: string,
+    reviewId: string,
+    mode: "full" | "content_only",
+    claim: AnalysisJobClaim,
+    prebound: boolean,
+  ): Promise<{
     token: AnalysisToken;
     config: AssignmentConfig;
     imageDataUrls: string[];
@@ -74,6 +84,14 @@ export interface AnalysisExecutionService {
     reviewId: string,
     token: AnalysisToken,
     claim: AnalysisJobClaim,
+    errorCode: string,
+  ): Promise<unknown>;
+  finishUnprepared?(
+    ownerId: string,
+    reviewId: string,
+    runId: string,
+    claim: AnalysisJobClaim,
+    target: "failed" | "canceled",
     errorCode: string,
   ): Promise<unknown>;
 }
@@ -146,6 +164,16 @@ export class AnalysisWorker {
     if (this.active || this.stopping) return null;
     this.active = true;
     try {
+      const cleanup = this.jobs.findPendingPdfCleanup?.();
+      if (cleanup) {
+        if (!this.execution.cleanupPdf || !this.jobs.ackPdfCleanup) return null;
+        try {
+          await this.execution.cleanupPdf(cleanup.ownerId, cleanup.reviewId, cleanup.filename);
+        } catch {
+          return null;
+        }
+        this.jobs.ackPdfCleanup(cleanup.jobId, cleanup.marker);
+      }
       const initialClaim = this.jobs.claimNext();
       if (!initialClaim) return null;
       return await this.process(initialClaim);
@@ -163,7 +191,7 @@ export class AnalysisWorker {
       try {
         const next = this.jobs.renewLease(claim.id, claim.leaseExpiresAt);
         if (!next) claimLost = true;
-        else claim = next;
+        else claim = Object.assign(claim, next);
       } catch {
         // A renewal fault is treated as a lost claim so this process cannot
         // write after its ownership becomes uncertain.
@@ -172,7 +200,13 @@ export class AnalysisWorker {
     };
     const timer = setInterval(renew, this.renewEveryMs);
     try {
-      prepared = await this.execution.prepare(claim.ownerId, claim.reviewId, claim.mode);
+      prepared = await this.execution.prepare(
+        claim.ownerId,
+        claim.reviewId,
+        claim.mode,
+        claim,
+        claim.prebound,
+      );
       this.assertClaimCurrent(claimLost, claim.id);
       const dualModel = this.execution.recognize && this.execution.saveOcr && this.execution.analyzeText;
       let checkpoint = prepared.checkpoint ?? null;
@@ -256,7 +290,18 @@ export class AnalysisWorker {
       }
       if (errorCode === "ANALYSIS_CONFLICT" || errorCode === "REVISION_CONFLICT") {
         try {
-          this.jobs.transition(claim, "canceled", { errorCode, message: null });
+          if (!prepared && this.execution.finishUnprepared) {
+            await this.execution.finishUnprepared(
+              claim.ownerId,
+              claim.reviewId,
+              claim.id,
+              claim,
+              "canceled",
+              errorCode,
+            );
+          } else {
+            this.jobs.transition(claim, "canceled", { errorCode, message: null });
+          }
           return { jobId: claim.id, outcome: "canceled", errorCode };
         } catch (cancelError) {
           if (cancelError instanceof AnalysisJobLostClaimError || safeErrorCode(cancelError) === "JOB_CLAIM_LOST") {
@@ -283,7 +328,18 @@ export class AnalysisWorker {
         // no uploaded images). The claim still must terminate without taking
         // the worker process down; the draft itself remains unchanged.
         try {
-          this.jobs.transition(claim, "failed", { errorCode, message: null });
+          if (this.execution.finishUnprepared) {
+            await this.execution.finishUnprepared(
+              claim.ownerId,
+              claim.reviewId,
+              claim.id,
+              claim,
+              "failed",
+              errorCode,
+            );
+          } else {
+            this.jobs.transition(claim, "failed", { errorCode, message: null });
+          }
         } catch (failureError) {
           if (failureError instanceof AnalysisJobLostClaimError || safeErrorCode(failureError) === "JOB_CLAIM_LOST") {
             return { jobId: claim.id, outcome: "claim_lost" };

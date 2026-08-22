@@ -26,15 +26,21 @@ export async function runWorker(): Promise<void> {
   const opened = openAppDatabase(process.env.APP_DATABASE_PATH || undefined);
   const jobs = new AnalysisJobRepository(opened.db);
   const settings = new SettingsService(new SettingsRepository(opened.db), new MacOSKeychain());
+  const fileStore = new ReviewFileStore();
   const reviews = new ReviewService(
     new ReviewRepository(opened.db),
-    new ReviewFileStore(),
+    fileStore,
     { analyze: async () => { throw new Error("LEGACY_IMAGE_ANALYSIS_DISABLED"); } },
   );
   const vision = new VisionOcrAdapter(settings);
   const content = new CompositionReviewAdapter(settings);
   const worker = new AnalysisWorker(jobs, {
-    prepare: (ownerId, reviewId, mode) => reviews.prepareAnalysis(ownerId, reviewId, mode),
+    cleanupPdf: (ownerId, reviewId, filename) =>
+      fileStore.queuePdfCleanupDurably(ownerId, reviewId, [filename]),
+    prepare: (ownerId, reviewId, mode, claim, prebound) =>
+      prebound
+        ? reviews.prepareQueuedAnalysis(ownerId, reviewId, mode, claim)
+        : reviews.prepareAnalysis(ownerId, reviewId, mode, claim),
     analyze: (input) => reviews.analyzePrepared(input),
     recognize: (imageDataUrls) => vision.recognize({ imageUrls: imageDataUrls }),
     saveOcr: (ownerId, reviewId, token, imageRevision, pages) =>
@@ -51,6 +57,15 @@ export async function runWorker(): Promise<void> {
       ),
     fail: (ownerId, reviewId, token, claim, errorCode) =>
       reviews.failPreparedAnalysisAndFailJob(ownerId, reviewId, token, claim, errorCode),
+    finishUnprepared: (ownerId, reviewId, runId, claim, target, errorCode) =>
+      reviews.finishQueuedAnalysisBeforeToken(
+        ownerId,
+        reviewId,
+        runId,
+        claim,
+        target,
+        errorCode,
+      ),
   });
   const stop = () => worker.stop();
   process.once("SIGTERM", stop);

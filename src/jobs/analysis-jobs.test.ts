@@ -11,6 +11,11 @@ import {
 } from "../db/review-repository";
 import * as schema from "../db/schema";
 import {
+  encodeOrdinaryBoundMarker,
+  encodeReanalysisPendingPdfMarker,
+  encodeReanalysisReadyMarker,
+} from "./analysis-job-metadata";
+import {
   AnalysisJobLostClaimError,
   AnalysisJobNotFoundError,
   AnalysisJobRepository,
@@ -218,6 +223,26 @@ describe("AnalysisJobService", () => {
     expect(recovered).toMatchObject({ id: first?.id, status: "running", attempt: 2 });
   });
 
+  it("普通任务绑定 review 后即使租约过期，重领仍保持 prebound 身份", () => {
+    service.enqueue(ownerA, "review-a");
+    const first = repository.claimNext()!;
+    reviewRepository.beginClaimedAnalysis(ownerA, "review-a", first, 0);
+    expect(repository.getById(ownerA, first.id)).toMatchObject({
+      message: encodeOrdinaryBoundMarker(),
+      prebound: true,
+    });
+
+    now = new Date(now.valueOf() + 60_001);
+    const recovered = repository.claimNext();
+
+    expect(recovered).toMatchObject({
+      id: first.id,
+      attempt: 2,
+      message: encodeOrdinaryBoundMarker(),
+      prebound: true,
+    });
+  });
+
   it("到达尝试上限的过期任务会失败且不会无限重试", () => {
     service.enqueue(ownerA, "review-a");
     repository.claimNext();
@@ -227,6 +252,91 @@ describe("AnalysisJobService", () => {
 
     expect(repository.claimNext()).toBeNull();
     expect(service.get(ownerA, "job-1")).toMatchObject({ status: "failed", finishedAt: now.toISOString() });
+  });
+
+  it("绑定任务在租约重试耗尽后清理内部 marker", () => {
+    service.enqueue(ownerA, "review-a");
+    const first = repository.claimNext()!;
+    reviewRepository.beginClaimedAnalysis(ownerA, "review-a", first, 0);
+    now = new Date(now.valueOf() + 60_001);
+    repository.claimNext();
+    now = new Date(now.valueOf() + 60_001);
+
+    expect(repository.claimNext()).toBeNull();
+    expect(repository.getById(ownerA, first.id)).toMatchObject({
+      status: "failed",
+      message: null,
+      prebound: false,
+    });
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      status: "failed",
+      analysisRunId: null,
+      revision: 0,
+    });
+  });
+
+  it("租约耗尽不覆盖等待期间的教师编辑", () => {
+    service.enqueue(ownerA, "review-a");
+    const first = repository.claimNext()!;
+    reviewRepository.beginClaimedAnalysis(ownerA, "review-a", first, 0);
+    now = new Date(now.valueOf() + 60_001);
+    repository.claimNext();
+    reviewRepository.updateTeacherEdits(ownerA, "review-a", {
+      expectedRevision: 0,
+      studentName: "教师新姓名",
+    });
+    now = new Date(now.valueOf() + 60_001);
+
+    expect(repository.claimNext()).toBeNull();
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      status: "draft",
+      analysisRunId: null,
+      revision: 1,
+      studentName: "教师新姓名",
+    });
+  });
+
+  it("租约耗尽不释放已改绑到新 runId 的 review", () => {
+    service.enqueue(ownerA, "review-a");
+    const first = repository.claimNext()!;
+    reviewRepository.beginClaimedAnalysis(ownerA, "review-a", first, 0);
+    now = new Date(now.valueOf() + 60_001);
+    repository.claimNext();
+    sqlite.prepare(`
+      UPDATE reviews
+      SET analysis_run_id = 'newer-job', revision = revision + 1
+      WHERE id = 'review-a'
+    `).run();
+    now = new Date(now.valueOf() + 60_001);
+
+    expect(repository.claimNext()).toBeNull();
+    expect(reviewRepository.getById(ownerA, "review-a")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "newer-job",
+      revision: 1,
+    });
+  });
+
+  it("异常 running 任务耗尽时仍保留 pending PDF cleanup marker", () => {
+    service.enqueue(ownerA, "review-a");
+    const claim = repository.claimNext()!;
+    reviewRepository.beginClaimedAnalysis(ownerA, "review-a", claim, 0);
+    const marker = encodeReanalysisPendingPdfMarker("pending-old.pdf");
+    sqlite.prepare(`
+      UPDATE analysis_jobs
+      SET message = ?, attempt = 2, lease_expires_at = ?
+      WHERE id = ?
+    `).run(marker, now.valueOf() - 1, claim.id);
+
+    expect(repository.claimNext()).toBeNull();
+    expect(repository.getById(ownerA, claim.id)).toMatchObject({
+      status: "failed",
+      message: marker,
+    });
+    expect(repository.findPendingPdfCleanup()).toMatchObject({
+      jobId: claim.id,
+      filename: "pending-old.pdf",
+    });
   });
 
   it("仅允许合法的状态转换", () => {
@@ -250,6 +360,20 @@ describe("AnalysisJobService", () => {
     sqlite.prepare("UPDATE reviews SET expires_at = ? WHERE id = ?").run(now.valueOf(), "expiring");
     expect(repository.cancelUnavailable()).toBe(0);
     expect(service.get(ownerA, "job-2")).toMatchObject({ status: "queued" });
+  });
+
+  it("取消任务时清理普通内部 message，但保留待处理的 PDF cleanup marker", () => {
+    service.enqueue(ownerA, "review-a");
+    service.enqueue(ownerB, "review-b");
+    const marker = encodeReanalysisPendingPdfMarker("old-private.pdf");
+    sqlite.prepare("UPDATE analysis_jobs SET message = ? WHERE id = ?").run("ordinary diagnostic", "job-1");
+    sqlite.prepare("UPDATE analysis_jobs SET message = ? WHERE id = ?").run(marker, "job-2");
+    sqlite.prepare("UPDATE reviews SET deleting_at = ? WHERE id IN (?, ?)")
+      .run(now.valueOf(), "review-a", "review-b");
+
+    expect(repository.cancelUnavailable()).toBe(2);
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "canceled", message: null });
+    expect(repository.getById(ownerB, "job-2")).toMatchObject({ status: "canceled", message: marker });
   });
 
   it("按 jobId 和 ownerId 查询，其他教师只得到 NOT_FOUND", () => {
@@ -282,6 +406,30 @@ describe("AnalysisJobService", () => {
     expect(view).not.toHaveProperty("attempt");
     expect(view).not.toHaveProperty("leaseExpiresAt");
     expect(view).not.toHaveProperty("errorCode");
+  });
+
+  it.each([
+    ["pending cleanup", encodeReanalysisPendingPdfMarker("private-old-report.pdf")],
+    ["ready reanalysis", encodeReanalysisReadyMarker()],
+    ["ordinary bound", encodeOrdinaryBoundMarker()],
+  ])("公开任务视图不泄露 %s 内部 marker", (_case, marker) => {
+    service.enqueue(ownerA, "review-a");
+    sqlite.prepare("UPDATE analysis_jobs SET message = ? WHERE id = 'job-1'").run(marker);
+
+    expect(service.get(ownerA, "job-1")).toMatchObject({
+      status: "queued",
+      message: null,
+    });
+    expect(JSON.stringify(service.getForReview(ownerA, "review-a"))).not.toContain(marker);
+  });
+
+  it("普通任务的进度 message 保持原有存取语义", () => {
+    service.enqueue(ownerA, "review-a");
+    const claim = repository.claimNext()!;
+
+    const updated = repository.updateProgress(claim, "saving_ocr", "正在保存识别结果");
+
+    expect(updated).toMatchObject({ message: "正在保存识别结果", prebound: false });
   });
 
   it("尝试为删除中的作文重复排队时，会提交取消状态再返回不可用错误", () => {
@@ -506,8 +654,9 @@ describe("AnalysisJobService", () => {
       renewLease: () => null,
       retry: () => "at_limit",
     }, {
-      prepare: async (_ownerId, _reviewId, mode) => {
+      prepare: async (_ownerId, _reviewId, mode, claim) => {
         expect(mode).toBe("content_only");
+        expect(claim).toEqual(claimed);
         return {
           token: { revision: 2, runId: "run-content-only" },
           config,
@@ -584,6 +733,28 @@ describe("AnalysisJobService", () => {
     expect(retries).toEqual(["AI_REQUEST_FAILED"]);
   });
 
+  it("prepare 取得 token 前的可重试错误只重新入队，不执行终态补偿", async () => {
+    service.enqueue(ownerA, "review-a");
+    const finishUnprepared = vi.fn(async () => undefined);
+    const worker = new AnalysisWorker(repository, {
+      prepare: async () => {
+        throw Object.assign(new Error("temporary upstream failure"), { code: "AI_REQUEST_FAILED" });
+      },
+      analyze: async () => { throw new Error("AI must not run"); },
+      save: async () => { throw new Error("save must not run"); },
+      fail: async () => { throw new Error("fail must not run"); },
+      finishUnprepared,
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({
+      jobId: "job-1",
+      outcome: "retrying",
+      errorCode: "AI_REQUEST_FAILED",
+    });
+    expect(finishUnprepared).not.toHaveBeenCalled();
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "queued", attempt: 1 });
+  });
+
   it("retry 到达上限而变为 failed 时，Worker 只清理作文状态而不重复转换任务", async () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext()!;
@@ -639,10 +810,10 @@ describe("AnalysisJobService", () => {
     service.enqueue(ownerB, "review-b");
     let firstSave = true;
     const worker = new AnalysisWorker(repository, {
-      prepare: async (ownerId, reviewId) => {
+      prepare: async (ownerId, reviewId, _mode, claim) => {
         const review = reviewRepository.getById(ownerId, reviewId)!;
         return {
-          token: reviewRepository.beginAnalysis(ownerId, reviewId, `run-${reviewId}`, review.revision),
+          token: reviewRepository.beginClaimedAnalysis(ownerId, reviewId, claim, review.revision),
           config: review.config,
           imageDataUrls: ["data:image/jpeg;base64,QQ=="],
         };
@@ -743,8 +914,10 @@ describe("AnalysisJobService", () => {
   it("耗时模型调用期间 Worker 定期续租并使用最新租约完成任务", async () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext()!;
+    const initialLease = claimed.leaseExpiresAt.valueOf();
     const release = deferred<void>();
     let renewals = 0;
+    const preparedLeases: Date[] = [];
     const savedLeases: Date[] = [];
     const worker = new AnalysisWorker({
       claimNext: () => claimed,
@@ -756,11 +929,12 @@ describe("AnalysisJobService", () => {
       },
       retry: () => "at_limit",
     }, {
-      prepare: async () => ({ token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] }),
-      analyze: async () => {
+      prepare: async (_ownerId, _reviewId, _mode, claim) => {
         await release.promise;
-        return readyEnvelope;
+        preparedLeases.push(claim.leaseExpiresAt);
+        return { token: { revision: 0, runId: "run-1" }, config, imageDataUrls: ["data:image/jpeg;base64,QQ=="] };
       },
+      analyze: async () => readyEnvelope,
       save: async (_ownerId, _reviewId, _token, _envelope, claim) => {
         savedLeases.push(claim.leaseExpiresAt);
       },
@@ -773,6 +947,7 @@ describe("AnalysisJobService", () => {
     await pending;
 
     expect(renewals).toBeGreaterThan(0);
-    expect(savedLeases.at(-1)?.valueOf()).toBeGreaterThan(claimed.leaseExpiresAt.valueOf());
+    expect(preparedLeases.at(-1)?.valueOf()).toBeGreaterThan(initialLease);
+    expect(savedLeases.at(-1)?.valueOf()).toBeGreaterThan(initialLease);
   });
 });

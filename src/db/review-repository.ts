@@ -17,6 +17,7 @@ import {
   EMPTY_DRAFT_RETENTION_MS,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import { encodeOrdinaryBoundMarker } from "../jobs/analysis-job-metadata";
 import { ocrCheckpointSchema, type OcrCheckpoint, type OcrPage } from "../ocr/contracts";
 import type { AppDatabase } from "./client";
 import { analysisJobs, annotations, reviewImages, reviews, savedAssignments } from "./schema";
@@ -774,32 +775,129 @@ export class ReviewRepository {
     runId: string,
     expectedRevision: number,
   ): AnalysisToken {
-    const result = this.database
-      .update(reviews)
-      .set({
-        status: "analyzing",
-        analysisRunId: runId,
-        teacherReviewedAt: null,
-        updatedAt: this.now(),
-        pdfFilename: null,
-        pdfPath: null,
-        pdfRevision: null,
-        exportedAt: null,
-      })
-      .where(
-        and(
-          eq(reviews.id, id),
-          eq(reviews.ownerId, ownerId),
-          isNull(reviews.deletingAt),
-          eq(reviews.revision, expectedRevision),
-        ),
-      )
-      .run();
+    const result = this.database.update(reviews).set({
+      status: "analyzing",
+      analysisRunId: runId,
+      teacherReviewedAt: null,
+      updatedAt: this.now(),
+      pdfFilename: null,
+      pdfPath: null,
+      pdfRevision: null,
+      exportedAt: null,
+    }).where(and(
+      eq(reviews.id, id),
+      eq(reviews.ownerId, ownerId),
+      isNull(reviews.deletingAt),
+      eq(reviews.revision, expectedRevision),
+    )).run();
     if (result.changes === 0) {
       if (!this.getById(ownerId, id)) throw new ReviewNotFoundError(id);
       throw new AnalysisConflictError(id);
     }
     return { revision: expectedRevision, runId };
+  }
+
+  beginClaimedAnalysis(
+    ownerId: string,
+    id: string,
+    claim: AnalysisJobCompletionClaim,
+    expectedRevision: number,
+  ): AnalysisToken {
+    const normalizedClaim = this.normalizeAnalysisJobClaim(claim);
+    const now = this.now();
+    return this.database.transaction((transaction) => {
+      const jobUpdate = transaction.update(analysisJobs).set({
+        message: encodeOrdinaryBoundMarker(),
+      }).where(and(
+        eq(analysisJobs.id, normalizedClaim.id),
+        eq(analysisJobs.ownerId, ownerId),
+        eq(analysisJobs.reviewId, id),
+        eq(analysisJobs.status, "running"),
+        eq(analysisJobs.attempt, normalizedClaim.attempt),
+        eq(analysisJobs.leaseExpiresAt, normalizedClaim.leaseExpiresAt),
+        gt(analysisJobs.leaseExpiresAt, now),
+      )).run();
+      if (jobUpdate.changes !== 1) {
+        throw new AnalysisJobCompletionClaimLostError(normalizedClaim.id);
+      }
+      const reviewUpdate = transaction.update(reviews).set({
+        status: "analyzing",
+        analysisRunId: normalizedClaim.id,
+        teacherReviewedAt: null,
+        updatedAt: now,
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
+      }).where(and(
+        eq(reviews.id, id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        eq(reviews.revision, expectedRevision),
+        isNull(reviews.analysisRunId),
+        inArray(reviews.status, [
+          "draft",
+          "needs_better_images",
+          "ready_for_review",
+          "exported",
+          "failed",
+        ]),
+      )).run();
+      if (reviewUpdate.changes === 0) {
+        const exists = transaction.select({ id: reviews.id }).from(reviews).where(and(
+          eq(reviews.id, id),
+          eq(reviews.ownerId, ownerId),
+          isNull(reviews.deletingAt),
+        )).get();
+        if (!exists) throw new ReviewNotFoundError(id);
+        throw new AnalysisConflictError(id);
+      }
+      return { revision: expectedRevision, runId: normalizedClaim.id };
+    });
+  }
+
+  beginQueuedAnalysis(
+    ownerId: string,
+    id: string,
+    claim: AnalysisJobCompletionClaim,
+    expectedRevision: number,
+  ): AnalysisToken {
+    const normalizedClaim = this.normalizeAnalysisJobClaim(claim);
+    const now = this.now();
+    return this.database.transaction((transaction) => {
+      const jobUpdate = transaction.update(analysisJobs).set({
+        message: sql`${analysisJobs.message}`,
+      }).where(and(
+        eq(analysisJobs.id, normalizedClaim.id),
+        eq(analysisJobs.ownerId, ownerId),
+        eq(analysisJobs.reviewId, id),
+        eq(analysisJobs.status, "running"),
+        eq(analysisJobs.attempt, normalizedClaim.attempt),
+        eq(analysisJobs.leaseExpiresAt, normalizedClaim.leaseExpiresAt),
+        gt(analysisJobs.leaseExpiresAt, now),
+      )).run();
+      if (jobUpdate.changes !== 1) {
+        throw new AnalysisJobCompletionClaimLostError(normalizedClaim.id);
+      }
+      const reviewUpdate = transaction.update(reviews).set({ updatedAt: now }).where(and(
+        eq(reviews.id, id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        eq(reviews.status, "analyzing"),
+        eq(reviews.revision, expectedRevision),
+        eq(reviews.analysisRunId, normalizedClaim.id),
+      )).run();
+      if (reviewUpdate.changes === 0) {
+        const exists = transaction.select({ id: reviews.id }).from(reviews).where(and(
+          eq(reviews.id, id),
+          eq(reviews.ownerId, ownerId),
+          isNull(reviews.deletingAt),
+        )).get();
+        if (!exists) throw new ReviewNotFoundError(id);
+        throw new AnalysisConflictError(id);
+      }
+      return { revision: expectedRevision, runId: normalizedClaim.id };
+    });
   }
 
   saveRecognizedOcr(
@@ -999,6 +1097,50 @@ export class ReviewRepository {
       if (reviewUpdate.changes === 0) throw new AnalysisConflictError(id);
       const jobUpdate = transaction.update(analysisJobs).set({
         status: "failed",
+        errorCode,
+        message: null,
+        leaseExpiresAt: null,
+        finishedAt: now,
+      }).where(and(
+        eq(analysisJobs.id, claim.id),
+        eq(analysisJobs.ownerId, ownerId),
+        eq(analysisJobs.reviewId, id),
+        eq(analysisJobs.status, "running"),
+        eq(analysisJobs.attempt, claim.attempt),
+        eq(analysisJobs.leaseExpiresAt, claim.leaseExpiresAt),
+        gt(analysisJobs.leaseExpiresAt, now),
+      )).run();
+      if (jobUpdate.changes !== 1) throw new AnalysisJobCompletionClaimLostError(claim.id);
+    });
+  }
+
+  finishQueuedAnalysisBeforeToken(
+    ownerId: string,
+    id: string,
+    runId: string,
+    claim: AnalysisJobCompletionClaim,
+    target: "failed" | "canceled",
+    errorCode: string,
+  ): void {
+    if (!/^[A-Z0-9_]{1,64}$/.test(errorCode)) throw new TypeError("invalid analysis error code");
+    if (!Number.isSafeInteger(claim.attempt) || claim.attempt <= 0 || Number.isNaN(claim.leaseExpiresAt.valueOf())) {
+      throw new TypeError("invalid analysis job completion claim");
+    }
+    const now = this.now();
+    this.database.transaction((transaction) => {
+      transaction.update(reviews).set({
+        status: "failed",
+        updatedAt: now,
+        analysisRunId: null,
+      }).where(and(
+        eq(reviews.id, id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        eq(reviews.status, "analyzing"),
+        eq(reviews.analysisRunId, runId),
+      )).run();
+      const jobUpdate = transaction.update(analysisJobs).set({
+        status: target,
         errorCode,
         message: null,
         leaseExpiresAt: null,
@@ -1234,6 +1376,28 @@ export class ReviewRepository {
       .from(reviews)
       .where(and(eq(reviews.id, id), isNull(reviews.deletingAt)))
       .get() !== undefined;
+  }
+
+  private normalizeAnalysisJobClaim(
+    claim: AnalysisJobCompletionClaim,
+  ): AnalysisJobCompletionClaim {
+    if (
+      typeof claim !== "object" ||
+      claim === null ||
+      typeof claim.id !== "string" ||
+      claim.id.length === 0 ||
+      !Number.isSafeInteger(claim.attempt) ||
+      claim.attempt <= 0 ||
+      !(claim.leaseExpiresAt instanceof Date) ||
+      Number.isNaN(claim.leaseExpiresAt.valueOf())
+    ) {
+      throw new TypeError("invalid analysis job claim");
+    }
+    return {
+      id: claim.id,
+      attempt: claim.attempt,
+      leaseExpiresAt: new Date(claim.leaseExpiresAt.valueOf()),
+    };
   }
 
   private requireById(ownerId: string, id: string): ReviewRecord {

@@ -12,6 +12,10 @@ import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
 import { initializeSchema } from "../db/init";
 import { ReviewRepository, type ReviewImageInput } from "../db/review-repository";
 import * as schema from "../db/schema";
+import { AnalysisJobRepository } from "../jobs/analysis-job-repository";
+import { AnalysisJobService } from "../jobs/analysis-job-service";
+import { encodeOrdinaryBoundMarker } from "../jobs/analysis-job-metadata";
+import { AnalysisWorker } from "../jobs/analysis-worker";
 import { ReviewFileStore } from "../storage/review-file-store";
 import { PdfService } from "../pdf/pdf-service";
 import { InMemoryReviewLock } from "./review-lock";
@@ -108,6 +112,29 @@ describe("ReviewService analysis CAS", () => {
     } as never);
   }
 
+  function workerFor(reviews: ReviewService, jobs: AnalysisJobRepository): AnalysisWorker {
+    return new AnalysisWorker(jobs, {
+      prepare: (ownerId, reviewId, mode, claim, prebound) =>
+        prebound
+          ? reviews.prepareQueuedAnalysis(ownerId, reviewId, mode, claim)
+          : reviews.prepareAnalysis(ownerId, reviewId, mode, claim),
+      analyze: (input) => reviews.analyzePrepared(input),
+      save: (ownerId, reviewId, token, envelope, claim) =>
+        reviews.savePreparedAnalysisAndCompleteJob(ownerId, reviewId, token, envelope, claim),
+      fail: (ownerId, reviewId, token, claim, errorCode) =>
+        reviews.failPreparedAnalysisAndFailJob(ownerId, reviewId, token, claim, errorCode),
+      finishUnprepared: (ownerId, reviewId, runId, claim, target, errorCode) =>
+        reviews.finishQueuedAnalysisBeforeToken(
+          ownerId,
+          reviewId,
+          runId,
+          claim,
+          target,
+          errorCode,
+        ),
+    });
+  }
+
   it("将已保存的学生姓名传给 AI 分析", async () => {
     const analyze = vi.fn(async () => readyEnvelope);
     const service = serviceFor(analyze);
@@ -121,6 +148,200 @@ describe("ReviewService analysis CAS", () => {
     expect(analyze).toHaveBeenCalledWith(expect.objectContaining({
       studentName: "艾绮",
     }));
+  });
+
+  it("准备后台任务时原样使用预先入队的 job ID 作为 run ID", async () => {
+    const service = serviceFor(async () => readyEnvelope);
+
+    const prepared = await service.prepareAnalysis(
+      OWNER_ID,
+      "review-1",
+      "full",
+      "queued-job-1",
+    );
+
+    expect(prepared.token).toEqual({ revision: 1, runId: "queued-job-1" });
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "queued-job-1",
+    });
+  });
+
+  it("普通 full job 通过生产 Worker 准备路径调用 AI 并成功", async () => {
+    const analyze = vi.fn(async () => readyEnvelope);
+    const reviews = serviceFor(analyze);
+    const jobs = new AnalysisJobRepository(drizzle(sqlite, { schema }), {
+      createId: () => "ordinary-full-job",
+      leaseMs: 60_000,
+    });
+    new AnalysisJobService(jobs).enqueue(OWNER_ID, "review-1");
+    const worker = workerFor(reviews, jobs);
+
+    await expect(worker.runOnce()).resolves.toEqual({
+      jobId: "ordinary-full-job",
+      outcome: "succeeded",
+    });
+    expect(analyze).toHaveBeenCalledOnce();
+    expect(jobs.getById(OWNER_ID, "ordinary-full-job")).toMatchObject({ status: "succeeded" });
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "ready_for_review",
+      analysisRunId: null,
+    });
+  });
+
+  it("普通 content_only job 通过生产 Worker 准备路径调用 AI 并成功", async () => {
+    const review = sqlite.prepare(
+      "SELECT image_revision AS imageRevision FROM reviews WHERE id = ?",
+    ).get("review-1") as { imageRevision: number };
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 1,
+      sourceRevision: review.imageRevision,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "作文原文", readable: true, warnings: [], blocks: [] }],
+    }), "review-1");
+    const analyze = vi.fn(async () => readyEnvelope);
+    const reviews = serviceFor(analyze);
+    const jobs = new AnalysisJobRepository(drizzle(sqlite, { schema }), {
+      createId: () => "ordinary-content-job",
+      leaseMs: 60_000,
+    });
+    new AnalysisJobService(jobs).enqueue(OWNER_ID, "review-1", undefined, "content_only");
+
+    await expect(workerFor(reviews, jobs).runOnce()).resolves.toEqual({
+      jobId: "ordinary-content-job",
+      outcome: "succeeded",
+    });
+    expect(analyze).toHaveBeenCalledOnce();
+    expect(jobs.getById(OWNER_ID, "ordinary-content-job")).toMatchObject({ status: "succeeded" });
+  });
+
+  it("普通任务首次准备写入 bound marker，retry 后按 prebound 路径成功", async () => {
+    const analyze = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("temporary"), { code: "AI_REQUEST_FAILED" }))
+      .mockResolvedValueOnce(readyEnvelope);
+    const reviews = serviceFor(analyze);
+    const jobs = new AnalysisJobRepository(drizzle(sqlite, { schema }), {
+      createId: () => "ordinary-retry-job",
+      leaseMs: 60_000,
+    });
+    new AnalysisJobService(jobs).enqueue(OWNER_ID, "review-1");
+    const worker = workerFor(reviews, jobs);
+
+    await expect(worker.runOnce()).resolves.toEqual({
+      jobId: "ordinary-retry-job",
+      outcome: "retrying",
+      errorCode: "AI_REQUEST_FAILED",
+    });
+    expect(jobs.getById(OWNER_ID, "ordinary-retry-job")).toMatchObject({
+      status: "queued",
+      message: encodeOrdinaryBoundMarker(),
+      prebound: true,
+    });
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "ordinary-retry-job",
+    });
+
+    await expect(worker.runOnce()).resolves.toEqual({
+      jobId: "ordinary-retry-job",
+      outcome: "succeeded",
+    });
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(jobs.getById(OWNER_ID, "ordinary-retry-job")).toMatchObject({
+      status: "succeeded",
+      message: null,
+      prebound: false,
+    });
+  });
+
+  it("旧 Worker 的过期 claim 不能在新 Worker 重领后绑定 review 或调用 AI", async () => {
+    let now = new Date("2026-08-22T06:00:00.000Z");
+    const database = drizzle(sqlite, { schema });
+    const claimedRepository = new ReviewRepository(database, { now: () => now });
+    const analyze = vi.fn(async () => readyEnvelope);
+    const reviews = new ReviewService(claimedRepository, fileStore, { analyze } as never);
+    const jobs = new AnalysisJobRepository(database, {
+      now: () => now,
+      createId: () => "lease-race-job",
+      leaseMs: 1_000,
+      maxAttempts: 3,
+    });
+    new AnalysisJobService(jobs).enqueue(OWNER_ID, "review-1");
+    const enteredPrepare = deferred<void>();
+    const releasePrepare = deferred<void>();
+    const prepareWithClaim = (
+      ownerId: string,
+      reviewId: string,
+      mode: "full" | "content_only",
+      claim: { id: string; attempt: number; leaseExpiresAt: Date },
+      prebound: boolean,
+    ) => {
+      return prebound
+        ? reviews.prepareQueuedAnalysis(ownerId, reviewId, mode, claim)
+        : reviews.prepareAnalysis(ownerId, reviewId, mode, claim);
+    };
+    const execution = {
+      analyze: (input: Parameters<ReviewService["analyzePrepared"]>[0]) =>
+        reviews.analyzePrepared(input),
+      save: (
+        ownerId: string,
+        reviewId: string,
+        token: Parameters<ReviewService["savePreparedAnalysisAndCompleteJob"]>[2],
+        envelope: Parameters<ReviewService["savePreparedAnalysisAndCompleteJob"]>[3],
+        claim: Parameters<ReviewService["savePreparedAnalysisAndCompleteJob"]>[4],
+      ) => reviews.savePreparedAnalysisAndCompleteJob(ownerId, reviewId, token, envelope, claim),
+      fail: (
+        ownerId: string,
+        reviewId: string,
+        token: Parameters<ReviewService["failPreparedAnalysisAndFailJob"]>[2],
+        claim: Parameters<ReviewService["failPreparedAnalysisAndFailJob"]>[3],
+        errorCode: string,
+      ) => reviews.failPreparedAnalysisAndFailJob(ownerId, reviewId, token, claim, errorCode),
+    };
+    const workerOne = new AnalysisWorker(jobs, {
+      prepare: async (ownerId, reviewId, mode, claim, prebound) => {
+        enteredPrepare.resolve();
+        await releasePrepare.promise;
+        return prepareWithClaim(ownerId, reviewId, mode, claim, prebound);
+      },
+      ...execution,
+    }, { renewEveryMs: 60_000 });
+
+    const firstRun = workerOne.runOnce();
+    await enteredPrepare.promise;
+    now = new Date(now.valueOf() + 1_001);
+    const secondClaim = jobs.claimNext()!;
+    expect(secondClaim).toMatchObject({ id: "lease-race-job", attempt: 2, prebound: false });
+    releasePrepare.resolve();
+
+    await expect(firstRun).resolves.toEqual({ jobId: "lease-race-job", outcome: "claim_lost" });
+    expect(analyze).not.toHaveBeenCalled();
+    expect(claimedRepository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "draft",
+      analysisRunId: null,
+    });
+
+    let secondAvailable = true;
+    const workerTwo = new AnalysisWorker({
+      claimNext: () => {
+        if (!secondAvailable) return null;
+        secondAvailable = false;
+        return secondClaim;
+      },
+      updateProgress: (claim, stage) => jobs.updateProgress(claim, stage),
+      transition: (claim, status, options) => jobs.transition(claim, status, options),
+      renewLease: (id, expectedLeaseExpiresAt) => jobs.renewLease(id, expectedLeaseExpiresAt),
+      retry: (claim, errorCode) => jobs.retry(claim, errorCode),
+    }, {
+      prepare: prepareWithClaim,
+      ...execution,
+    }, { renewEveryMs: 60_000 });
+    await expect(workerTwo.runOnce()).resolves.toEqual({
+      jobId: "lease-race-job",
+      outcome: "succeeded",
+    });
+    expect(analyze).toHaveBeenCalledOnce();
   });
 
   it("分析期间改配置时丢弃旧结果且保持新配置的 draft", async () => {
