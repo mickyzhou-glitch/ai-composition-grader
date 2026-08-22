@@ -81,7 +81,11 @@ describe("最终交付的本机安全默认值", () => {
     expect(readme).toContain("OpenAI 兼容内容模型");
     expect(readme).toContain("Cloudflare D1");
     expect(readme).toContain("Cloudflare R2");
-    expect(readme).toContain("30 天到期时间");
+    expect(readme).not.toContain("30 天到期时间");
+    expect(readme).not.toMatch(/作文.{0,20}30 天.{0,20}(到期|删除)/u);
+    expect(readme).toContain("长期保留");
+    expect(readme).toContain("手动永久删除");
+    expect(readme).toContain("存储容量");
     expect(readme).toContain("第三方如何保存和处理数据，以其服务条款为准");
     expect(readme).toContain("不要把真实密钥、学生作文或数据库导出提交到 Git");
   });
