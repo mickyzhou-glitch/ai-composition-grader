@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
 
-import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
 import { ocrCheckpointSchema } from "../ocr/contracts";
+import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
+import {
+  ANALYSIS_JOB_METADATA_PREFIX,
+  REANALYSIS_PENDING_PDF_MARKER_PREFIX,
+  parseAnalysisJobMetadata,
+  readyReanalysisMarkerFromPending,
+} from "./analysis-job-metadata";
 import {
   analysisJobs,
   type AnalysisJobStatus,
@@ -30,6 +37,7 @@ export interface AnalysisJobRecord {
   createdAt: Date;
   startedAt: Date | null;
   finishedAt: Date | null;
+  prebound: boolean;
 }
 
 export interface ClaimedAnalysisJobRecord extends AnalysisJobRecord {
@@ -54,6 +62,14 @@ export interface AnalysisJobClaim {
   id: string;
   attempt: number;
   leaseExpiresAt: Date;
+}
+
+export interface PendingPdfCleanup {
+  jobId: string;
+  ownerId: string;
+  reviewId: string;
+  filename: string;
+  marker: string;
 }
 
 export class AnalysisJobNotFoundError extends Error {
@@ -134,6 +150,7 @@ const progressStages: readonly Exclude<AnalysisProgressStage, "queued">[] = [
 ];
 
 function toRecord(row: typeof analysisJobs.$inferSelect): AnalysisJobRecord {
+  const metadata = parseAnalysisJobMetadata(row.message);
   return {
     id: row.id,
     reviewId: row.reviewId,
@@ -150,6 +167,7 @@ function toRecord(row: typeof analysisJobs.$inferSelect): AnalysisJobRecord {
     createdAt: row.createdAt,
     startedAt: row.startedAt,
     finishedAt: row.finishedAt,
+    prebound: metadata?.prebound ?? false,
   };
 }
 
@@ -184,8 +202,10 @@ export class AnalysisJobRepository {
     assertId(reviewId, "reviewId");
     const normalizedGuidance = teacherGuidance?.trim() || null;
     if (mode !== "full" && mode !== "content_only") throw new TypeError("invalid analysis mode");
-    if (normalizedGuidance && normalizedGuidance.length > 1000) {
-      throw new TypeError("teacherGuidance must be at most 1000 characters");
+    if (normalizedGuidance && normalizedGuidance.length > MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS) {
+      throw new TypeError(
+        `teacherGuidance must be at most ${MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS} characters`,
+      );
     }
     const now = assertDate(this.now(), "now");
 
@@ -208,7 +228,7 @@ export class AnalysisJobRepository {
           .set({
             status: "canceled",
             errorCode: "REVIEW_UNAVAILABLE",
-            message: null,
+            message: this.preservedPendingPdfCleanupMessage(),
             leaseExpiresAt: null,
             finishedAt: now,
           })
@@ -294,6 +314,38 @@ export class AnalysisJobRepository {
     return row ? toRecord(row) : null;
   }
 
+  findPendingPdfCleanup(): PendingPdfCleanup | null {
+    const rows = this.database.select({
+      jobId: analysisJobs.id,
+      ownerId: analysisJobs.ownerId,
+      reviewId: analysisJobs.reviewId,
+      marker: analysisJobs.message,
+    }).from(analysisJobs).where(this.pendingPdfCleanupMarkerCondition())
+      .orderBy(asc(analysisJobs.createdAt), asc(analysisJobs.id))
+      .all();
+    for (const row of rows) {
+      const metadata = parseAnalysisJobMetadata(row.marker);
+      if (metadata?.kind === "reanalysis" && metadata.pdfCleanup && row.marker) {
+        return { ...row, marker: row.marker, filename: metadata.pdfCleanup.filename };
+      }
+    }
+    return null;
+  }
+
+  ackPdfCleanup(jobId: string, marker: string): boolean {
+    assertId(jobId, "jobId");
+    let readyMarker: string;
+    try {
+      readyMarker = readyReanalysisMarkerFromPending(marker);
+    } catch {
+      return false;
+    }
+    return this.database.update(analysisJobs).set({ message: readyMarker }).where(and(
+      eq(analysisJobs.id, jobId),
+      eq(analysisJobs.message, marker),
+    )).run().changes === 1;
+  }
+
   /** Reclaims expired leases then atomically claims one available queued job. */
   claimNext(): ClaimedAnalysisJobRecord | null {
     const now = assertDate(this.now(), "now");
@@ -305,7 +357,7 @@ export class AnalysisJobRepository {
       transaction.update(analysisJobs).set({
         status: "canceled",
         errorCode: "REVIEW_UNAVAILABLE",
-        message: null,
+        message: this.preservedPendingPdfCleanupMessage(),
         leaseExpiresAt: null,
         finishedAt: now,
       }).where(and(
@@ -313,12 +365,40 @@ export class AnalysisJobRepository {
         this.unavailableReviewCondition(),
       )).run();
 
+      const exhausted = transaction.select({
+        id: analysisJobs.id,
+        ownerId: analysisJobs.ownerId,
+        reviewId: analysisJobs.reviewId,
+        reviewRevision: reviews.revision,
+      }).from(analysisJobs).innerJoin(reviews, and(
+        eq(reviews.id, analysisJobs.reviewId),
+        eq(reviews.ownerId, analysisJobs.ownerId),
+      )).where(and(
+        eq(analysisJobs.status, "running"),
+        lte(analysisJobs.leaseExpiresAt, now),
+        sql`${analysisJobs.attempt} >= ${this.maxAttempts}`,
+      )).all();
+      for (const job of exhausted) {
+        transaction.update(reviews).set({
+          status: "failed",
+          analysisRunId: null,
+          updatedAt: now,
+        }).where(and(
+          eq(reviews.id, job.reviewId),
+          eq(reviews.ownerId, job.ownerId),
+          isNull(reviews.deletingAt),
+          eq(reviews.status, "analyzing"),
+          eq(reviews.analysisRunId, job.id),
+          eq(reviews.revision, job.reviewRevision),
+        )).run();
+      }
+
       transaction
         .update(analysisJobs)
         .set({
           status: "failed",
           errorCode: "ATTEMPTS_EXHAUSTED",
-          message: null,
+          message: this.preservedPendingPdfCleanupMessage(),
           leaseExpiresAt: null,
           finishedAt: now,
         })
@@ -337,12 +417,13 @@ export class AnalysisJobRepository {
           leaseExpiresAt: null,
           progressStage: "queued",
           errorCode: null,
-          message: null,
+          message: this.preservedInternalMetadataMessage(null),
         })
         .where(and(
           eq(analysisJobs.status, "running"),
           lte(analysisJobs.leaseExpiresAt, now),
           sql`${analysisJobs.attempt} < ${this.maxAttempts}`,
+          sql`(${analysisJobs.message} IS NULL OR NOT ${this.pendingPdfCleanupMarkerCondition()})`,
         ))
         .run();
 
@@ -365,6 +446,7 @@ export class AnalysisJobRepository {
           eq(analysisJobs.status, "queued"),
           lte(analysisJobs.availableAt, now),
           sql`${analysisJobs.attempt} < ${this.maxAttempts}`,
+          sql`(${analysisJobs.message} IS NULL OR NOT ${this.pendingPdfCleanupMarkerCondition()})`,
           sql`EXISTS (
             SELECT 1 FROM reviews
             WHERE reviews.id = ${analysisJobs.reviewId}
@@ -382,7 +464,7 @@ export class AnalysisJobRepository {
         leaseExpiresAt,
         progressStage: "reading_images",
         errorCode: null,
-        message: null,
+        message: this.preservedInternalMetadataMessage(null),
         startedAt: sql`coalesce(${analysisJobs.startedAt}, ${now.valueOf()})`,
         finishedAt: null,
       }).where(and(
@@ -390,6 +472,7 @@ export class AnalysisJobRepository {
         eq(analysisJobs.status, "queued"),
         lte(analysisJobs.availableAt, now),
         sql`${analysisJobs.attempt} < ${this.maxAttempts}`,
+        sql`(${analysisJobs.message} IS NULL OR NOT ${this.pendingPdfCleanupMarkerCondition()})`,
         sql`EXISTS (
           SELECT 1 FROM reviews
           WHERE reviews.id = ${analysisJobs.reviewId}
@@ -442,7 +525,10 @@ export class AnalysisJobRepository {
     if (requestedIndex !== currentIndex + 1) {
       throw new AnalysisJobTransitionError(current.status, current.status);
     }
-    const update = this.database.update(analysisJobs).set({ progressStage: stage, message })
+    const update = this.database.update(analysisJobs).set({
+      progressStage: stage,
+      message: this.preservedInternalMetadataMessage(message),
+    })
       .where(this.runningClaimCondition(normalizedClaim, assertDate(this.now(), "now"))).run();
     if (update.changes !== 1) throw new AnalysisJobLostClaimError(normalizedClaim.id);
     const updated = this.requireInternal(normalizedClaim.id);
@@ -485,7 +571,7 @@ export class AnalysisJobRepository {
       availableAt: now,
       progressStage: "queued",
       errorCode,
-      message: null,
+      message: this.preservedInternalMetadataMessage(null),
       leaseExpiresAt: null,
       finishedAt: null,
     }).where(this.runningClaimCondition(normalizedClaim, now)).run();
@@ -499,7 +585,7 @@ export class AnalysisJobRepository {
     return this.database.update(analysisJobs).set({
       status: "canceled",
       errorCode: "REVIEW_UNAVAILABLE",
-      message: null,
+      message: this.preservedPendingPdfCleanupMessage(),
       leaseExpiresAt: null,
       finishedAt: now,
     }).where(and(
@@ -565,5 +651,21 @@ export class AnalysisJobRepository {
         AND reviews.owner_id = ${analysisJobs.ownerId}
         AND reviews.deleting_at IS NOT NULL
     )`;
+  }
+
+  private pendingPdfCleanupMarkerCondition() {
+    return sql`substr(${analysisJobs.message}, 1, ${REANALYSIS_PENDING_PDF_MARKER_PREFIX.length}) = ${REANALYSIS_PENDING_PDF_MARKER_PREFIX}`;
+  }
+
+  private internalMetadataCondition() {
+    return sql`substr(${analysisJobs.message}, 1, ${ANALYSIS_JOB_METADATA_PREFIX.length}) = ${ANALYSIS_JOB_METADATA_PREFIX}`;
+  }
+
+  private preservedInternalMetadataMessage(fallback: string | null) {
+    return sql`CASE WHEN ${this.internalMetadataCondition()} THEN ${analysisJobs.message} ELSE ${fallback} END`;
+  }
+
+  private preservedPendingPdfCleanupMessage() {
+    return sql`CASE WHEN ${this.pendingPdfCleanupMarkerCondition()} THEN ${analysisJobs.message} ELSE NULL END`;
   }
 }

@@ -356,10 +356,22 @@ export class ReviewFileStore {
   ): Promise<T> {
     assertSafeSegment(ownerId);
     assertSafeSegment(reviewId);
+    const lockName = createHash("sha256").update(`${ownerId}\0${reviewId}`).digest("hex");
+    return this.withFilesystemLock(lockName, operation);
+  }
+
+  private async withCleanupQueueLock<T>(operation: () => Promise<T>): Promise<T> {
+    const lockName = createHash("sha256").update("cleanup-queue\0v1").digest("hex");
+    return this.withFilesystemLock(lockName, operation);
+  }
+
+  private async withFilesystemLock<T>(
+    lockName: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     await this.assertSafeRoot(true);
     const locksDirectory = path.join(this.rootDirectory, REVIEW_LOCKS_DIRECTORY);
     await ensureRealDirectory(this.rootDirectory, locksDirectory);
-    const lockName = createHash("sha256").update(`${ownerId}\0${reviewId}`).digest("hex");
     const lockDirectory = resolveInside(locksDirectory, lockName);
     const deadline = Date.now() + this.lockWaitMs;
 
@@ -620,7 +632,11 @@ export class ReviewFileStore {
   }
 
   async queuePdfCleanup(ownerId: string, reviewId: string, filenames: string[]): Promise<void> {
-    await this.queueFileCleanup(ownerId, reviewId, "pdf", filenames);
+    await this.queueFileCleanup(ownerId, reviewId, "pdf", filenames, true);
+  }
+
+  async queuePdfCleanupDurably(ownerId: string, reviewId: string, filenames: string[]): Promise<void> {
+    await this.queueFileCleanup(ownerId, reviewId, "pdf", filenames, false);
   }
 
   private async queueFileCleanup(
@@ -628,26 +644,29 @@ export class ReviewFileStore {
     reviewId: string,
     kind: ReviewStorageKind,
     filenames: string[],
+    bestEffort = true,
   ): Promise<void> {
     assertSafeSegment(ownerId);
     assertSafeSegment(reviewId);
     filenames.forEach(assertSafeSegment);
+    const operation = this.enqueueCleanup(() => this.withCleanupQueueLock(async () => {
+      const existing = await this.readCleanupQueue();
+      const unique = new Map(
+        [
+          ...existing,
+          ...filenames.map((filename) => ({ ownerId, reviewId, kind, filename })),
+        ].map((entry) => [
+          `${entry.ownerId}\0${entry.reviewId}\0${entry.kind}\0${entry.filename}`,
+          entry,
+        ]),
+      );
+      const queued = [...unique.values()];
+      await this.writeCleanupQueue(queued);
+      await this.retryFileCleanupExclusive(ownerId, reviewId, queued);
+    }));
+    if (!bestEffort) return operation;
     try {
-      await this.enqueueCleanup(async () => {
-        const existing = await this.readCleanupQueue();
-        const unique = new Map(
-          [
-            ...existing,
-            ...filenames.map((filename) => ({ ownerId, reviewId, kind, filename })),
-          ].map((entry) => [
-            `${entry.ownerId}\0${entry.reviewId}\0${entry.kind}\0${entry.filename}`,
-            entry,
-          ]),
-        );
-        const queued = [...unique.values()];
-        await this.writeCleanupQueue(queued);
-        await this.retryFileCleanupExclusive(ownerId, reviewId, queued);
-      });
+      await operation;
     } catch {
       // Old versions are unreferenced after the DB switch; cleanup is best-effort.
     }
@@ -657,13 +676,13 @@ export class ReviewFileStore {
     assertSafeSegment(ownerId);
     assertSafeSegment(reviewId);
     try {
-      await this.enqueueCleanup(async () => {
+      await this.enqueueCleanup(() => this.withCleanupQueueLock(async () => {
         await this.retryFileCleanupExclusive(
           ownerId,
           reviewId,
           await this.readCleanupQueue(),
         );
-      });
+      }));
     } catch {
       // A persisted entry remains available for a later retry.
     }

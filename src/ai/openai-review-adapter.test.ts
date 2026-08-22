@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import { formatRevisionTeacherGuidance } from "../reanalysis/contracts";
 import {
   OpenAIReviewAdapter,
   testOpenAIConnection,
@@ -630,16 +631,25 @@ describe("OpenAIReviewAdapter", () => {
 
   it("将老师补充观点作为重新分析的明确依据", async () => {
     const harness = setup([JSON.stringify(successEnvelope)]);
+    const teacherGuidance = formatRevisionTeacherGuidance(
+      "结尾主题与正文经历不一致",
+      "依据可辨认原文重新判断主题并修改建议",
+    );
 
     await harness.adapter.analyze({
       config,
       imageDataUrls: ["data:image/jpeg;base64,eA=="],
-      teacherGuidance: "请重点核对正文是否支撑“学会坚持”的结尾主题。",
+      teacherGuidance,
     } as AnalyzeCompositionInput & { teacherGuidance: string });
 
-    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
-    expect(serialized).toContain("老师补充观点");
-    expect(serialized).toContain("请重点核对正文是否支撑“学会坚持”的结尾主题。");
+    const request = harness.create.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemPrompt = request.messages.find(({ role }) => role === "system")?.content;
+    expect(systemPrompt).toContain("[不合适原因]");
+    expect(systemPrompt).toContain("[修改要求]");
+    expect(systemPrompt).toMatch(/与(?:可辨认)?原文冲突时，?以原文为准/u);
+    expect(systemPrompt).toContain("不得虚构关键经历");
   });
 
   it("兼容 ```json fenced JSON", async () => {

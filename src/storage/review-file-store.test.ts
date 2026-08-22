@@ -206,6 +206,85 @@ describe("ReviewFileStore", () => {
     await expect(store.readFile(OWNER, REVIEW, "images", "old.pdf")).resolves.toEqual(Buffer.from("image"));
   });
 
+  it("durable PDF cleanup 在队列无法持久化时抛错", async () => {
+    const blockedRoot = path.join(temporaryDirectory, "blocked-root");
+    await writeFile(blockedRoot, "not-a-directory");
+    const blockedStore = new ReviewFileStore(blockedRoot);
+
+    await expect(blockedStore.queuePdfCleanupDurably(OWNER, REVIEW, ["old.pdf"]))
+      .rejects.toBeInstanceOf(Error);
+  });
+
+  it("durable PDF cleanup 持久化后即使物理删除失败也保留队列并成功返回", async () => {
+    const outside = path.join(temporaryDirectory, "outside-old.pdf");
+    await writeFile(outside, "outside");
+    const paths = await store.createReview(OWNER, REVIEW);
+    await symlink(outside, path.join(paths.pdfDirectory, "old.pdf"));
+
+    await expect(store.queuePdfCleanupDurably(OWNER, REVIEW, ["old.pdf"]))
+      .resolves.toBeUndefined();
+    await expect(readFile(path.join(store.rootDirectory, ".cleanup-queue.json"), "utf8"))
+      .resolves.toContain('"filename":"old.pdf"');
+    await expect(readFile(outside, "utf8")).resolves.toBe("outside");
+
+    await rm(path.join(paths.pdfDirectory, "old.pdf"));
+    await writeFile(path.join(paths.pdfDirectory, "old.pdf"), "retry-me");
+    await expect(store.queuePdfCleanupDurably(OWNER, REVIEW, ["old.pdf"]))
+      .resolves.toBeUndefined();
+    await expect(readFile(path.join(paths.pdfDirectory, "old.pdf"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(path.join(store.rootDirectory, ".cleanup-queue.json"), "utf8"))
+      .rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("两个 store 实例并发为不同 review 入队时不会覆盖 cleanup entry", async () => {
+    const firstStore = new ReviewFileStore(store.rootDirectory);
+    const secondStore = new ReviewFileStore(store.rootDirectory);
+    const secondReview = "review-2";
+    const firstPaths = await firstStore.createReview(OWNER, REVIEW);
+    const secondPaths = await secondStore.createReview(OWNER, secondReview);
+    const outsideFirst = path.join(temporaryDirectory, "outside-first.pdf");
+    const outsideSecond = path.join(temporaryDirectory, "outside-second.pdf");
+    await Promise.all([
+      writeFile(outsideFirst, "first"),
+      writeFile(outsideSecond, "second"),
+    ]);
+    await Promise.all([
+      symlink(outsideFirst, path.join(firstPaths.pdfDirectory, "first.pdf")),
+      symlink(outsideSecond, path.join(secondPaths.pdfDirectory, "second.pdf")),
+    ]);
+    const firstWriteEntered = deferred<void>();
+    const releaseFirstWrite = deferred<void>();
+    const firstInternals = firstStore as unknown as {
+      writeCleanupQueue(entries: unknown[]): Promise<void>;
+    };
+    const originalWrite = firstInternals.writeCleanupQueue.bind(firstStore);
+    let blocked = false;
+    firstInternals.writeCleanupQueue = async (entries) => {
+      if (!blocked) {
+        blocked = true;
+        firstWriteEntered.resolve();
+        await releaseFirstWrite.promise;
+      }
+      await originalWrite(entries);
+    };
+
+    const first = firstStore.queuePdfCleanupDurably(OWNER, REVIEW, ["first.pdf"]);
+    await firstWriteEntered.promise;
+    const second = secondStore.queuePdfCleanupDurably(OWNER, secondReview, ["second.pdf"]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    releaseFirstWrite.resolve();
+    await Promise.all([first, second]);
+
+    const queued = JSON.parse(
+      await readFile(path.join(store.rootDirectory, ".cleanup-queue.json"), "utf8"),
+    ) as Array<{ reviewId: string; filename: string }>;
+    expect(queued).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reviewId: REVIEW, filename: "first.pdf" }),
+      expect.objectContaining({ reviewId: secondReview, filename: "second.pdf" }),
+    ]));
+  });
+
   it("stageDelete 可回滚或提交", async () => {
     await store.writeFile(OWNER, REVIEW, "images", "page.jpg", "page");
     const staged = await store.stageDelete(OWNER, REVIEW);

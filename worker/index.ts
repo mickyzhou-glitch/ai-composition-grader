@@ -5,6 +5,11 @@ import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
+import {
+  D1Reanalysis,
+  D1ReanalysisBatchError,
+  D1ReanalysisError,
+} from "../src/cloudflare/d1-reanalysis";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
@@ -25,6 +30,13 @@ import {
 } from "../src/cloudflare/cloud-analysis-pipeline";
 import { openSetting, sealSetting } from "../src/cloudflare/settings-secret";
 import type { ReviewView } from "../app/lib/types";
+import {
+  batchReanalysisCommitInputSchema,
+  batchReanalysisPreviewInputSchema,
+  REANALYSIS_SKIP_REASONS,
+  revisionRequestInputSchema,
+  type ReanalysisSkipCode,
+} from "../src/reanalysis/contracts";
 import { z, ZodError } from "zod";
 
 function apiError(code: string, message: string, status: number, details?: unknown): Response {
@@ -32,6 +44,69 @@ function apiError(code: string, message: string, status: number, details?: unkno
     ok: false,
     error: { code, message, ...(details === undefined ? {} : { details }) },
   }, { status, headers: { "cache-control": "no-store" } });
+}
+
+const reanalysisRouteIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+const reanalysisBusinessCodes = new Set<ReanalysisSkipCode>([
+  "REVIEW_NOT_FOUND",
+  "REVISION_CONFLICT",
+  "OCR_NOT_CURRENT",
+  "ANALYSIS_ACTIVE",
+  "REVIEW_UNAVAILABLE",
+]);
+
+function reanalysisCode(error: unknown): ReanalysisSkipCode | null {
+  const candidate = error instanceof D1ReanalysisError
+    ? error.code
+    : typeof error === "object" && error !== null && "code" in error
+      && reanalysisBusinessCodes.has(String(error.code) as ReanalysisSkipCode)
+      ? String(error.code) as ReanalysisSkipCode
+      : error instanceof Error && reanalysisBusinessCodes.has(error.message as ReanalysisSkipCode)
+        ? error.message as ReanalysisSkipCode
+        : null;
+  return candidate && reanalysisBusinessCodes.has(candidate) ? candidate : null;
+}
+
+function reanalysisFailure(error: unknown): Response {
+  const code = reanalysisCode(error);
+  if (!code) return apiError("INTERNAL_ERROR", "服务暂时不可用，请稍后重试", 500);
+  return apiError(
+    code,
+    code === "REVIEW_NOT_FOUND" ? "批改记录不存在" : REANALYSIS_SKIP_REASONS[code],
+    code === "REVIEW_NOT_FOUND" ? 404 : 409,
+  );
+}
+
+function queueDispatchFailure(): Response {
+  return apiError("QUEUE_DISPATCH_FAILED", "任务提交失败，请稍后重试", 503);
+}
+
+async function compensateQueueDispatch(
+  reanalysis: D1Reanalysis,
+  ownerId: string,
+  jobIds: string[],
+): Promise<Response> {
+  try {
+    await reanalysis.markDispatchFailed(ownerId, jobIds);
+    return queueDispatchFailure();
+  } catch {
+    return apiError("INTERNAL_ERROR", "服务暂时不可用，请稍后重试", 500);
+  }
+}
+
+async function failBatchCommit(
+  reanalysis: D1Reanalysis,
+  ownerId: string,
+  error: D1ReanalysisBatchError,
+): Promise<Response> {
+  if (error.jobIds.length > 0) {
+    try {
+      await reanalysis.markDispatchFailed(ownerId, error.jobIds);
+    } catch {
+      // The response remains deliberately generic whether compensation succeeds or fails.
+    }
+  }
+  return apiError("INTERNAL_ERROR", "服务暂时不可用，请稍后重试", 500);
 }
 
 type ValidationIssue = {
@@ -286,6 +361,77 @@ export default {
           revisionConflict ? undefined : validationErrorDetails(error),
         );
       }
+    }
+    const revisionRequestMatch = /^\/api\/reviews\/([^/]+)\/revision-request$/u.exec(url.pathname);
+    if (revisionRequestMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let reviewId: string;
+      let input: unknown;
+      try {
+        reviewId = decodeURIComponent(revisionRequestMatch[1]);
+        if (!reanalysisRouteIdPattern.test(reviewId)) throw new Error("INVALID_REANALYSIS_ID");
+        input = revisionRequestInputSchema.parse(await request.json());
+      } catch (error) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
+      }
+      const reanalysis = new D1Reanalysis(env.DB);
+      let result: Awaited<ReturnType<D1Reanalysis["requestRevision"]>>;
+      try {
+        result = await reanalysis.requestRevision(user.id, reviewId!, input as Parameters<D1Reanalysis["requestRevision"]>[2]);
+      } catch (error) {
+        return reanalysisFailure(error);
+      }
+      try {
+        await env.ANALYSIS_QUEUE.send({ jobId: result.job.id });
+      } catch {
+        return compensateQueueDispatch(reanalysis, user.id, [result.job.id]);
+      }
+      return Response.json({ ok: true, data: result }, {
+        status: 202,
+        headers: { "cache-control": "no-store" },
+      });
+    }
+    if (url.pathname === "/api/reviews/batch-reanalysis/preview" && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let reviewIds: string[];
+      try {
+        reviewIds = batchReanalysisPreviewInputSchema.parse(await request.json()).reviewIds;
+      } catch (error) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
+      }
+      try {
+        const data = await new D1Reanalysis(env.DB).preview(user.id, reviewIds);
+        return Response.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        return reanalysisFailure(error);
+      }
+    }
+    if (url.pathname === "/api/reviews/batch-reanalysis" && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let items: Parameters<D1Reanalysis["commitBatch"]>[1];
+      try {
+        items = batchReanalysisCommitInputSchema.parse(await request.json()).items;
+      } catch (error) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
+      }
+      const reanalysis = new D1Reanalysis(env.DB);
+      let data: Awaited<ReturnType<D1Reanalysis["commitBatch"]>>;
+      try {
+        data = await reanalysis.commitBatch(user.id, items);
+      } catch (error) {
+        if (error instanceof D1ReanalysisBatchError) {
+          return failBatchCommit(reanalysis, user.id, error);
+        }
+        return reanalysisFailure(error);
+      }
+      if (data.submitted.length > 0) {
+        try {
+          await env.ANALYSIS_QUEUE.sendBatch(data.submitted.map(({ jobId }) => ({ body: { jobId } })));
+        } catch {
+          return compensateQueueDispatch(reanalysis, user.id, data.submitted.map(({ jobId }) => jobId));
+        }
+      }
+      return Response.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
     }
     const reviewMatch = /^\/api\/reviews\/([^/]+)$/u.exec(url.pathname);
     if (reviewMatch && request.method === "GET") {

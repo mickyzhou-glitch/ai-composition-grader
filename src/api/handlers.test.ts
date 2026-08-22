@@ -23,8 +23,11 @@ import { ReviewFileStore } from "../storage/review-file-store";
 import {
   createAssignmentGuidanceRouteHandlers,
   createAnalyzeRouteHandlers,
+  createBatchReanalysisPreviewRouteHandlers,
+  createBatchReanalysisRouteHandlers,
   createReviewImagesRouteHandlers,
   createReviewExportCheckRouteHandlers,
+  createRevisionRequestRouteHandlers,
   createTeacherReviewQueueRouteHandlers,
   createTeacherReviewRouteHandlers,
   createReviewRouteHandlers,
@@ -73,6 +76,10 @@ function jsonRequest(url: string, method: string, body: unknown) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+}
+
+function expectNoStore(response: Response) {
+  expect(response.headers.get("cache-control")).toBe("no-store");
 }
 
 describe("settings route handlers", () => {
@@ -906,5 +913,303 @@ describe("review route handlers", () => {
     expect(response.status).toBe(409);
     expect(await json(response)).toMatchObject({ error: { code: "OCR_NOT_FOUND" } });
     expect(jobs.findLatestByReview(OWNER_ID, "review-1")).toBeNull();
+  });
+});
+
+describe("reanalysis route handlers", () => {
+  const revisionInput = {
+    expectedRevision: 3,
+    reason: "结尾没有扣题",
+    changeRequest: "重新分析结尾并保留有效细节",
+  };
+  const commitItem = {
+    reviewId: "review-1",
+    expectedRevision: 3,
+    assignmentId: "assignment-1",
+    expectedAssignmentUpdatedAt: "2026-01-01T00:00:00.000Z",
+  };
+
+  it("退回重分析合法请求返回 202，并使用路径 id 与解析后的字段", async () => {
+    const result = {
+      newlyQueued: true as const,
+      job: {
+        id: "job-1",
+        reviewId: "review-from-path",
+        mode: "content_only" as const,
+        status: "queued" as const,
+        progressStage: "queued" as const,
+        message: null,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        finishedAt: null,
+      },
+    };
+    const requestRevision = vi.fn(() => result);
+    const handlers = createRevisionRequestRouteHandlers({
+      reanalysisService: { requestRevision },
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(
+      jsonRequest("http://localhost/api/reviews/review-from-path/revision-request", "POST", revisionInput),
+      { params: Promise.resolve({ id: "review-from-path" }) },
+    );
+
+    expect(response.status).toBe(202);
+    expect(await json(response)).toEqual({ ok: true, data: result });
+    expectNoStore(response);
+    expect(requestRevision).toHaveBeenCalledWith(
+      OWNER_ID,
+      "review-from-path",
+      revisionInput,
+    );
+  });
+
+  it("批量预览返回 200，并保持 reviewIds 原顺序传给 service", async () => {
+    const result = { matched: [], skipped: [] };
+    const preview = vi.fn(() => result);
+    const handlers = createBatchReanalysisPreviewRouteHandlers({
+      reanalysisService: { preview },
+      ownerId: OWNER_ID,
+    });
+    const reviewIds = ["review-2", "review-1"];
+
+    const response = await handlers.POST(
+      jsonRequest("http://localhost/api/reanalysis/preview", "POST", { reviewIds }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ ok: true, data: result });
+    expectNoStore(response);
+    expect(preview).toHaveBeenCalledWith(OWNER_ID, reviewIds);
+  });
+
+  it("批量确认返回 submitted/skipped partial success", async () => {
+    const items = [commitItem];
+    const result = {
+      submitted: [{ reviewId: "review-1", jobId: "job-1", revision: 4 }],
+      skipped: [{
+        reviewId: "review-2",
+        code: "REVISION_CONFLICT" as const,
+        reason: "作文已更新，请重新预览",
+      }],
+    };
+    const commitBatch = vi.fn(() => result);
+    const handlers = createBatchReanalysisRouteHandlers({
+      reanalysisService: { commitBatch },
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(
+      jsonRequest("http://localhost/api/reanalysis", "POST", { items }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ ok: true, data: result });
+    expectNoStore(response);
+    expect(commitBatch).toHaveBeenCalledWith(OWNER_ID, items);
+  });
+
+  it.each([
+    ["revision JSON", "revision"],
+    ["revision body", "revision-body"],
+    ["revision unknown field", "revision-unknown"],
+    ["revision missing field", "revision-missing"],
+    ["revision invalid id", "revision-id"],
+    ["revision missing id", "revision-id-type"],
+    ["preview duplicate ids", "preview-duplicate"],
+    ["preview over limit", "preview-limit"],
+    ["preview invalid id", "preview-id"],
+    ["commit duplicate ids", "commit-duplicate"],
+    ["commit over limit", "commit-limit"],
+    ["commit invalid timestamp", "commit-timestamp"],
+  ])("%s 返回 400 且 service 不被调用", async (_name, kind) => {
+    const requestRevision = vi.fn();
+    const preview = vi.fn();
+    const commitBatch = vi.fn();
+    const revisionHandlers = createRevisionRequestRouteHandlers({
+      reanalysisService: { requestRevision },
+      ownerId: OWNER_ID,
+    });
+    const previewHandlers = createBatchReanalysisPreviewRouteHandlers({
+      reanalysisService: { preview },
+      ownerId: OWNER_ID,
+    });
+    const commitHandlers = createBatchReanalysisRouteHandlers({
+      reanalysisService: { commitBatch },
+      ownerId: OWNER_ID,
+    });
+    let response: Response;
+    if (kind === "revision") {
+      response = await revisionHandlers.POST(
+        new Request("http://localhost", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{",
+        }),
+        { params: Promise.resolve({ id: "review-1" }) },
+      );
+    } else if (kind === "revision-body") {
+      response = await revisionHandlers.POST(
+        jsonRequest("http://localhost", "POST", null),
+        { params: Promise.resolve({ id: "review-1" }) },
+      );
+    } else if (kind === "revision-unknown") {
+      response = await revisionHandlers.POST(
+        jsonRequest("http://localhost", "POST", { ...revisionInput, extra: true }),
+        { params: Promise.resolve({ id: "review-1" }) },
+      );
+    } else if (kind === "revision-missing") {
+      response = await revisionHandlers.POST(
+        jsonRequest("http://localhost", "POST", {
+          expectedRevision: revisionInput.expectedRevision,
+          reason: revisionInput.reason,
+        }),
+        { params: Promise.resolve({ id: "review-1" }) },
+      );
+    } else if (kind === "revision-id") {
+      response = await revisionHandlers.POST(
+        jsonRequest("http://localhost", "POST", revisionInput),
+        { params: Promise.resolve({ id: "review/1" }) },
+      );
+    } else if (kind === "revision-id-type") {
+      response = await revisionHandlers.POST(
+        jsonRequest("http://localhost", "POST", revisionInput),
+        { params: Promise.resolve({ id: undefined as never }) },
+      );
+    } else if (kind === "preview-duplicate") {
+      response = await previewHandlers.POST(
+        jsonRequest("http://localhost", "POST", { reviewIds: ["review-1", "review-1"] }),
+      );
+    } else if (kind === "preview-limit") {
+      response = await previewHandlers.POST(
+        jsonRequest("http://localhost", "POST", {
+          reviewIds: Array.from({ length: 21 }, (_, index) => `review-${index}`),
+        }),
+      );
+    } else if (kind === "preview-id") {
+      response = await previewHandlers.POST(
+        jsonRequest("http://localhost", "POST", { reviewIds: ["review/1"] }),
+      );
+    } else if (kind === "commit-duplicate") {
+      response = await commitHandlers.POST(
+        jsonRequest("http://localhost", "POST", { items: [commitItem, commitItem] }),
+      );
+    } else if (kind === "commit-limit") {
+      response = await commitHandlers.POST(
+        jsonRequest("http://localhost", "POST", {
+          items: Array.from({ length: 21 }, (_, index) => ({
+            ...commitItem,
+            reviewId: `review-${index}`,
+          })),
+        }),
+      );
+    } else {
+      response = await commitHandlers.POST(
+        jsonRequest("http://localhost", "POST", {
+          items: [{ ...commitItem, expectedAssignmentUpdatedAt: "not-a-timestamp" }],
+        }),
+      );
+    }
+    expect(response.status).toBe(400);
+    expectNoStore(response);
+    expect(requestRevision).not.toHaveBeenCalled();
+    expect(preview).not.toHaveBeenCalled();
+    expect(commitBatch).not.toHaveBeenCalled();
+  });
+
+  it("业务错误映射为稳定安全响应，并继续返回 no-store", async () => {
+    const conflictService = {
+      requestRevision: vi.fn(() => {
+        throw Object.assign(new Error("SQLITE path / secret"), {
+          code: "REVISION_CONFLICT",
+          status: 409,
+        });
+      }),
+    };
+    const conflictHandlers = createRevisionRequestRouteHandlers({
+      reanalysisService: conflictService,
+      ownerId: OWNER_ID,
+    });
+    const conflict = await conflictHandlers.POST(
+      jsonRequest("http://localhost", "POST", revisionInput),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(conflict.status).toBe(409);
+    const conflictBody = await json(conflict);
+    expect(conflictBody).toMatchObject({
+      ok: false,
+      error: { code: "REVISION_CONFLICT", message: "作文已更新，请重新预览" },
+    });
+    expect(JSON.stringify(conflictBody)).not.toContain("SQLITE path / secret");
+    expectNoStore(conflict);
+
+    const notFoundHandlers = createRevisionRequestRouteHandlers({
+      reanalysisService: {
+        requestRevision: vi.fn(() => {
+          throw Object.assign(new Error("owner or path details"), {
+            code: "REVIEW_NOT_FOUND",
+            status: 404,
+          });
+        }),
+      },
+      ownerId: OWNER_ID,
+    });
+    const notFound = await notFoundHandlers.POST(
+      jsonRequest("http://localhost", "POST", revisionInput),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(notFound.status).toBe(404);
+    const notFoundBody = await json(notFound);
+    expect(notFoundBody).toMatchObject({
+      ok: false,
+      error: { code: "REVIEW_NOT_FOUND", message: "批改记录不存在" },
+    });
+    expectNoStore(notFound);
+
+    const unknownHandlers = createRevisionRequestRouteHandlers({
+      reanalysisService: {
+        requestRevision: vi.fn(() => {
+          throw new Error("SQLITE /Users/micky/secret.db");
+        }),
+      },
+      ownerId: OWNER_ID,
+    });
+    const unknown = await unknownHandlers.POST(
+      jsonRequest("http://localhost", "POST", revisionInput),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+    expect(unknown.status).toBe(500);
+    const unknownBody = await json(unknown);
+    expect(unknownBody).toEqual({
+      ok: false,
+      error: { code: "INTERNAL_ERROR", message: "服务暂时不可用" },
+    });
+    expect(JSON.stringify(unknownBody)).not.toContain("/Users/micky/secret.db");
+    expectNoStore(unknown);
+  });
+
+  it("未知原型键错误不会误命中错误映射", async () => {
+    const handlers = createRevisionRequestRouteHandlers({
+      reanalysisService: {
+        requestRevision: vi.fn(() => {
+          throw Object.assign(new Error("prototype lookup detail"), {
+            code: "toString",
+          });
+        }),
+      },
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(
+      jsonRequest("http://localhost", "POST", revisionInput),
+      { params: Promise.resolve({ id: "review-1" }) },
+    );
+
+    expect(response.status).toBe(500);
+    expect(await json(response)).toEqual({
+      ok: false,
+      error: { code: "INTERNAL_ERROR", message: "服务暂时不可用" },
+    });
+    expectNoStore(response);
   });
 });

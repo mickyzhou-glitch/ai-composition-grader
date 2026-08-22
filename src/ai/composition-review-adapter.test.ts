@@ -3,6 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import { formatRevisionTeacherGuidance } from "../reanalysis/contracts";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "./openai-review-adapter";
 import { CompositionReviewAdapter } from "./composition-review-adapter";
 
@@ -97,6 +98,30 @@ describe("CompositionReviewAdapter", () => {
     expect(serialized).not.toContain("/api/ai/files/");
     expect(serialized).not.toContain('"x"');
     expect(serialized).not.toContain('"y"');
+  });
+
+  it("keeps revision guidance subordinate to recognizable source facts", async () => {
+    const harness = setup();
+    const teacherGuidance = formatRevisionTeacherGuidance(
+      "结尾主题与正文经历不一致",
+      "依据可辨认原文重新判断主题并修改建议",
+    );
+
+    await harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
+      teacherGuidance,
+      studentName: "小艾",
+    });
+
+    const request = harness.create.mock.calls[0][0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const systemPrompt = request.messages.find(({ role }) => role === "system")?.content;
+    expect(systemPrompt).toContain("[不合适原因]");
+    expect(systemPrompt).toContain("[修改要求]");
+    expect(systemPrompt).toMatch(/与(?:可辨认)?原文冲突时，?以原文为准/u);
+    expect(systemPrompt).toContain("不得虚构关键经历");
   });
 
   it("describes the complete report contract instead of relying on TypeScript type names", async () => {

@@ -172,6 +172,45 @@ async function mockBatchReviewFlow(page: Page) {
       });
       return;
     }
+    if (pathname === "/api/reviews/batch-reanalysis/preview" && request.method() === "POST") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: json({
+          matched: [{
+            reviewId: "review-1",
+            studentName: "张小明",
+            title: "成长中的一次选择 1",
+            expectedRevision: 1,
+            assignmentId: "assignment-latest",
+            assignmentUpdatedAt: "2026-08-22T09:30:00.000Z",
+          }],
+          skipped: [{
+            reviewId: "review-2",
+            studentName: "李安然",
+            title: "成长中的一次选择 2",
+            code: "FRAMEWORK_NOT_FOUND",
+            reason: "没有找到同名的已保存题目框架",
+          }],
+        }),
+      });
+      return;
+    }
+    if (pathname === "/api/reviews/batch-reanalysis" && request.method() === "POST") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: json({
+          submitted: [{ reviewId: "review-1", jobId: "job-reanalysis-1", revision: 2 }],
+          skipped: [{
+            reviewId: "review-2",
+            studentName: "李安然",
+            title: "成长中的一次选择 2",
+            code: "FRAMEWORK_NOT_FOUND",
+            reason: "没有找到同名的已保存题目框架",
+          }],
+        }),
+      });
+      return;
+    }
     const teacherReview = /^\/api\/reviews\/(review-\d)\/teacher-review$/u.exec(pathname);
     if (teacherReview) {
       const current = reviews.get(teacherReview[1])!;
@@ -223,6 +262,23 @@ for (const viewport of [
   { name: "桌面端", width: 1440, height: 1000 },
   { name: "390px 移动端", width: 390, height: 844 },
 ]) {
+  test(`${viewport.name}可预览并提交按最新框架批量重分析`, async ({ page }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await mockBatchReviewFlow(page);
+
+    await page.goto("/");
+    await page.getByRole("checkbox", { name: "选择《成长中的一次选择 1》" }).check();
+    await page.getByRole("checkbox", { name: "选择《成长中的一次选择 2》" }).check();
+    await page.getByRole("button", { name: "按最新框架重新分析" }).click();
+
+    await expect(page.getByRole("heading", { name: "按最新框架重新分析" })).toBeVisible();
+    await expect(page.getByText("没有找到同名的已保存题目框架", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "确认重新分析 1 篇" }).click();
+    await expect(page.locator(".batch-reanalysis-summary")).toHaveText("已提交 1 篇重新分析任务，1 篇保留选择");
+    await expect(page.getByText("已选择 1 篇", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
   test(`${viewport.name}可按学生姓名连续审核并核对待导出修改意见`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     const { requestedDetails } = await mockBatchReviewFlow(page);

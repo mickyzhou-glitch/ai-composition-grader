@@ -5,6 +5,13 @@ import type {
   NormalizedCrop,
   ReviewStatus,
 } from "@/src/domain/contracts";
+export type {
+  BatchReanalysisCommitItem,
+  BatchReanalysisCommitResult,
+  BatchReanalysisMatchedItem,
+  BatchReanalysisPreview,
+  BatchReanalysisSkippedItem,
+} from "@/src/reanalysis/contracts";
 
 export interface ReviewImageView {
   id: number;
@@ -38,4 +45,31 @@ export interface ReviewView {
   reportStale: boolean;
   hasPdf: boolean;
   pdfFilename: string | null;
+}
+
+export type PublicAnalysisJobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+
+export type PublicAnalysisJobProgressStage =
+  | "queued"
+  | "reading_images"
+  | "saving_ocr"
+  | "generating_review"
+  | "mapping_annotations"
+  | "validating_result"
+  | "saving_result";
+
+export interface PublicAnalysisJobView {
+  id: string;
+  reviewId: string;
+  mode: "content_only";
+  status: PublicAnalysisJobStatus;
+  progressStage: PublicAnalysisJobProgressStage;
+  message: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+}
+
+export interface RevisionRequestResult {
+  job: PublicAnalysisJobView;
+  newlyQueued: true;
 }

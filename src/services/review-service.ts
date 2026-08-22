@@ -331,7 +331,7 @@ export class ReviewService {
   }> {
     let prepared: PreparedReviewAnalysis;
     try {
-      prepared = await this.prepareAnalysis(ownerId, id);
+      prepared = await this.prepareAnalysis(ownerId, id, "full", this.createRunId());
     } catch (error) {
       if (error instanceof ReviewPreparationError) {
         await this.failPreparedAnalysis(ownerId, id, error.token);
@@ -358,12 +358,31 @@ export class ReviewService {
   async prepareAnalysis(
     ownerId: string,
     id: string,
-    mode: "full" | "content_only" = "full",
+    mode: "full" | "content_only",
+    run: string | AnalysisJobCompletionClaim,
+  ): Promise<PreparedReviewAnalysis> {
+    return this.prepareAnalysisInternal(ownerId, id, mode, run, false);
+  }
+
+  async prepareQueuedAnalysis(
+    ownerId: string,
+    id: string,
+    mode: "full" | "content_only",
+    claim: AnalysisJobCompletionClaim,
+  ): Promise<PreparedReviewAnalysis> {
+    return this.prepareAnalysisInternal(ownerId, id, mode, claim, true);
+  }
+
+  private async prepareAnalysisInternal(
+    ownerId: string,
+    id: string,
+    mode: "full" | "content_only",
+    run: string | AnalysisJobCompletionClaim,
+    queued: boolean,
   ): Promise<PreparedReviewAnalysis> {
     await this.recovery;
     return this.lock.runExclusive(id, () => this.fileStore.withReviewLock(ownerId, id, async () => {
       const review = this.get(ownerId, id);
-      await this.fileStore.migrateLegacyReview(ownerId, id);
       if (review.images.length < 1 || review.images.length > MAX_REVIEW_IMAGES) {
         throw new ReviewServiceError(
           "IMAGES_REQUIRED",
@@ -371,12 +390,12 @@ export class ReviewService {
           422,
         );
       }
-      const token = this.repository.beginAnalysis(
-        ownerId,
-        id,
-        this.createRunId(),
-        review.revision,
-      );
+      const token = typeof run === "string"
+        ? this.repository.beginAnalysis(ownerId, id, run, review.revision)
+        : queued
+          ? this.repository.beginQueuedAnalysis(ownerId, id, run, review.revision)
+          : this.repository.beginClaimedAnalysis(ownerId, id, run, review.revision);
+      await this.fileStore.migrateLegacyReview(ownerId, id);
       if (review.pdfFilename) {
         await this.fileStore.queuePdfCleanup(ownerId, id, [review.pdfFilename]);
       }
@@ -474,6 +493,26 @@ export class ReviewService {
   ): Promise<void> {
     return this.lock.runExclusive(id, async () =>
       this.repository.failAnalysisAndFailJob(ownerId, id, token, claim, errorCode),
+    );
+  }
+
+  async finishQueuedAnalysisBeforeToken(
+    ownerId: string,
+    id: string,
+    runId: string,
+    claim: AnalysisJobCompletionClaim,
+    target: "failed" | "canceled",
+    errorCode: string,
+  ): Promise<void> {
+    return this.lock.runExclusive(id, async () =>
+      this.repository.finishQueuedAnalysisBeforeToken(
+        ownerId,
+        id,
+        runId,
+        claim,
+        target,
+        errorCode,
+      ),
     );
   }
 }

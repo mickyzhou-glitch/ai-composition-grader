@@ -14,6 +14,8 @@ import { AuthService } from "../auth/auth-service";
 import { RetentionService } from "../retention/retention-service";
 import { AnalysisJobRepository } from "../jobs/analysis-job-repository";
 import { AnalysisJobService } from "../jobs/analysis-job-service";
+import { ReanalysisRepository } from "../reanalysis/reanalysis-repository";
+import { ReanalysisService } from "../reanalysis/reanalysis-service";
 
 export interface ApplicationServices {
   authService: AuthService;
@@ -23,6 +25,7 @@ export interface ApplicationServices {
   pdfService: PdfService;
   retentionService: RetentionService;
   analysisJobService: AnalysisJobService;
+  reanalysisService: ReanalysisService;
 }
 
 function createApplicationServices(): ApplicationServices {
@@ -41,6 +44,9 @@ function createApplicationServices(): ApplicationServices {
     audit: authRepository,
   });
   const aiReviewer = new OpenAIReviewAdapter(settingsService);
+  const reanalysisService = new ReanalysisService(
+    new ReanalysisRepository(database.db),
+  );
   return {
     authService: new AuthService(authRepository),
     settingsService,
@@ -56,6 +62,7 @@ function createApplicationServices(): ApplicationServices {
     }),
     retentionService,
     analysisJobService: new AnalysisJobService(analysisJobRepository),
+    reanalysisService,
   };
 }
 
