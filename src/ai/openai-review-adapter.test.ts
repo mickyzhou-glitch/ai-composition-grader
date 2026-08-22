@@ -478,7 +478,7 @@ describe("OpenAIReviewAdapter", () => {
     ).resolves.toEqual(successEnvelope);
   });
 
-  it("总体评价不是四条短句时修复后再保存", async () => {
+  it("总体评价条数不固定时直接保存", async () => {
     const verboseEnvelope = {
       ...successEnvelope,
       report: {
@@ -487,21 +487,18 @@ describe("OpenAIReviewAdapter", () => {
         painPoints: ["修改内容也没有拆成四个清楚的小点。"],
       },
     };
-    const harness = setup([
-      JSON.stringify(verboseEnvelope),
-      JSON.stringify(successEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(verboseEnvelope)]);
 
     await expect(
       harness.adapter.analyze({
         config,
         imageDataUrls: ["data:image/jpeg;base64,eA=="],
       }),
-    ).resolves.toEqual(successEnvelope);
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    ).resolves.toEqual(verboseEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("修复后评语仅超出推荐字数时仍保留可用批改结果", async () => {
+  it("评语超出推荐字数时仍保留可用批改结果", async () => {
     const verboseEnvelope = {
       ...successEnvelope,
       report: {
@@ -510,10 +507,7 @@ describe("OpenAIReviewAdapter", () => {
         painPoints: ["第三段需要继续补充收到礼物时的动作、神态和心理变化，让转折过程更加具体。"],
       },
     };
-    const harness = setup([
-      JSON.stringify(verboseEnvelope),
-      JSON.stringify(verboseEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(verboseEnvelope)]);
 
     await expect(
       harness.adapter.analyze({
@@ -521,7 +515,7 @@ describe("OpenAIReviewAdapter", () => {
         imageDataUrls: ["data:image/jpeg;base64,eA=="],
       }),
     ).resolves.toEqual(verboseEnvelope);
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("修复后五段范文仅未达到推荐总字数时仍保留可用批改结果", async () => {
