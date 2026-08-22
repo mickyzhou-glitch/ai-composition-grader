@@ -3,7 +3,6 @@ import { z } from "zod";
 
 import {
   evaluationReportSchema,
-  expectedSampleParagraphCount,
   type AssignmentConfig,
   type EvaluationReport,
 } from "../domain/contracts";
@@ -16,6 +15,7 @@ import {
   type OpenAICompatibleClient,
 } from "./openai-review-adapter";
 import { validateGeneratedReportSemantics } from "./review-semantics";
+import { buildSampleWritingRule } from "./sample-writing-requirements";
 
 const resultSchema = z.object({
   report: evaluationReportSchema,
@@ -62,10 +62,6 @@ function studentNameRule(studentName?: string): string {
 }
 
 function contentPrompt(input: AnalyzeOcrTextInput): string {
-  const expectedParagraphs = expectedSampleParagraphCount(input.config);
-  const sampleParagraphRule =
-    `sampleParagraphs 必须恰好 ${expectedParagraphs} 段，每段包含非空 title、text、suggestion；` +
-    `${expectedParagraphs} 段 text 合计 600-700 个汉字。`;
   return [
     "你是一名有十五年上海小升初教学经验的语文老师，负责依据已识别的作文原文完成批改。",
     `作文要求：${JSON.stringify(input.config)}`,
@@ -75,7 +71,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "themeFit 只能是 fits、partial、off_topic；偏题时 grade 必须为 C。grade 只能是 A+、A、A-、B+、B、B-、C。",
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
     "personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条修改项。每条 10-20 个汉字，只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
-    sampleParagraphRule,
+    buildSampleWritingRule(input.config),
     "示范段落必须保留原文的核心事件，不得编造关键经历；段首不要使用“那天、后来、最后、第二天、早晨、上午、中午、下午、傍晚、晚上、放学后、回家后”等时间词。",
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 pageIndex、category、anchorText、comment、isHighlight；不得返回 x、y 或其他图片坐标。anchorText 必须逐字来自相应页原文。",
@@ -99,6 +95,16 @@ function validationCode(error: unknown): string {
   if (error.message.includes("off_topic")) return "off_topic_grade";
   if (error.message.includes("annotation page")) return "annotation_page_index";
   return "validation_unknown";
+}
+
+function validationDetail(error: unknown): string {
+  if (
+    error instanceof Error &&
+    error.message.startsWith("sample paragraphs invalid:")
+  ) {
+    return error.message;
+  }
+  return validationCode(error);
 }
 
 function validateContentResult(
@@ -154,7 +160,7 @@ export class CompositionReviewAdapter {
           { role: "user", content: JSON.stringify({
             pages: input.pages,
             invalidResponse: content,
-            validationError: validationCode(initialError),
+            validationError: validationDetail(initialError),
             instruction: "修复 invalidResponse，使其严格符合系统要求；只返回修复后的完整 JSON 对象。",
           }) },
         ],

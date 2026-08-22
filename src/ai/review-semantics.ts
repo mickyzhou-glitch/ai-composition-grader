@@ -1,9 +1,6 @@
-import {
-  expectedSampleParagraphCount,
-  type AssignmentConfig,
-  type EvaluationReport,
-} from "../domain/contracts";
+import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import { validateSampleWritingRequirements } from "./sample-writing-requirements";
 
 const EXPECTED_PARENT_FEEDBACKS = [
   { style: "warm", title: "亲切详细" },
@@ -38,10 +35,7 @@ export function validateGeneratedReportSemantics(
       throw new Error("parent feedback semantics are invalid");
     }
   });
-  const expectedParagraphs = expectedSampleParagraphCount(config);
-  if (report.sampleParagraphs.length !== expectedParagraphs) {
-    throw new Error(`composition requires ${expectedParagraphs} sample paragraphs`);
-  }
+  validateSampleWritingRequirements(report.sampleParagraphs, config);
   const strengths = report.personalizedComment
     .split(/\r?\n/u)
     .map(normalizeFeedbackItem)
