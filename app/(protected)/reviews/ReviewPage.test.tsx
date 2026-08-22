@@ -83,13 +83,14 @@ describe("复核页", () => {
     }
   });
 
-  it("复核与导出入口持续显示自动删除期限", async () => {
+  it("复核与导出入口显示长期保留说明", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
       .mockImplementationOnce(() => json({ job: null }));
     render(<ReviewPage />);
 
-    expect(await screen.findByRole("note")).toHaveTextContent("导出 PDF 不会延长保存期限");
+    expect(await screen.findByRole("note")).toHaveTextContent("作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除");
+    expect(screen.queryByText(/30 天|到期|自动永久删除/u)).not.toBeInTheDocument();
   });
 
   it("在状态提示之后、作文复核工作区之前展示三份家长反馈", async () => {

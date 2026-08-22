@@ -81,7 +81,8 @@ describe("新建作文批改", () => {
     await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
 
     expect(screen.getByText(/请勿在图片中保留学生姓名、学号、班级、学校/)).toBeInTheDocument();
-    expect(screen.getByText(/30 天/)).toBeInTheDocument();
+    expect(screen.getByText(/长期保留/)).toBeInTheDocument();
+    expect(screen.queryByText(/30 天|到期|自动永久删除/u)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeDisabled();
     await confirmPrivacy(user);
     expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeEnabled();

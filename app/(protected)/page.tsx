@@ -8,6 +8,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadReviewPdf, downloadReviewPdfArchive } from "../lib/pdf-download";
+import { filterReviewsByStudentName } from "../lib/review-queue";
 import type { ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal } from "@/src/domain/contracts";
 
@@ -18,23 +19,6 @@ function reviewDate(value: string) {
     : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(date);
 }
 
-function expiryNotice(value: string | null) {
-  if (!value) return "尚未上传图片；草稿会在创建 24 小时后自动清理";
-  const expiry = new Date(value);
-  if (Number.isNaN(expiry.valueOf())) return "到期时间未知";
-  const remainingDays = Math.max(0, Math.ceil((expiry.valueOf() - Date.now()) / (24 * 60 * 60 * 1000)));
-  const date = new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Shanghai",
-  }).format(expiry);
-  return `将于 ${date} 自动永久删除（剩余 ${remainingDays} 天）`;
-}
-
-function expiresSoon(value: string | null | undefined) {
-  if (!value) return false;
-  const timestamp = new Date(value).valueOf();
-  return Number.isFinite(timestamp) && timestamp - Date.now() <= 3 * 24 * 60 * 60 * 1000;
-}
-
 export default function Home() {
   const [reviews, setReviews] = useState<ReviewView[]>([]);
   const [loading, setLoading] = useState(true);
@@ -43,6 +27,7 @@ export default function Home() {
   const [exporting, setExporting] = useState<string | null>(null);
   const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(() => new Set());
   const [batchExporting, setBatchExporting] = useState(false);
+  const [studentSearch, setStudentSearch] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -70,6 +55,13 @@ export default function Home() {
     review: reviews.filter(({ status }) => ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(status)).length,
     exported: reviews.filter(({ status }) => status === "exported").length,
   }), [reviews]);
+  const visibleReviews = useMemo(
+    () => filterReviewsByStudentName(reviews, studentSearch),
+    [reviews, studentSearch],
+  );
+  const selectedVisibleCount = visibleReviews.filter(({ id }) => selectedReviewIds.has(id)).length;
+  const hiddenSelectedCount = selectedReviewIds.size - selectedVisibleCount;
+  const allVisibleSelected = visibleReviews.length > 0 && selectedVisibleCount === visibleReviews.length;
 
   async function remove(review: ReviewView) {
     if (!window.confirm(`确认永久删除《${review.config.title}》？删除后不可恢复。`)) return;
@@ -114,9 +106,15 @@ export default function Home() {
   }
 
   function toggleAllReviews() {
-    setSelectedReviewIds((current) => (
-      current.size === reviews.length ? new Set() : new Set(reviews.map(({ id }) => id))
-    ));
+    setSelectedReviewIds((current) => {
+      const next = new Set(current);
+      if (visibleReviews.every(({ id }) => next.has(id))) {
+        visibleReviews.forEach(({ id }) => next.delete(id));
+      } else {
+        visibleReviews.forEach(({ id }) => next.add(id));
+      }
+      return next;
+    });
   }
 
   async function exportSelectedPdfs() {
@@ -159,10 +157,15 @@ export default function Home() {
             <div><p className="eyebrow">最近工作</p><h2 id="recent-title">批改历史</h2></div>
             <span className="muted">共 {reviews.length} 篇</span>
           </div>
+          <div className="history-tools">
+            <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></label>
+            <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
+          </div>
           {reviews.length ? (
             <div className="history-batch-actions">
-              <label><input type="checkbox" checked={reviews.length > 0 && selectedReviewIds.size === reviews.length} onChange={toggleAllReviews} /> 全选</label>
+              <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0} onChange={toggleAllReviews} /> 全选当前结果</label>
               <span className="muted">已选择 {selectedReviewIds.size} 篇</span>
+              {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
               <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || batchExporting || exporting !== null} onClick={() => void exportSelectedPdfs()}>
                 {batchExporting
                   ? "正在打包导出…"
@@ -183,7 +186,8 @@ export default function Home() {
             </div>
           ) : null}
           <div className="history-list">
-            {reviews.map((review) => (
+            {!loading && reviews.length > 0 && visibleReviews.length === 0 ? <p className="muted">没有找到该学生的作文</p> : null}
+            {visibleReviews.map((review) => (
               <article className="history-card" key={review.id}>
                 <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting} onChange={() => toggleReviewSelection(review.id)} /></label>
                 <div className="history-main">
@@ -194,7 +198,7 @@ export default function Home() {
                   </div>
                   <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
                   <p>{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
-                  <p className={expiresSoon(review.expiresAt) ? "expiry-notice expiry-notice--urgent" : "muted"}>{expiryNotice(review.expiresAt ?? null)}</p>
+                  <p className="muted">长期保留，可手动永久删除</p>
                 </div>
                 <div className="card-actions">
                   <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>进入复核</Link>

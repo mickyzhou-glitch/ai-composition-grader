@@ -70,11 +70,31 @@ describe("历史首页", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("/api/reviews/review-1", { method: "DELETE" });
   });
 
-  it("历史显示上传后的自动永久删除日期", async () => {
+  it("历史记录长期保留并提供批量审核入口", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([review]));
     render(<Home />);
 
-    expect(await screen.findByText(/自动永久删除（剩余/)).toBeInTheDocument();
+    expect(await screen.findByText("长期保留，可手动永久删除")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "开始批量审核" })).toHaveAttribute("href", "/reviews/batch");
+    expect(screen.queryByText(/30 天|到期|自动永久删除/u)).not.toBeInTheDocument();
+  });
+
+  it("可直接按学生姓名搜索且不匹配作文题目", async () => {
+    const reviews = [
+      review,
+      { ...review, id: "review-2", studentName: "李安然", config: { title: "张小明的礼物" } },
+    ];
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json(reviews));
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await screen.findByText("学生：张小明");
+    await user.type(screen.getByRole("searchbox", { name: "搜索学生姓名" }), "李安然");
+    expect(screen.getByText("学生：李安然")).toBeVisible();
+    expect(screen.queryByText("学生：张小明")).not.toBeInTheDocument();
+    await user.clear(screen.getByRole("searchbox", { name: "搜索学生姓名" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索学生姓名" }), "张小明");
+    expect(screen.queryByText("学生：李安然")).not.toBeInTheDocument();
   });
 
   it("没有记录时显示直接新建的空状态", async () => {

@@ -45,23 +45,6 @@ const stageLabels: Record<AnalysisJobView["progressStage"], string> = {
   saving_result: "正在保存结果",
 };
 
-function expiryNotice(value: string | null) {
-  if (!value) return "尚未上传图片；草稿会在创建 24 小时后自动清理。";
-  const expiry = new Date(value);
-  if (Number.isNaN(expiry.valueOf())) return "到期时间未知。";
-  const remainingDays = Math.max(0, Math.ceil((expiry.valueOf() - Date.now()) / (24 * 60 * 60 * 1000)));
-  const date = new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric", month: "long", day: "numeric", timeZone: "Asia/Shanghai",
-  }).format(expiry);
-  return `本作文将于 ${date} 自动永久删除（剩余 ${remainingDays} 天）；导出 PDF 不会延长保存期限。`;
-}
-
-function expiresSoon(value: string | null | undefined) {
-  if (!value) return false;
-  const timestamp = new Date(value).valueOf();
-  return Number.isFinite(timestamp) && timestamp - Date.now() <= 3 * 24 * 60 * 60 * 1000;
-}
-
 function isAbortError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -643,7 +626,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         {loadingAnalysisResult ? <div className="success-banner" role="status">AI 分析已完成，正在加载批改结果。</div> : null}
         {analysisJob && !loadingAnalysisResult && !analysisResultLoadFailed ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
         {review.reportStale && report ? <div className="stale-report-banner" role="alert"><span>批改报告基于旧版识别原文</span><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成批改</AsyncButton></div> : null}
-        <div className={`privacy-note ${expiresSoon(review.expiresAt) ? "expiry-notice--urgent" : ""}`} role="note">{expiryNotice(review.expiresAt ?? null)}</div>
+        <div className="privacy-note" role="note">作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除。</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
         <div className="review-view-tabs" role="tablist" aria-label="复核内容">
           <button type="button" role="tab" aria-selected={activeView === "report"} aria-controls="review-report-panel" onClick={() => setActiveView("report")}>批改报告</button>
