@@ -119,6 +119,15 @@ const CONCISE_FEEDBACK_RULE =
 const ADVANCED_NARRATIVE_RULE =
   "你是一名有十五年上海小升初教学经验的语文老师，做一对一修改辅导。评价必须专业、具体、可操作，绝不空泛表扬或批评。核心目标是把小学生的流水账升级为六年级完整记叙文：必须完成五段式，围绕一个真实生活事件，有清晰的起因、转折、自己的行动、结果和感悟；关键情节必须写出可感知的动作、心理、语言或环境细节，而不是只概括“爸爸很爱我”。优先检查真实生活和真情实感，不能编造脱离原文的故事；倒叙、插叙仅在自然且能服务主题时作为加分项。";
 
+const LIFE_LOGIC_REVIEW_RULE = [
+  "必须先核对时间、地点和行动能否同时成立。",
+  "核对人物年龄、身份、关系与行为能力是否符合日常生活。",
+  "核对人物称呼、物品归属与状态、事件顺序，以及原因是否足以推出结果。",
+  "必须区分少见但可能与明显矛盾；没有原文证据时不得判错。",
+  "无法确认时在 diagnostics 的 action 写明“请向学生核实”，不得虚构关键经历。",
+  "严重矛盾导致核心事件无法成立时 grade 必须为 C。",
+].join("\n");
+
 const PARENT_FEEDBACK_RULE =
   "parentFeedbacks 必须按固定顺序生成恰好三份风格真正不同的反馈：①style=warm、title=亲切详细，语气温和并展开交流；②style=professional、title=专业清晰，使用客观、条理清楚的教学表达；③style=concise、title=简短微信版，适合微信快速阅读。每份都是一份完整、可直接发送的家长反馈，都必须基于本次原文写明一个具体优点、一个具体段落问题和对应修改方法，不能只换同义词或机械缩短。只陈述本次作文中有证据的事实；不掌握历史时不得出现“相比上次”“这次进步”等比较，不得推断妈妈、爸爸或学生性别。";
 
@@ -144,6 +153,7 @@ function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, student
     "sampleParagraphs 必须恰好五段，按上述五段式或题目指定结构排列；title 要能说明段落任务。示范文须保留学生原有核心事件和表达气质，不虚构关键经历；仅 text 合计控制在 600-700 个汉字，每段 suggestion 给出一句可执行的写法提醒。每一段正文开头严禁使用“那天、后来、最后、第二天、一天、早晨、上午、中午、下午、傍晚、晚上、放学后、回家后”等时间词，必须用承接上一段的动作、情绪、对比、因果或核心物件开篇。写前先理清“谁、和谁、因为什么、经过什么、结果怎样”的单一事件线：同一关系只用同一个称呼和人物，不得把朋友、同学、老师等无关人物混入同一事件；原文出现人物关系断裂、无关争吵或枝节时，示范文必须直接删去、合并或改写为与核心人物一致的情节，绝不保留多余人物。";
   return [
     ADVANCED_NARRATIVE_RULE,
+    LIFE_LOGIC_REVIEW_RULE,
     `作业模板与自定义要求：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
     teacherGuidance?.trim()
@@ -172,6 +182,7 @@ function buildContinueAnalysisPrompt(
   return [
     "系统已接收到完整作文图片。请继续完成批改，不要因为手写字、局部阴影、个别字词或标点不确定而要求重拍。无法确认的位置可以跳过批注，但必须依据可读内容输出完整 report。只有整页空白、图片损坏，或核心事件与大部分正文完全无法读取时，才允许 readable=false。",
     ADVANCED_NARRATIVE_RULE,
+    LIFE_LOGIC_REVIEW_RULE,
     GRADE_RULE,
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
@@ -203,6 +214,7 @@ function buildRepairPrompt(
     buildStudentNameRule(studentName),
     "五段结构核对：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目 structureRequirements 优先。结构问题要用 annotation.category=structure 标注在原文确实能辨认的整句或段落起点；坐标不确定则不要标注。",
     `${ADVANCED_NARRATIVE_RULE}\n\n${GRADE_RULE}`,
+    LIFE_LOGIC_REVIEW_RULE,
     sampleRule,
     SAMPLE_PARAGRAPH_TRANSITION_RULE,
     CONCISE_FEEDBACK_RULE,
@@ -616,6 +628,7 @@ export class OpenAIReviewAdapter {
           `要重写第 ${input.index + 1} 段：${JSON.stringify(current)}`,
           `教师附加要求：${input.instruction?.trim() || "请换一种更具体、更自然的写法。"}`,
           SAMPLE_PARAGRAPH_TRANSITION_RULE,
+          LIFE_LOGIC_REVIEW_RULE,
           "必须坚持一条清楚的事件线，统一人物称呼和关系；删除无关人物、无关争吵与枝节，不得凭空增添关键经历。只返回 JSON：{\"text\":\"重写后的这一段正文\"}。",
         ].join("\n\n"),
       }],
@@ -692,6 +705,7 @@ export class OpenAIReviewAdapter {
           `当前五段范文：${JSON.stringify(input.sampleParagraphs)}`,
           `教师附加要求：${input.instruction?.trim() || "请整体提升细节、逻辑和前后衔接。"}`,
           SAMPLE_PARAGRAPH_TRANSITION_RULE,
+          LIFE_LOGIC_REVIEW_RULE,
           "必须输出严格五段。人物称呼、关系、时间顺序和事件因果必须统一；只保留一条核心事件线，删去无关人物、无关争吵和枝节，不得凭空增加关键经历。五段 text 合计 600-700 个汉字，且每段正文不得以时间词开头。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。",
         ].join("\n\n"),
       }],

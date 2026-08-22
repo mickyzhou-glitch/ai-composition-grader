@@ -39,6 +39,15 @@ const CONTENT_RESULT_SCHEMA = [
   "annotationAnchors={pageIndex:integer,category:typo|punctuation|sentence|expression|structure|highlight,anchorText:string,comment:string,isHighlight:boolean}[]",
 ].join("\n");
 
+const LIFE_LOGIC_REVIEW_RULE = [
+  "必须先核对时间、地点和行动能否同时成立。",
+  "核对人物年龄、身份、关系与行为能力是否符合日常生活。",
+  "核对人物称呼、物品归属与状态、事件顺序，以及原因是否足以推出结果。",
+  "必须区分少见但可能与明显矛盾；没有原文证据时不得判错。",
+  "无法确认时在 diagnostics 的 action 写明“请向学生核实”，不得虚构关键经历。",
+  "严重矛盾导致核心事件无法成立时 grade 必须为 C。",
+].join("\n");
+
 function studentNameRule(studentName?: string): string {
   const normalizedName = studentName?.trim() ?? "";
   if (!normalizedName) {
@@ -60,6 +69,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     `作文要求：${JSON.stringify(input.config)}`,
     studentNameRule(input.studentName),
     input.teacherGuidance?.trim() ? `教师补充意见（与原文冲突时以原文为准）：${input.teacherGuidance.trim()}` : "",
+    LIFE_LOGIC_REVIEW_RULE,
     "themeFit 只能是 fits、partial、off_topic；偏题时 grade 必须为 C。grade 只能是 A+、A、A-、B+、B、B-、C。",
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
     "personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条修改项。每条 10-20 个汉字，只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",

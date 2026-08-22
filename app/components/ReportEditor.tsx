@@ -29,9 +29,9 @@ const gradeOptions: Array<{ value: CompositionGrade; label: string }> = [
 ];
 
 const diagnosticLabels: Array<[keyof Diagnostics, string, string]> = [
-  ["authenticityAndRelevance", "真实度与切题", "内容是否真实，是否围绕题目和结尾主题"],
+  ["authenticityAndRelevance", "生活常识与真实度", "事件是否符合生活常识，是否有原文证据支撑"],
   ["materialAndDetails", "素材与细节", "素材是否恰当，关键场景是否写出动作、心理和画面"],
-  ["structure", "五段结构", "开篇、发展、转折、行动、感悟是否完整且衔接清楚"],
+  ["structure", "前后逻辑与结构", "事件顺序、因果和段落衔接是否完整清楚"],
   ["language", "语言流畅度", "句子和段落是否自然，是否摆脱时间词开头的流水账"],
 ];
 

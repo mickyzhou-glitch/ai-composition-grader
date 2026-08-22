@@ -113,6 +113,18 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("小艾家长");
     expect(prompt).toContain("sampleParagraphs 必须恰好五段");
     expect(prompt).toContain("annotationAnchors={pageIndex:integer");
+    for (const phrase of [
+      "少见但可能",
+      "时间、地点和行动",
+      "人物年龄、身份、关系与行为能力",
+      "物品归属与状态",
+      "原因是否足以推出结果",
+      "请向学生核实",
+      "不得虚构关键经历",
+      "严重矛盾导致核心事件无法成立时 grade 必须为 C",
+    ]) {
+      expect(prompt).toContain(phrase);
+    }
   });
 
   it("disables DeepSeek default thinking mode for content generation", async () => {

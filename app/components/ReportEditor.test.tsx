@@ -97,6 +97,8 @@ describe("ReportEditor", () => {
 
     expect(screen.getByRole("combobox", { name: "作文等级" })).toHaveValue("C");
     expect(screen.getByLabelText("素材与细节精准定位")).toBeInTheDocument();
+    expect(screen.getByText("生活常识与真实度")).toBeInTheDocument();
+    expect(screen.getByText("前后逻辑与结构")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "主题判断" }), { target: { value: "off_topic" } });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({ themeFit: "off_topic", grade: "C" }));
   });
