@@ -53,7 +53,7 @@ function isAbortError(error: unknown) {
 const diagnosticFieldLabels: Record<string, string> = {
   authenticityAndRelevance: "真实度与切题",
   materialAndDetails: "素材与细节",
-  structure: "五段结构",
+  structure: "结构要求",
   language: "语言流畅度",
 };
 

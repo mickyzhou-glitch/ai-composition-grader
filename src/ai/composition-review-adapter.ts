@@ -16,6 +16,7 @@ import {
 } from "./openai-review-adapter";
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import { buildSampleWritingRule } from "./sample-writing-requirements";
+import { buildStructureReviewRule } from "./structure-review-requirements";
 
 const resultSchema = z.object({
   report: evaluationReportSchema,
@@ -68,6 +69,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     studentNameRule(input.studentName),
     input.teacherGuidance?.trim() ? `教师补充意见（与原文冲突时以原文为准）：${input.teacherGuidance.trim()}` : "",
     LIFE_LOGIC_REVIEW_RULE,
+    buildStructureReviewRule(input.config.structureRequirements),
     "themeFit 只能是 fits、partial、off_topic；偏题时 grade 必须为 C。grade 只能是 A+、A、A-、B+、B、B-、C。",
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
     "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条 10-20 个汉字，只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
@@ -88,6 +90,7 @@ function validationCode(error: unknown): string {
     return `schema_${path}_${issue?.code || "invalid"}`.slice(0, 64);
   }
   if (!(error instanceof Error)) return "validation_unknown";
+  if (error.message.startsWith("structure coverage invalid")) return "structure_coverage";
   if (error.message.includes("parent feedback count")) return "parent_feedback_count";
   if (error.message.includes("parent feedback semantics")) return "parent_feedback_semantics";
   if (error.message.includes("sample paragraphs")) return "sample_paragraphs";
