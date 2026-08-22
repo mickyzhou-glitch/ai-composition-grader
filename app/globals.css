@@ -127,6 +127,51 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .history-tools { display: flex; align-items: end; justify-content: space-between; gap: 12px; margin: -4px 0 18px; }
 .history-search { display: grid; gap: 6px; width: min(100%, 360px); color: var(--muted); font-size: .82rem; font-weight: 700; }
 .history-search input { width: 100%; }
+.batch-review-shell { min-height: 100dvh; }
+.batch-review-page { min-height: calc(100dvh - 68px); background: var(--paper); }
+.batch-review-topbar { min-height: 78px; padding: 12px 20px; display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(120px, 1fr); align-items: center; gap: 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.batch-review-topbar h1 { margin: 0; font-size: 1.45rem; }
+.batch-review-topbar .button { justify-self: end; }
+.segmented-control { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.segmented-control button { min-height: 34px; padding: 6px 12px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-weight: 700; }
+.segmented-control button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgb(40 34 28 / 12%); }
+.batch-review-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(360px, 1.15fr) minmax(340px, .85fr); grid-template-rows: minmax(0, 1fr) 64px; height: calc(100dvh - 146px); min-height: 560px; }
+.batch-queue, .batch-essay-pane, .batch-report-pane { min-width: 0; min-height: 0; overflow: auto; }
+.batch-queue { grid-row: 1 / 3; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); }
+.batch-queue > label { display: grid; gap: 6px; font-size: .8rem; font-weight: 700; color: var(--muted); }
+.batch-queue-list { display: grid; gap: 4px; margin-top: 12px; }
+.batch-queue-list button { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 2px 8px; width: 100%; min-height: 58px; padding: 9px; border: 1px solid transparent; border-radius: 5px; background: transparent; text-align: left; }
+.batch-queue-list button:hover, .batch-queue-list button.is-active { border-color: var(--line); background: var(--paper); }
+.batch-queue-list button.is-active { box-shadow: inset 3px 0 var(--teal); }
+.batch-queue-list span { grid-row: 1 / 3; align-self: center; color: var(--muted); font-variant-numeric: tabular-nums; }
+.batch-queue-list b, .batch-queue-list small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-queue-list small { color: var(--muted); }
+.batch-essay-pane { padding: 18px; border-right: 1px solid var(--line); background: #f2f1ed; }
+.batch-pane-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.batch-pane-heading h2 { margin: 0; font-size: 1.35rem; overflow-wrap: anywhere; }
+.batch-pane-heading > span { color: var(--muted); text-align: right; overflow-wrap: anywhere; }
+.batch-essay-content { display: grid; gap: 16px; }
+.batch-essay-content figure { margin: 0; }
+.batch-essay-content img { display: block; width: 100%; height: auto; min-height: 220px; object-fit: contain; background: white; border: 1px solid var(--line); }
+.batch-essay-content figcaption { margin-top: 5px; color: var(--muted); font-size: .8rem; text-align: center; }
+.batch-ocr { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); }
+.batch-ocr p { white-space: pre-wrap; }
+.batch-report-pane { padding: 16px; background: var(--paper); }
+.batch-student-name { display: grid; gap: 6px; margin-bottom: 12px; font-weight: 700; }
+.batch-report-pane .report-editor { padding-bottom: 20px; }
+.batch-review-footer { grid-column: 2 / 4; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--surface); box-shadow: 0 -3px 10px rgb(40 34 28 / 7%); }
+.batch-review-footer span { color: var(--muted); font-size: .85rem; }
+.batch-export-view { width: min(1100px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 48px; }
+.batch-export-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.review-export-list { display: grid; gap: 12px; }
+.review-export-item { padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
+.review-export-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.review-export-heading h3, .review-export-heading p { margin: 0; overflow-wrap: anywhere; }
+.review-export-heading time { color: var(--muted); font-size: .82rem; }
+.review-export-comments { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.review-export-comments section { padding: 10px 12px; border-left: 3px solid var(--teal); background: var(--paper); }
+.review-export-comments h4, .review-export-comments p { margin: 0 0 5px; overflow-wrap: anywhere; }
+.batch-empty { padding: 40px 20px; text-align: center; }
 .history-list { display: grid; gap: 12px; }
 .history-batch-actions { display: flex; margin: -6px 0 14px; align-items: center; gap: 12px; flex-wrap: wrap; }
 .history-batch-actions label, .history-select { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .86rem; font-weight: 700; }
@@ -384,6 +429,15 @@ textarea { min-height: 100px; resize: vertical; }
 .analysis-guide p { max-width: 480px; color: var(--muted); }
 
 @media (max-width: 768px) {
+  .batch-review-topbar { grid-template-columns: 1fr auto; }
+  .batch-review-topbar .segmented-control { grid-row: 2; grid-column: 1 / 3; width: 100%; }
+  .batch-review-topbar .segmented-control button { flex: 1; }
+  .batch-review-layout { display: block; height: auto; min-height: 0; }
+  .batch-queue { max-height: 250px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .batch-essay-pane, .batch-report-pane { overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
+  .batch-review-footer { position: sticky; bottom: 0; z-index: 10; flex-wrap: wrap; }
+  .batch-review-footer .button { flex: 1 1 260px; }
+  .review-export-comments { grid-template-columns: 1fr; }
   .app-header { width: calc(100% - 32px); padding: 13px 0; align-items: flex-start; }
   .wordmark { font-size: .9rem; }
   .seal { width: 32px; height: 32px; }
