@@ -101,6 +101,20 @@ function sampleParagraphRepairPrompt(
   const maximumCharactersPerParagraph = Math.floor(
     expected.maximumCharacters / expected.paragraphCount,
   );
+  const actualCharacters = Number(
+    /actualCharacters=(\d+)/u.exec(validationError)?.[1] ?? Number.NaN,
+  );
+  const adjustmentRule = Number.isFinite(actualCharacters) && actualCharacters < expected.minimumCharacters
+    ? `当前正文合计只有 ${actualCharacters} 个汉字，必须在现有内容基础上扩写，` +
+      `不得删减；每段至少新增 ${Math.ceil(
+        (expected.minimumCharacters - actualCharacters) / expected.paragraphCount,
+      )} 个汉字，并补充符合原文的动作、语言、心理或场景细节。`
+    : Number.isFinite(actualCharacters) && actualCharacters > expected.maximumCharacters
+      ? `当前正文合计已有 ${actualCharacters} 个汉字，必须精简重复表达，` +
+        `每段至少删减 ${Math.ceil(
+          (actualCharacters - expected.maximumCharacters) / expected.paragraphCount,
+        )} 个汉字。`
+      : "";
 
   return [
     "你只修复示范作文正文，不要返回标题、修改建议或报告其他字段。",
@@ -108,6 +122,7 @@ function sampleParagraphRepairPrompt(
     buildSampleWritingRule(input.config),
     `每段 text 各写 ${minimumCharactersPerParagraph}-${maximumCharactersPerParagraph} 个汉字，` +
       `${expected.paragraphCount} 段合计必须为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字。`,
+    adjustmentRule,
     "保留原文的核心材料，不得编造关键内容；文体、结构、段落顺序和衔接方式必须服从教师配置。",
     `校验失败原因：${validationError}`,
     '只返回 JSON：{"texts":["第一段正文","第二段正文"]}。',
@@ -201,51 +216,66 @@ export class CompositionReviewAdapter {
       return validateContentResult(content, input);
     } catch (initialError) {
       if (validationCode(initialError) === "sample_paragraphs") {
-        try {
-          const original = resultSchema.parse(parseJsonResponse(content));
-          const repaired = await completionContent(client, {
-            ...requestOptions,
-            messages: [
-              {
-                role: "system",
-                content: sampleParagraphRepairPrompt(input, validationDetail(initialError)),
-              },
-              {
-                role: "user",
-                content: JSON.stringify({
-                  pages: input.pages,
-                  currentSampleParagraphs: original.report.sampleParagraphs,
-                }),
-              },
-            ],
-          });
-          const { texts } = sampleParagraphRepairSchema.parse(
-            parseJsonResponse(repaired),
-          );
-          if (texts.length !== original.report.sampleParagraphs.length) {
-            throw new Error(
-              `sample paragraphs invalid: expectedParagraphs=${original.report.sampleParagraphs.length}; ` +
-              `actualParagraphs=${texts.length}`,
+        const original = resultSchema.parse(parseJsonResponse(content));
+        let currentSampleParagraphs = original.report.sampleParagraphs;
+        let currentValidationError: unknown = initialError;
+        let finalRepairError: unknown = initialError;
+
+        for (let repairAttempt = 0; repairAttempt < 2; repairAttempt += 1) {
+          try {
+            const repaired = await completionContent(client, {
+              ...requestOptions,
+              messages: [
+                {
+                  role: "system",
+                  content: sampleParagraphRepairPrompt(
+                    input,
+                    validationDetail(currentValidationError),
+                  ),
+                },
+                {
+                  role: "user",
+                  content: JSON.stringify({
+                    pages: input.pages,
+                    currentSampleParagraphs,
+                  }),
+                },
+              ],
+            });
+            const { texts } = sampleParagraphRepairSchema.parse(
+              parseJsonResponse(repaired),
             );
+            if (texts.length !== original.report.sampleParagraphs.length) {
+              throw new Error(
+                `sample paragraphs invalid: expectedParagraphs=${original.report.sampleParagraphs.length}; ` +
+                `actualParagraphs=${texts.length}`,
+              );
+            }
+            currentSampleParagraphs = original.report.sampleParagraphs.map((paragraph, index) => ({
+              ...paragraph,
+              text: texts[index],
+            }));
+            validateSampleWritingRequirements(currentSampleParagraphs, input.config);
+            return validateContentResult(JSON.stringify({
+              ...original,
+              report: { ...original.report, sampleParagraphs: currentSampleParagraphs },
+            }), input);
+          } catch (repairError) {
+            finalRepairError = repairError;
+            if (
+              repairAttempt === 1 ||
+              validationCode(repairError) !== "sample_paragraphs"
+            ) break;
+            currentValidationError = repairError;
           }
-          const sampleParagraphs = original.report.sampleParagraphs.map((paragraph, index) => ({
-            ...paragraph,
-            text: texts[index],
-          }));
-          validateSampleWritingRequirements(sampleParagraphs, input.config);
-          return validateContentResult(JSON.stringify({
-            ...original,
-            report: { ...original.report, sampleParagraphs },
-          }), input);
-        } catch (repairError) {
-          throw new AiAdapterError(
-            "AI_INVALID_RESPONSE",
-            "作文内容模型返回结果结构无效",
-            502,
-            undefined,
-            repairValidationCode(repairError),
-          );
         }
+        throw new AiAdapterError(
+          "AI_INVALID_RESPONSE",
+          "作文内容模型返回结果结构无效",
+          502,
+          undefined,
+          repairValidationCode(finalRepairError),
+        );
       }
       const repaired = await completionContent(client, {
         ...requestOptions,
