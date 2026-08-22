@@ -1,5 +1,6 @@
 import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import { validateStructureRequirementCoverage } from "./structure-review-requirements";
 
 const EXPECTED_PARENT_FEEDBACKS = [
   { style: "warm", title: "亲切详细" },
@@ -19,6 +20,10 @@ export function validateGeneratedReportSemantics(
   studentName?: string,
 ): EvaluationReport {
   const report = validateReport(input, { config });
+  validateStructureRequirementCoverage(
+    report.diagnostics.structure.finding,
+    config.structureRequirements,
+  );
   const feedbacks = report.parentFeedbacks ?? [];
   if (feedbacks.length !== EXPECTED_PARENT_FEEDBACKS.length) {
     throw new Error("parent feedback count must be three");

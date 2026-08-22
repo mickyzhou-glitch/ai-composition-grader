@@ -187,6 +187,86 @@ describe("CompositionReviewAdapter", () => {
     expect(repairRequest.messages[1].content).toContain("我终于明白了坚持的意义");
   });
 
+  it("逐项核对编号结构要求并修复缺项响应", async () => {
+    const harness = setup();
+    const numberedConfig = {
+      ...config,
+      structureRequirements: "1. 开头倒叙。 2. 交代困难。 3. 详写努力。",
+    };
+    const invalid = {
+      report: {
+        ...report,
+        diagnostics: {
+          ...report.diagnostics,
+          structure: { finding: "结构基本完整。", action: "补充努力过程。" },
+        },
+      },
+      annotationAnchors: [],
+    };
+    const repaired = {
+      report: {
+        ...report,
+        diagnostics: {
+          ...report.diagnostics,
+          structure: {
+            finding: [
+              "【第1项】符合：首段先写比赛结果。",
+              "【第2项】部分符合：第二段只简单提到困难。",
+              "【第3项】不符合：没有详写努力过程。",
+            ].join("\n"),
+            action: "第二段具体交代困难，第三段补写努力过程。",
+          },
+        },
+      },
+      annotationAnchors: [],
+    };
+    harness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(invalid) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify(repaired) } }] });
+
+    await expect(harness.adapter.analyzeText({
+      config: numberedConfig,
+      pages: [{ pageIndex: 0, text: "我参加了比赛。" }],
+      studentName: "小艾",
+    })).resolves.toMatchObject({ report: repaired.report });
+
+    const firstPrompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    const repairPrompt = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(firstPrompt).toContain("【第1项】");
+    expect(firstPrompt).toContain("详写努力");
+    expect(repairPrompt).toContain("structure_coverage");
+  });
+
+  it("编号结构要求修复后仍缺项时拒绝保存", async () => {
+    const harness = setup();
+    const incomplete = {
+      report: {
+        ...report,
+        diagnostics: {
+          ...report.diagnostics,
+          structure: { finding: "结构基本完整。", action: "补充努力过程。" },
+        },
+      },
+      annotationAnchors: [],
+    };
+    harness.create.mockResolvedValue({
+      choices: [{ message: { content: JSON.stringify(incomplete) } }],
+    });
+
+    await expect(harness.adapter.analyzeText({
+      config: {
+        ...config,
+        structureRequirements: "1. 开头倒叙。 2. 交代困难。 3. 详写努力。",
+      },
+      pages: [{ pageIndex: 0, text: "我参加了比赛。" }],
+      studentName: "小艾",
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "structure_coverage",
+    });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
   it("历史自定义配置默认要求5段并拒绝三段响应", async () => {
     const harness = setup();
     harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
