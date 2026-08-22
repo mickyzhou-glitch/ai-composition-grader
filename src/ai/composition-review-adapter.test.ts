@@ -330,8 +330,8 @@ describe("CompositionReviewAdapter", () => {
         "2、第三段写清比赛过程中的心理变化",
         "3.",
         "第四段补充冲线前后的具体动作",
-        "结尾部分要注意回扣题目中心",
-        "开头部分压缩起床和到校的过程",
+        "5. 结尾部分要注意回扣题目中心",
+        "五、开头部分压缩起床和到校的过程",
       ],
     };
     harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
