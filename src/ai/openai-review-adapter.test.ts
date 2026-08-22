@@ -587,6 +587,9 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("只重新生成“优点”");
     expect(serialized).not.toContain("2-4 条");
     expect(serialized).toContain("根据文章实际内容生成");
+    expect(serialized).not.toContain("第一条");
+    expect(serialized).not.toContain("第二条");
+    expect(serialized).toContain("items 字符串数组");
     expect(serialized).toContain("10-20 个汉字");
     expect(serialized).toContain("只写夸奖，不解释理由");
     expect(serialized).toContain("选材、内容表达、情感、情节完整性");
