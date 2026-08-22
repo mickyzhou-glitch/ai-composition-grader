@@ -11,7 +11,7 @@ const EXPECTED_PARENT_FEEDBACKS = [
   { style: "concise", title: "简短微信版" },
 ] as const;
 
-const FEEDBACK_ITEM_PREFIX = /^\s*(?:(?:[1-9]\d*|[一二三四五六七八九十百千万两〇零]+)[.、．)）:]|[-*•])\s*/u;
+const FEEDBACK_ITEM_PREFIX = /^\s*(?:(?:[1-9]\d*|[一二三四五六七八九十百千万两〇零]+)(?:[.．:](?!\d)|[、)）])|[-*•])\s*/u;
 
 function normalizeFeedbackItem(item: string): string {
   return item.trim().replace(FEEDBACK_ITEM_PREFIX, "").trim();
