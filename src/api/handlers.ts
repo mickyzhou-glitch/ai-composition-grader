@@ -23,6 +23,12 @@ import type { ReviewService } from "../services/review-service";
 import { reviewImageVariants, type ReviewImageVariant } from "../services/review-service";
 import type { AnalysisJobService } from "../jobs/analysis-job-service";
 import type { AssignmentGuidance, AssignmentGuidanceInput } from "../ai/assignment-guidance-adapter";
+import {
+  batchReanalysisCommitInputSchema,
+  batchReanalysisPreviewInputSchema,
+  revisionRequestInputSchema,
+} from "../reanalysis/contracts";
+import type { ReanalysisService } from "../reanalysis/reanalysis-service";
 
 const MAX_MULTIPART_BYTES = 64 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -37,6 +43,13 @@ interface ErrorBody {
 
 function ok(data: unknown, status = 200): Response {
   return Response.json({ ok: true, data }, { status });
+}
+
+function okNoStore(data: unknown, status = 200): Response {
+  return Response.json(
+    { ok: true, data },
+    { status, headers: { "cache-control": "no-store" } },
+  );
 }
 
 function routeError(code: string, message: string, status: number): Error {
@@ -204,6 +217,96 @@ function failure(error: unknown): Response {
   return Response.json({ ok: false, error: body }, { status });
 }
 
+const reanalysisErrorResponses: Record<
+  string,
+  { status: number; message: string }
+> = {
+  REVIEW_NOT_FOUND: { status: 404, message: "批改记录不存在" },
+  REVISION_CONFLICT: { status: 409, message: "作文已更新，请重新预览" },
+  OCR_NOT_CURRENT: { status: 409, message: "识别原文不存在或已失效" },
+  ANALYSIS_ACTIVE: { status: 409, message: "作文正在分析中" },
+  REVIEW_UNAVAILABLE: { status: 409, message: "作文当前状态不能重新分析" },
+  FRAMEWORK_NOT_FOUND: { status: 409, message: "没有找到同名的已保存题目框架" },
+  FRAMEWORK_CHANGED: { status: 409, message: "题目框架已更新，请重新预览" },
+};
+
+function failureNoStore(error: unknown): Response {
+  if (error instanceof ZodError) {
+    return Response.json(
+      {
+        ok: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "请求参数无效",
+          details: error.flatten(),
+        },
+      },
+      { status: 400, headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+  ) {
+    if (error.code === "VALIDATION_ERROR") {
+      return Response.json(
+        {
+          ok: false,
+          error: { code: "VALIDATION_ERROR", message: "请求参数无效" },
+        },
+        { status: 400, headers: { "cache-control": "no-store" } },
+      );
+    }
+    const mapped = Object.prototype.hasOwnProperty.call(
+      reanalysisErrorResponses,
+      error.code,
+    )
+      ? reanalysisErrorResponses[error.code]
+      : undefined;
+    if (mapped) {
+      return Response.json(
+        {
+          ok: false,
+          error: { code: error.code, message: mapped.message },
+        },
+        { status: mapped.status, headers: { "cache-control": "no-store" } },
+      );
+    }
+  }
+
+  if (error instanceof Error && error.name === "ReviewNotFoundError") {
+    return Response.json(
+      {
+        ok: false,
+        error: { code: "REVIEW_NOT_FOUND", message: "批改记录不存在" },
+      },
+      { status: 404, headers: { "cache-control": "no-store" } },
+    );
+  }
+
+  return Response.json(
+    {
+      ok: false,
+      error: { code: "INTERNAL_ERROR", message: "服务暂时不可用" },
+    },
+    { status: 500, headers: { "cache-control": "no-store" } },
+  );
+}
+
+async function readReanalysisJson(request: Request): Promise<unknown> {
+  try {
+    return await readJson(request);
+  } catch (error) {
+    if (error instanceof SyntaxError || error instanceof TypeError) {
+      throw routeError("VALIDATION_ERROR", "请求参数无效", 400);
+    }
+    throw error;
+  }
+}
+
 async function readJson(request: Request): Promise<unknown> {
   return request.json();
 }
@@ -307,6 +410,79 @@ export function createAssignmentGuidanceRouteHandlers(dependencies: {
         return ok(await dependencies.generate(input));
       } catch (error) {
         return failure(error);
+      }
+    },
+  };
+}
+
+const safeReanalysisIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
+
+function parseReanalysisRouteId(id: unknown): string {
+  if (typeof id !== "string" || !safeReanalysisIdPattern.test(id)) {
+    throw routeError("VALIDATION_ERROR", "请求参数无效", 400);
+  }
+  return id;
+}
+
+export function createRevisionRequestRouteHandlers(dependencies: {
+  reanalysisService: Pick<ReanalysisService, "requestRevision">;
+  ownerId: string;
+}): { POST(request: Request, context: RouteContext): Promise<Response> } {
+  return {
+    async POST(request: Request, context: RouteContext) {
+      try {
+        const id = parseReanalysisRouteId((await context.params).id);
+        const input = revisionRequestInputSchema.parse(await readReanalysisJson(request));
+        return okNoStore(
+          await dependencies.reanalysisService.requestRevision(
+            dependencies.ownerId,
+            id,
+            input,
+          ),
+          202,
+        );
+      } catch (error) {
+        return failureNoStore(error);
+      }
+    },
+  };
+}
+
+export function createBatchReanalysisPreviewRouteHandlers(dependencies: {
+  reanalysisService: Pick<ReanalysisService, "preview">;
+  ownerId: string;
+}): { POST(request: Request): Promise<Response> } {
+  return {
+    async POST(request: Request) {
+      try {
+        const { reviewIds } = batchReanalysisPreviewInputSchema.parse(
+          await readReanalysisJson(request),
+        );
+        return okNoStore(
+          await dependencies.reanalysisService.preview(dependencies.ownerId, reviewIds),
+        );
+      } catch (error) {
+        return failureNoStore(error);
+      }
+    },
+  };
+}
+
+export function createBatchReanalysisRouteHandlers(dependencies: {
+  reanalysisService: Pick<ReanalysisService, "commitBatch">;
+  ownerId: string;
+}): { POST(request: Request): Promise<Response> } {
+  return {
+    async POST(request: Request) {
+      try {
+        const { items } = batchReanalysisCommitInputSchema.parse(
+          await readReanalysisJson(request),
+        );
+        return okNoStore(
+          await dependencies.reanalysisService.commitBatch(dependencies.ownerId, items),
+        );
+      } catch (error) {
+        return failureNoStore(error);
       }
     },
   };
