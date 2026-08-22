@@ -1,8 +1,5 @@
 import { z } from "zod";
 
-/** 本机作文文件的最长期限；从首次成功上传图片时开始计算。 */
-export const REVIEW_RETENTION_DAYS = 30;
-export const REVIEW_RETENTION_MS = REVIEW_RETENTION_DAYS * 24 * 60 * 60 * 1000;
 export const EMPTY_DRAFT_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** Versioned acknowledgement required before the first real composition upload. */
@@ -12,12 +9,6 @@ export const privacyUploadConsentSchema = z.object({
   version: z.literal(PRIVACY_NOTICE_VERSION),
 });
 export type PrivacyUploadConsent = z.infer<typeof privacyUploadConsentSchema>;
-
-export function reviewExpiryAt(uploadedAt: Date): Date {
-  const timestamp = uploadedAt.valueOf();
-  if (!Number.isFinite(timestamp)) throw new TypeError("uploadedAt must be a valid date");
-  return new Date(timestamp + REVIEW_RETENTION_MS);
-}
 
 export const templateTypeSchema = z.enum([
   "preset_self_applause",

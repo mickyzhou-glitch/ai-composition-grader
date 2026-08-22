@@ -80,6 +80,7 @@ function reviewDto(review: {
   pdfPath?: string | null;
   pdfRevision?: number | null;
   exportedAt?: unknown;
+  teacherReviewedAt?: unknown;
   expiresAt?: unknown;
 }) {
   const hasPdf =
@@ -101,6 +102,7 @@ function reviewDto(review: {
     images: review.images.map(reviewImageDto),
     hasPdf,
     pdfFilename: hasPdf ? review.pdfFilename : null,
+    teacherReviewedAt: review.teacherReviewedAt ?? null,
     expiresAt: review.expiresAt ?? null,
   };
 }
@@ -420,6 +422,84 @@ export function createReviewRouteHandlers(dependencies: {
       try {
         await dependencies.reviewService.delete(dependencies.ownerId, (await context.params).id);
         return ok({ deleted: true });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+const completeTeacherReviewSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  studentName: studentNameSchema,
+  report: evaluationReportSchema,
+  annotations: z.array(annotationSchema),
+}).strict();
+
+const exportCheckSchema = z.object({
+  reviews: z.array(z.object({
+    id: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u),
+    revision: z.number().int().nonnegative(),
+  }).strict()).min(1).max(20),
+}).strict().refine(
+  ({ reviews }) => new Set(reviews.map(({ id }) => id)).size === reviews.length,
+  { path: ["reviews"], message: "review ids must be unique" },
+);
+
+export function createTeacherReviewQueueRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "listTeacherReviewQueue">;
+  ownerId: string;
+}) {
+  return {
+    async GET() {
+      try {
+        return ok(dependencies.reviewService.listTeacherReviewQueue(dependencies.ownerId).map((review) => ({
+          id: review.id,
+          studentName: review.studentName,
+          title: review.config.title,
+          status: review.status,
+          revision: review.revision,
+          createdAt: review.createdAt,
+        })));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+export function createTeacherReviewRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "completeTeacherReview">;
+  ownerId: string;
+}) {
+  return {
+    async POST(request: Request, context: RouteContext) {
+      try {
+        const input = completeTeacherReviewSchema.parse(await readJson(request));
+        return ok(reviewDto(await dependencies.reviewService.completeTeacherReview(
+          dependencies.ownerId,
+          (await context.params).id,
+          input,
+        )));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+export function createReviewExportCheckRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "checkTeacherReviewedForExport">;
+  ownerId: string;
+}) {
+  return {
+    async POST(request: Request) {
+      try {
+        const { reviews } = exportCheckSchema.parse(await readJson(request));
+        if (!dependencies.reviewService.checkTeacherReviewedForExport(dependencies.ownerId, reviews)) {
+          throw routeError("EXPORT_NOT_AVAILABLE", "仅已审核且未变更的作文可以导出", 422);
+        }
+        return ok({ exportable: true });
       } catch (error) {
         return failure(error);
       }

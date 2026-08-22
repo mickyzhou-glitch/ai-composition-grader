@@ -24,6 +24,9 @@ import {
   createAssignmentGuidanceRouteHandlers,
   createAnalyzeRouteHandlers,
   createReviewImagesRouteHandlers,
+  createReviewExportCheckRouteHandlers,
+  createTeacherReviewQueueRouteHandlers,
+  createTeacherReviewRouteHandlers,
   createReviewRouteHandlers,
   createReviewsRouteHandlers,
   createSettingsRouteHandlers,
@@ -419,6 +422,41 @@ describe("review route handlers", () => {
     });
   });
 
+  it("提供待审核队列、原子教师确认和整批导出预检", async () => {
+    repository.create(OWNER_ID, { id: "review-1", config, studentName: "张小明" });
+    repository.updateReport(OWNER_ID, "review-1", report);
+    const queue = createTeacherReviewQueueRouteHandlers({ reviewService, ownerId: OWNER_ID });
+    const teacherReview = createTeacherReviewRouteHandlers({ reviewService, ownerId: OWNER_ID });
+    const exportCheck = createReviewExportCheckRouteHandlers({ reviewService, ownerId: OWNER_ID });
+
+    expect(await json(await queue.GET())).toMatchObject({
+      ok: true,
+      data: [{ id: "review-1", studentName: "张小明", revision: 1 }],
+    });
+    const completed = await teacherReview.POST(jsonRequest("http://localhost/api/reviews/review-1/teacher-review", "POST", {
+      expectedRevision: 1,
+      studentName: "张小明",
+      report,
+      annotations: [],
+    }), { params: Promise.resolve({ id: "review-1" }) });
+    expect(await json(completed)).toMatchObject({
+      ok: true,
+      data: { id: "review-1", revision: 2, teacherReviewedAt: expect.any(String) },
+    });
+    const eligible = await exportCheck.POST(jsonRequest("http://localhost/api/reviews/export-check", "POST", {
+      reviews: [{ id: "review-1", revision: 2 }],
+    }));
+    expect(await json(eligible)).toEqual({ ok: true, data: { exportable: true } });
+
+    repository.create(OWNER_ID, { id: "review-2", config });
+    repository.updateReport(OWNER_ID, "review-2", report);
+    const rejected = await exportCheck.POST(jsonRequest("http://localhost/api/reviews/export-check", "POST", {
+      reviews: [{ id: "review-1", revision: 2 }, { id: "review-2", revision: 1 }],
+    }));
+    expect(rejected.status).toBe(422);
+    expect(await json(rejected)).toMatchObject({ ok: false, error: { code: "EXPORT_NOT_AVAILABLE" } });
+  });
+
   it("列表和详情 DTO 只暴露 PDF 状态与文件名，不泄漏内部存储路径", async () => {
     const internalImage = {
       id: 3,
@@ -560,7 +598,7 @@ describe("review route handlers", () => {
     ]);
   });
 
-  it("首次上传必须由服务端验证隐私确认，并记录版本与到期时间", async () => {
+  it("首次上传必须由服务端验证隐私确认，且不设置作文到期时间", async () => {
     repository.create(OWNER_ID, { id: "review-privacy", config });
     const pixels = await sharp({
       create: { width: 60, height: 80, channels: 3, background: "white" },
@@ -589,7 +627,7 @@ describe("review route handlers", () => {
     expect(repository.getById(OWNER_ID, "review-privacy")).toMatchObject({
       privacyConsentVersion: "2026-07-22",
       privacyConsentedAt: expect.any(Date),
-      expiresAt: expect.any(Date),
+      expiresAt: null,
     });
   });
 

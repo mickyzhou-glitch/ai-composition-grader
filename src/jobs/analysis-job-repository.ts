@@ -194,7 +194,6 @@ export class AnalysisJobRepository {
         .select({
           id: reviews.id,
           deletingAt: reviews.deletingAt,
-          expiresAt: reviews.expiresAt,
           imageRevision: reviews.imageRevision,
           ocrCheckpoint: reviews.ocrCheckpoint,
         })
@@ -203,7 +202,7 @@ export class AnalysisJobRepository {
         .get();
       if (!review) throw new AnalysisJobNotFoundError(reviewId);
 
-      if (review.deletingAt !== null || (review.expiresAt !== null && review.expiresAt <= now)) {
+      if (review.deletingAt !== null) {
         transaction
           .update(analysisJobs)
           .set({
@@ -311,7 +310,7 @@ export class AnalysisJobRepository {
         finishedAt: now,
       }).where(and(
         activeStatusCondition(),
-        this.unavailableReviewCondition(now),
+        this.unavailableReviewCondition(),
       )).run();
 
       transaction
@@ -371,7 +370,6 @@ export class AnalysisJobRepository {
             WHERE reviews.id = ${analysisJobs.reviewId}
               AND reviews.owner_id = ${analysisJobs.ownerId}
               AND reviews.deleting_at IS NULL
-              AND (reviews.expires_at IS NULL OR reviews.expires_at > ${now.valueOf()})
           )`,
         ))
         .orderBy(asc(analysisJobs.availableAt), asc(analysisJobs.createdAt), asc(analysisJobs.id))
@@ -397,7 +395,6 @@ export class AnalysisJobRepository {
           WHERE reviews.id = ${analysisJobs.reviewId}
             AND reviews.owner_id = ${analysisJobs.ownerId}
             AND reviews.deleting_at IS NULL
-            AND (reviews.expires_at IS NULL OR reviews.expires_at > ${now.valueOf()})
         )`,
       )).run();
       if (update.changes !== 1) return null;
@@ -507,7 +504,7 @@ export class AnalysisJobRepository {
       finishedAt: now,
     }).where(and(
       activeStatusCondition(),
-      this.unavailableReviewCondition(now),
+      this.unavailableReviewCondition(),
     )).run().changes;
   }
 
@@ -561,12 +558,12 @@ export class AnalysisJobRepository {
     );
   }
 
-  private unavailableReviewCondition(now: Date) {
+  private unavailableReviewCondition() {
     return sql`EXISTS (
       SELECT 1 FROM reviews
       WHERE reviews.id = ${analysisJobs.reviewId}
         AND reviews.owner_id = ${analysisJobs.ownerId}
-        AND (reviews.deleting_at IS NOT NULL OR reviews.expires_at <= ${now.valueOf()})
+        AND reviews.deleting_at IS NOT NULL
     )`;
   }
 }

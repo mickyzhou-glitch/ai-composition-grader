@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, gt, inArray, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, isNotNull, lt, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
@@ -15,7 +15,6 @@ import {
   type PrivacyUploadConsent,
   type ReviewStatus,
   EMPTY_DRAFT_RETENTION_MS,
-  reviewExpiryAt,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import { ocrCheckpointSchema, type OcrCheckpoint, type OcrPage } from "../ocr/contracts";
@@ -241,7 +240,7 @@ export class ReviewRepository {
         pdfPath: null,
         pdfRevision: null,
         exportedAt: null,
-        expiresAt: images.length > 0 ? reviewExpiryAt(now) : null,
+        expiresAt: null,
         deletingAt: null,
         privacyConsentVersion: null,
         privacyConsentedAt: null,
@@ -509,6 +508,35 @@ export class ReviewRepository {
       .map(({ id }) => this.requireById(ownerId, id));
   }
 
+  checkTeacherReviewedForExport(
+    ownerId: string,
+    entries: Array<{ id: string; revision: number }>,
+  ): boolean {
+    if (entries.length === 0) return false;
+    const eligible = this.database
+      .select({ id: reviews.id, revision: reviews.revision })
+      .from(reviews)
+      .where(and(
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        isNotNull(reviews.teacherReviewedAt),
+        isNotNull(reviews.report),
+        inArray(reviews.status, ["ready_for_review", "exported"]),
+        or(
+          isNull(reviews.ocrCheckpoint),
+          sql`${reviews.reportOcrRevision} = json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision')`,
+        ),
+        or(...entries.map(({ id, revision }) => and(
+          eq(reviews.id, id),
+          eq(reviews.revision, revision),
+        ))),
+      ))
+      .all();
+    const keys = new Set(eligible.map(({ id, revision }) => `${id}:${revision}`));
+    return keys.size === entries.length
+      && entries.every(({ id, revision }) => keys.has(`${id}:${revision}`));
+  }
+
   updateReport(
     ownerId: string,
     id: string,
@@ -704,7 +732,6 @@ export class ReviewRepository {
         exportedAt: null,
       };
       if (images.length > 0) {
-        updateValues.expiresAt = sql`coalesce(${reviews.expiresAt}, ${reviewExpiryAt(now).valueOf()})`;
         if (options.privacyConsent) {
           updateValues.privacyConsentVersion = sql`coalesce(${reviews.privacyConsentVersion}, ${options.privacyConsent.version})`;
           updateValues.privacyConsentedAt = sql`coalesce(${reviews.privacyConsentedAt}, ${now.valueOf()})`;
@@ -1080,7 +1107,7 @@ export class ReviewRepository {
     return this.delete(ownerId, id);
   }
 
-  /** 列出到期作文、24 小时未上传图片的草稿以及上次运行已标记的作文。 */
+  /** 列出 24 小时未上传图片的空草稿以及上次运行已标记的作文。 */
   listRetentionCandidates(now = this.now()): RetentionCandidate[] {
     if (Number.isNaN(now.valueOf())) throw new TypeError("now must be a valid date");
     const emptyDraftBefore = new Date(now.valueOf() - EMPTY_DRAFT_RETENTION_MS);
@@ -1100,9 +1127,7 @@ export class ReviewRepository {
       .where(
         or(
           isNotNull(reviews.deletingAt),
-          lte(reviews.expiresAt, now),
           and(
-            isNull(reviews.expiresAt),
             lt(reviews.createdAt, emptyDraftBefore),
             sql`NOT EXISTS (
               SELECT 1 FROM review_images
@@ -1139,9 +1164,7 @@ export class ReviewRepository {
             ? sql`1 = 1`
             : or(
                 isNotNull(reviews.deletingAt),
-                lte(reviews.expiresAt, now),
                 and(
-                  isNull(reviews.expiresAt),
                   lt(reviews.createdAt, emptyDraftBefore),
                   sql`NOT EXISTS (
                     SELECT 1 FROM review_images

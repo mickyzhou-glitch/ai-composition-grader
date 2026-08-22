@@ -238,12 +238,26 @@ async function fetchReview(reviewId: string) {
   return apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`);
 }
 
+async function assertReviewsExportable(reviews: ReviewView[]) {
+  if (reviews.some(({ teacherReviewedAt }) => teacherReviewedAt === null)) {
+    throw new Error("作文必须经过老师审核后才能导出");
+  }
+  await apiFetch<{ exportable: true }>("/api/reviews/export-check", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      reviews: reviews.map(({ id, revision }) => ({ id, revision })),
+    }),
+  });
+}
+
 export async function markReviewExported(reviewId: string) {
   return apiFetch<unknown>(`/api/reviews/${encodeURIComponent(reviewId)}/exported`, { method: "POST" });
 }
 
 export async function downloadReviewPdf(reviewId: string): Promise<string> {
   const review = await fetchReview(reviewId);
+  await assertReviewsExportable([review]);
   const filename = reviewPdfFilename(review);
   triggerFileDownload(await createReviewPdf(review), filename);
   await markReviewExported(reviewId);
@@ -253,10 +267,11 @@ export async function downloadReviewPdf(reviewId: string): Promise<string> {
 export async function downloadReviewPdfArchive(reviewIds: string[]): Promise<string> {
   if (reviewIds.length === 0) throw new Error("请先选择批改记录");
   if (reviewIds.length === 1) return downloadReviewPdf(reviewIds[0]);
+  const reviews = await Promise.all(reviewIds.map(fetchReview));
+  await assertReviewsExportable(reviews);
   const { default: JSZip } = await import("jszip");
   const archive = new JSZip();
-  for (const reviewId of reviewIds) {
-    const review = await fetchReview(reviewId);
+  for (const review of reviews) {
     archive.file(reviewPdfFilename(review), await createReviewPdf(review));
   }
   const filename = "作文批改批量导出.zip";

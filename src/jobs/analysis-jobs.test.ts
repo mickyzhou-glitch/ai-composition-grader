@@ -227,7 +227,7 @@ describe("AnalysisJobService", () => {
     expect(() => repository.transition(job!, "failed")).toThrow(/非法/);
   });
 
-  it("删除中或到期的作文会取消活动任务", () => {
+  it("删除中的作文会取消活动任务，历史到期时间不再影响任务", () => {
     service.enqueue(ownerA, "review-a");
     sqlite.prepare("UPDATE reviews SET deleting_at = ? WHERE id = ?").run(now.valueOf(), "review-a");
     expect(repository.cancelUnavailable()).toBe(1);
@@ -236,8 +236,8 @@ describe("AnalysisJobService", () => {
     reviewRepository.create(ownerA, { id: "expiring", config });
     service.enqueue(ownerA, "expiring");
     sqlite.prepare("UPDATE reviews SET expires_at = ? WHERE id = ?").run(now.valueOf(), "expiring");
-    expect(repository.cancelUnavailable()).toBe(1);
-    expect(service.get(ownerA, "job-2")).toMatchObject({ status: "canceled" });
+    expect(repository.cancelUnavailable()).toBe(0);
+    expect(service.get(ownerA, "job-2")).toMatchObject({ status: "queued" });
   });
 
   it("按 jobId 和 ownerId 查询，其他教师只得到 NOT_FOUND", () => {
@@ -288,7 +288,7 @@ describe("AnalysisJobService", () => {
     });
   });
 
-  it("领取前自动取消删除或到期作文的活动任务", () => {
+  it("领取前自动取消删除中作文的活动任务", () => {
     service.enqueue(ownerA, "review-a");
     sqlite.prepare("UPDATE reviews SET deleting_at = ? WHERE id = ?").run(now.valueOf(), "review-a");
 

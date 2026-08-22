@@ -18,7 +18,7 @@ vi.mock("jspdf", () => ({
   },
 }));
 
-import { downloadReviewPdf, markReviewExported, triggerFileDownload } from "./pdf-download";
+import { downloadReviewPdf, downloadReviewPdfArchive, markReviewExported, triggerFileDownload } from "./pdf-download";
 
 describe("PDF 文件下载", () => {
   afterEach(() => {
@@ -70,6 +70,8 @@ describe("PDF 文件下载", () => {
     });
     const review = {
       id: "review-1",
+      revision: 3,
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
       studentName: "小明",
       config: { title: "珍贵的礼物" },
       images: [{ id: 11 }, { id: 12 }],
@@ -86,6 +88,9 @@ describe("PDF 文件下载", () => {
       const url = String(input);
       if (url === "/api/reviews/review-1") {
         return new Response(JSON.stringify({ ok: true, data: review }), { headers: { "content-type": "application/json" } });
+      }
+      if (url === "/api/reviews/export-check") {
+        return new Response(JSON.stringify({ ok: true, data: { exportable: true } }), { headers: { "content-type": "application/json" } });
       }
       if (url.includes("/files?")) return new Response(new Blob(["image"], { type: "image/jpeg" }));
       if (url === "/api/reviews/review-1/exported") {
@@ -107,6 +112,36 @@ describe("PDF 文件下载", () => {
     expect(paintedText.some(({ text }) => text.includes("青藤未来") || text.startsWith("学生：") || /第 \d+ 页批注/u.test(text))).toBe(false);
     expect(context.fillRect).toHaveBeenCalledTimes(2);
     expect(context.stroke).not.toHaveBeenCalled();
+  });
+
+  it("批量导出在创建任一 PDF 前校验全部审核状态和 revision", async () => {
+    const calls: string[] = [];
+    const reviews = new Map([
+      ["review-1", { id: "review-1", revision: 3, teacherReviewedAt: "2026-08-22T06:00:00.000Z", studentName: "小明", config: { title: "作文一" }, images: [{ id: 11 }], report: { sampleParagraphs: [] } }],
+      ["review-2", { id: "review-2", revision: 5, teacherReviewedAt: "2026-08-22T06:01:00.000Z", studentName: "小红", config: { title: "作文二" }, images: [{ id: 12 }], report: { sampleParagraphs: [] } }],
+    ]);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      calls.push(url);
+      const review = /^\/api\/reviews\/(review-[12])$/u.exec(url)?.[1];
+      if (review) return new Response(JSON.stringify({ ok: true, data: reviews.get(review) }), { headers: { "content-type": "application/json" } });
+      if (url === "/api/reviews/export-check") {
+        expect(JSON.parse(String(init?.body))).toEqual({ reviews: [
+          { id: "review-1", revision: 3 },
+          { id: "review-2", revision: 5 },
+        ] });
+        return new Response(JSON.stringify({ ok: false, error: { code: "EXPORT_NOT_AVAILABLE", message: "不可导出" } }), { status: 422, headers: { "content-type": "application/json" } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    await expect(downloadReviewPdfArchive(["review-1", "review-2"])).rejects.toThrow("不可导出");
+    expect(calls).toEqual([
+      "/api/reviews/review-1",
+      "/api/reviews/review-2",
+      "/api/reviews/export-check",
+    ]);
+    expect(pdfMock.output).not.toHaveBeenCalled();
   });
 
   it("PDF 下载完成后把记录标记为已导出", async () => {

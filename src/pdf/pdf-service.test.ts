@@ -23,6 +23,7 @@ function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
     pdfPath: null,
     pdfRevision: null,
     exportedAt: null,
+    teacherReviewedAt: new Date("2026-07-20T02:00:00.000Z"),
     config: {
       title: "为/自己:\u0000鼓掌?",
       grade: "六年级",
@@ -286,6 +287,18 @@ describe("PdfService", () => {
       });
       expect(browserFactory.launch).not.toHaveBeenCalled();
     }
+  });
+
+  it("拒绝导出未经过教师审核的作文且不启动浏览器", async () => {
+    const { service, browserFactory } = harness({
+      current: review({ teacherReviewedAt: null }),
+    });
+
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).rejects.toMatchObject({
+      code: "TEACHER_REVIEW_REQUIRED",
+      status: 422,
+    });
+    expect(browserFactory.launch).not.toHaveBeenCalled();
   });
 
   it("生成失败时 finally 关闭 page 和 browser 且不持久化", async () => {

@@ -10,7 +10,7 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AssignmentConfig } from "../domain/contracts";
-import { EMPTY_DRAFT_RETENTION_MS, REVIEW_RETENTION_MS } from "../domain/contracts";
+import { EMPTY_DRAFT_RETENTION_MS } from "../domain/contracts";
 import { AuthRepository } from "../auth/auth-repository";
 import { initializeSchema } from "../db/init";
 import { ReviewRepository, type ReviewImageInput } from "../db/review-repository";
@@ -97,16 +97,19 @@ describe("RetentionService", () => {
     await store.writeFile(ownerId, id, "images", "page.jpg", "page");
   }
 
-  it("首次上传图片时设置 30 天到期日，后续替换图片不延长", () => {
+  function markForDeletion(ownerId = OWNER, id = "review-1"): void {
+    expect(repository.markDeleting(ownerId, id, now, { force: true })).toBe(true);
+  }
+
+  it("上传和替换图片都不再设置作文到期日", () => {
     repository.create(OWNER, { id: "review-1", config });
     now = new Date(START.valueOf() + 2 * 60 * 60 * 1000);
     const first = repository.replaceImages(OWNER, "review-1", 0, [image()]);
-    const firstExpiry = first.expiresAt?.valueOf();
-    expect(firstExpiry).toBe(now.valueOf() + REVIEW_RETENTION_MS);
+    expect(first.expiresAt).toBeNull();
 
     now = new Date(now.valueOf() + 7 * 24 * 60 * 60 * 1000);
     const second = repository.replaceImages(OWNER, "review-1", first.revision, [image(), image(1)]);
-    expect(second.expiresAt?.valueOf()).toBe(firstExpiry);
+    expect(second.expiresAt).toBeNull();
   });
 
   it("仅在严格超过 24 小时后清理空草稿", async () => {
@@ -119,9 +122,17 @@ describe("RetentionService", () => {
     expect(repository.getById(OWNER, "empty")).toBeNull();
   });
 
-  it("到期作文先标记并从普通查询消失，再删除其精确目录", async () => {
+  it("30 天后仍保留已上传作文", async () => {
     await createWithImage();
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    now = new Date(START.valueOf() + 31 * 24 * 60 * 60 * 1000);
+
+    await expect(service().run()).resolves.toMatchObject({ deleted: 0 });
+    expect(repository.getById(OWNER, "review-1")).not.toBeNull();
+  });
+
+  it("已标记作文从普通查询消失，并在后台删除其精确目录", async () => {
+    await createWithImage();
+    markForDeletion();
     const deletingSpy = vi.spyOn(store, "deleteReview").mockImplementation(async (ownerId, reviewId) => {
       expect(repository.getById(ownerId, reviewId)).toBeNull();
       await ReviewFileStore.prototype.deleteReview.call(store, ownerId, reviewId);
@@ -135,7 +146,7 @@ describe("RetentionService", () => {
 
   it("文件已删而数据库收尾失败时保留标记，并在下一次继续完成", async () => {
     await createWithImage();
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion();
     sqlite.exec(`
       CREATE TRIGGER reject_review_delete
       BEFORE DELETE ON reviews
@@ -157,7 +168,7 @@ describe("RetentionService", () => {
 
   it("标记成功但文件删除失败时保留标记并在下次重试", async () => {
     await createWithImage();
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion();
     const deletingSpy = vi.spyOn(store, "deleteReview")
       .mockRejectedValueOnce(Object.assign(new Error("disk busy"), { code: "EIO" }));
 
@@ -204,7 +215,7 @@ describe("RetentionService", () => {
       withReviewLock: store.withReviewLock.bind(store),
       deleteReview: async () => { throw new UnsafeStoragePathError("../outside"); },
     } as unknown as ReviewFileStore;
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion();
     await expect(service(unsafeStore).run()).resolves.toMatchObject({ failed: 1 });
     await expect(store.readFile(OWNER, "review-1", "images", "page.jpg")).resolves.toEqual(Buffer.from("page"));
   });
@@ -216,7 +227,7 @@ describe("RetentionService", () => {
     await mkdir(path.join(legacyReview, "images"), { recursive: true });
     await writeFile(path.join(legacyReview, "images", "page.jpg"), "legacy");
     const legacyStore = new ReviewFileStore(store.rootDirectory, legacyRoot);
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion(OWNER, "legacy-only");
 
     await expect(service(legacyStore).run()).resolves.toMatchObject({ deleted: 1, failed: 0 });
     await expect(stat(legacyReview)).rejects.toMatchObject({ code: "ENOENT" });
@@ -225,7 +236,7 @@ describe("RetentionService", () => {
 
   it("清理失败仅记录安全错误码，不记录作文路径或正文", async () => {
     await createWithImage();
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion();
     vi.spyOn(store, "deleteReview").mockRejectedValueOnce(Object.assign(new Error("disk busy"), { code: "EIO" }));
 
     await service().run();
@@ -240,7 +251,7 @@ describe("RetentionService", () => {
 
   it("清理和上传共用同一作文锁，删除完成后上传得到不存在且不会重建目录", async () => {
     await createWithImage();
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion();
     const anotherProcessStore = new ReviewFileStore(store.rootDirectory);
     const blockingDelete = deferred<void>();
     const enteredDelete = deferred<void>();
@@ -270,7 +281,7 @@ describe("RetentionService", () => {
 
   it("并发清理与手动删除在另一方已完成时均视为幂等成功", async () => {
     await createWithImage();
-    now = new Date(START.valueOf() + REVIEW_RETENTION_MS);
+    markForDeletion();
     const lock = new InMemoryReviewLock();
     const blockingDelete = deferred<void>();
     const enteredDelete = deferred<void>();

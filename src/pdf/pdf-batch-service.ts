@@ -1,4 +1,5 @@
-import type { PdfService } from "./pdf-service";
+import type { ReviewRecord } from "../db/review-repository";
+import { PdfServiceError, type PdfService } from "./pdf-service";
 
 interface ZipEntry {
   filename: string;
@@ -73,9 +74,22 @@ function zip(entries: ZipEntry[]): Buffer {
 }
 
 export class PdfBatchService {
-  constructor(private readonly pdfService: Pick<PdfService, "getOrCreate">) {}
+  constructor(
+    private readonly pdfService: Pick<PdfService, "getOrCreate">,
+    private readonly reviews: { getById(ownerId: string, reviewId: string): Pick<ReviewRecord, "teacherReviewedAt" | "report"> | null },
+  ) {}
 
   async exportBatch(ownerId: string, reviewIds: string[]): Promise<{ data: Buffer; filename: string }> {
+    for (const reviewId of reviewIds) {
+      const review = this.reviews.getById(ownerId, reviewId);
+      if (!review) throw new PdfServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+      if (review.teacherReviewedAt === null) {
+        throw new PdfServiceError("TEACHER_REVIEW_REQUIRED", "作文必须经过老师审核后才能导出", 422);
+      }
+      if (review.report === null) {
+        throw new PdfServiceError("PDF_CONTENT_INCOMPLETE", "请先完成 AI 分析", 422);
+      }
+    }
     const entries: ZipEntry[] = [];
     for (const reviewId of reviewIds) {
       const pdf = await this.pdfService.getOrCreate(ownerId, reviewId);

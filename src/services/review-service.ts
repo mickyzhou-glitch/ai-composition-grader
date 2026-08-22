@@ -113,6 +113,13 @@ export class ReviewService {
     return this.repository.listTeacherReviewQueue(ownerId);
   }
 
+  checkTeacherReviewedForExport(
+    ownerId: string,
+    entries: Array<{ id: string; revision: number }>,
+  ): boolean {
+    return this.repository.checkTeacherReviewedForExport(ownerId, entries);
+  }
+
   get(ownerId: string, id: string): ReviewRecord {
     const review = this.repository.getById(ownerId, id);
     if (!review) throw new ReviewServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);

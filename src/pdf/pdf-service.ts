@@ -138,6 +138,7 @@ export class PdfServiceError extends Error {
       | "REVIEW_NOT_FOUND"
       | "PDF_CONTENT_INCOMPLETE"
       | "PDF_ANALYSIS_IN_PROGRESS"
+      | "TEACHER_REVIEW_REQUIRED"
       | "PDF_ENGINE_MISSING"
       | "PDF_UNTRUSTED_NAVIGATION"
       | "PDF_TIMEOUT",
@@ -296,6 +297,13 @@ export class PdfService {
         "PDF_ANALYSIS_IN_PROGRESS",
         "AI 分析进行中，请等待分析完成后再导出",
         409,
+      );
+    }
+    if (review.teacherReviewedAt === null) {
+      throw new PdfServiceError(
+        "TEACHER_REVIEW_REQUIRED",
+        "作文必须经过老师审核后才能导出",
+        422,
       );
     }
     if (!review.report || review.images.length === 0) {

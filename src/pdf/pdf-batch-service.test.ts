@@ -16,7 +16,8 @@ describe("PdfBatchService", () => {
         filename: "作文批改-珍贵的礼物-李羿辰.pdf",
         data: Buffer.from("second-pdf"),
       });
-    const service = new PdfBatchService({ getOrCreate } as never);
+    const getById = vi.fn().mockReturnValue({ teacherReviewedAt: new Date(), report: {} });
+    const service = new PdfBatchService({ getOrCreate } as never, { getById } as never);
 
     const result = await service.exportBatch("teacher-1", ["review-1", "review-2"]);
 
@@ -27,5 +28,18 @@ describe("PdfBatchService", () => {
     expect(result.data.includes(Buffer.from("作文批改-为自己鼓掌-张小明.pdf"))).toBe(true);
     expect(getOrCreate).toHaveBeenCalledWith("teacher-1", "review-1");
     expect(getOrCreate).toHaveBeenCalledWith("teacher-1", "review-2");
+  });
+
+  it("整批预检失败时不生成任何 PDF", async () => {
+    const getOrCreate = vi.fn();
+    const getById = vi.fn((_ownerId: string, reviewId: string) => ({
+      teacherReviewedAt: reviewId === "review-1" ? new Date() : null,
+      report: {},
+    }));
+    const service = new PdfBatchService({ getOrCreate } as never, { getById } as never);
+
+    await expect(service.exportBatch("teacher-1", ["review-1", "review-2"]))
+      .rejects.toMatchObject({ code: "TEACHER_REVIEW_REQUIRED", status: 422 });
+    expect(getOrCreate).not.toHaveBeenCalled();
   });
 });

@@ -26,6 +26,7 @@ export interface ReviewView {
   revision: number;
   createdAt: string;
   updatedAt: string;
+  teacherReviewedAt: string | null;
   expiresAt?: string | null;
   images: ReviewImageView[];
   annotations: Annotation[];
