@@ -19,6 +19,17 @@ const config: AssignmentConfig = {
   sampleParagraphCount: 5,
 };
 
+const paragraphRangeConfig: AssignmentConfig = {
+  ...config,
+  structureRequirements: [
+    "开头段（建议字数：100-150字）：点题。",
+    "第二段（建议字数：100-150字）：写礼物。",
+    "第三段（建议字数：200-250字）：写事件。",
+    "第四段（建议字数：100-150字）：写影响。",
+    "结尾段（建议字数：100-150字）：写感悟。",
+  ].join("\n\n"),
+};
+
 function paragraphs(totalCharacters: number) {
   const baseLength = Math.floor(totalCharacters / 5);
   const remainder = totalCharacters - baseLength * 5;
@@ -40,6 +51,35 @@ describe("sample writing requirements", () => {
 
   it("只统计各段正文中的汉字", () => {
     expect(countSampleTextCharacters(paragraphs(600))).toBe(600);
+  });
+
+  it("从结构要求读取每段建议字数", () => {
+    expect(resolveSampleWritingRequirements(paragraphRangeConfig)).toMatchObject({
+      paragraphCount: 5,
+      paragraphCharacterRanges: [
+        { minimumCharacters: 100, maximumCharacters: 150 },
+        { minimumCharacters: 100, maximumCharacters: 150 },
+        { minimumCharacters: 200, maximumCharacters: 250 },
+        { minimumCharacters: 100, maximumCharacters: 150 },
+        { minimumCharacters: 100, maximumCharacters: 150 },
+      ],
+    });
+  });
+
+  it("有分段字数要求时按各段范围校验，不使用总字数范围", () => {
+    const paragraphsAtEachMaximum = [150, 150, 250, 150, 150].map((length, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: "文".repeat(length),
+      suggestion: "补充细节。",
+    }));
+    expect(() => validateSampleWritingRequirements(paragraphsAtEachMaximum, paragraphRangeConfig))
+      .not.toThrow();
+
+    const invalid = paragraphsAtEachMaximum.map((paragraph, index) =>
+      index === 2 ? { ...paragraph, text: "文".repeat(199) } : paragraph,
+    );
+    expect(() => validateSampleWritingRequirements(invalid, paragraphRangeConfig))
+      .toThrow(/paragraphIndex=3.*expectedParagraphCharacters=200\.\.250.*actualParagraphCharacters=199/u);
   });
 
   it.each([550, 700])("接受合计 %i 个汉字的示范正文", (totalCharacters) => {
@@ -66,6 +106,15 @@ describe("sample writing requirements", () => {
     expect(rule).toContain(config.structureRequirements);
     expect(rule).toContain(config.scoringFocus);
     expect(rule).toContain("不得写成初中生或成人范文");
+  });
+
+  it("有分段字数要求时提示词逐段说明且不追加总量范围", () => {
+    const rule = buildSampleWritingRule(paragraphRangeConfig);
+
+    expect(rule).toContain("第1段 text 的汉字数必须为 100-150");
+    expect(rule).toContain("第3段 text 的汉字数必须为 200-250");
+    expect(rule).not.toContain("550-700");
+    expect(rule).toContain("按各段范围校验");
   });
 
   it("初中年级只限制为指定年级水平，不误写成小学生规则", () => {

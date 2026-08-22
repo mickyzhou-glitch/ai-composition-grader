@@ -640,8 +640,13 @@ export class OpenAIReviewAdapter {
     }
     const otherParagraphs = input.sampleParagraphs.filter((_, index) => index !== input.index);
     const otherCharacters = countSampleTextCharacters(otherParagraphs);
-    const minimumCharacters = Math.max(0, expected.minimumCharacters - otherCharacters);
-    const maximumCharacters = expected.maximumCharacters - otherCharacters;
+    const paragraphRange = expected.paragraphCharacterRanges?.[input.index];
+    const minimumCharacters = paragraphRange
+      ? paragraphRange.minimumCharacters
+      : Math.max(0, expected.minimumCharacters - otherCharacters);
+    const maximumCharacters = paragraphRange
+      ? paragraphRange.maximumCharacters
+      : expected.maximumCharacters - otherCharacters;
     if (maximumCharacters < minimumCharacters || maximumCharacters < 1) {
       throw new TypeError("当前其余段落字数已超出题目要求，请使用全文重新生成");
     }
@@ -667,7 +672,9 @@ export class OpenAIReviewAdapter {
           buildSampleWritingRule(input.config),
           `当前整篇范文：${JSON.stringify(input.sampleParagraphs)}`,
           `要重写第 ${input.index + 1} 段：${JSON.stringify(current)}`,
-          `其余段落正文合计 ${otherCharacters} 个汉字；本段 text 必须写 ${minimumCharacters}-${maximumCharacters} 个汉字，title、suggestion 和标点不计入。`,
+          paragraphRange
+            ? `本段 text 必须写 ${minimumCharacters}-${maximumCharacters} 个汉字，title、suggestion 和标点不计入；其他段落按各自的教师分段要求执行。`
+            : `其余段落正文合计 ${otherCharacters} 个汉字；本段 text 必须写 ${minimumCharacters}-${maximumCharacters} 个汉字，title、suggestion 和标点不计入。`,
           `教师附加要求：${input.instruction?.trim() || "请换一种更具体、更自然的写法。"}`,
           buildTransitionRule(input.config),
           LIFE_LOGIC_REVIEW_RULE,

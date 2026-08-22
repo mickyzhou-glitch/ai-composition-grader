@@ -287,7 +287,7 @@ describe("CompositionReviewAdapter", () => {
       config: { ...config, sampleParagraphCount: undefined },
       pages: [{ pageIndex: 0, text: "爸爸送给我一根跳绳。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({ upstreamCode: "sample_paragraphs_p3_c10" });
+    })).rejects.toMatchObject({ upstreamCode: "sample_paragraphs_p3" });
 
     const request = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };
     expect(request.messages[0].content).toContain("sampleParagraphs 必须恰好 5 段");
@@ -360,6 +360,51 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("550-700");
     expect(prompt).toContain("不得写成初中生或成人范文");
     expect(prompt).toContain("按开头、经过、高潮、结果、感受展开");
+  });
+
+  it("定向修复遵守教师提供的分段字数而不使用总量范围", async () => {
+    const rangeConfig = {
+      ...config,
+      sampleParagraphCount: 5,
+      structureRequirements: [
+        "开头段（建议字数：100-150字）：点题。",
+        "第二段（建议字数：100-150字）：写礼物。",
+        "第三段（建议字数：200-250字）：写事件。",
+        "第四段（建议字数：100-150字）：写影响。",
+        "结尾段（建议字数：100-150字）：写感悟。",
+      ].join("\n\n"),
+    };
+    const rangeParagraphs = [100, 100, 200, 100, 100].map((length, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: "我".repeat(length),
+      suggestion: "补充具体细节。",
+    }));
+    const invalidParagraphs = rangeParagraphs.map((paragraph, index) =>
+      index === 2 ? { ...paragraph, text: "我".repeat(199) } : paragraph,
+    );
+    const repairedTexts = rangeParagraphs.map(({ text }) => text);
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+        report: { ...report, sampleParagraphs: invalidParagraphs },
+        annotationAnchors: [],
+      }) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+        texts: repairedTexts,
+      }) } }] });
+    await expect(harness.adapter.analyzeText({
+      config: rangeConfig,
+      pages: [{ pageIndex: 0, text: "我参加了活动。" }],
+      studentName: "小艾",
+    })).resolves.toMatchObject({
+      report: { sampleParagraphs: rangeParagraphs },
+    });
+
+    const repairRequest = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(repairRequest).toContain("第1段 text 的汉字数必须为 100-150");
+    expect(repairRequest).toContain("第3段 text 的汉字数必须为 200-250");
+    expect(repairRequest).not.toContain("550-700");
+    expect(repairRequest).toContain("第3段当前只有 199 个汉字");
   });
 
   it("书信题不追加小学记叙文和禁用时间词规则", async () => {

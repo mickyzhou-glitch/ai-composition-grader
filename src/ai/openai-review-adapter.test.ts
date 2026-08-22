@@ -310,6 +310,36 @@ describe("OpenAIReviewAdapter", () => {
     expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("70-220");
   });
 
+  it("单段重写优先使用教师填写的分段字数", async () => {
+    const rangeConfig = {
+      ...config,
+      structureRequirements: [
+        "开头段（建议字数：100-150字）：点题。",
+        "第二段（建议字数：100-150字）：写礼物。",
+        "第三段（建议字数：200-250字）：写事件。",
+        "第四段（建议字数：100-150字）：写影响。",
+        "结尾段（建议字数：100-150字）：写感悟。",
+      ].join("\n\n"),
+    };
+    const sampleParagraphs = [100, 100, 200, 100, 100].map((length, index) => ({
+      title: `第 ${index + 1} 段`,
+      text: "我".repeat(length),
+      suggestion: "补充具体细节。",
+    }));
+    const text = "我".repeat(220);
+    const harness = setup([JSON.stringify({ text })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config: rangeConfig,
+      sampleParagraphs,
+      index: 2,
+    })).resolves.toEqual({ text });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("本段 text 必须写 200-250 个汉字");
+    expect(serialized).not.toContain("其余段落正文合计 400 个汉字；本段 text 必须写 150-300");
+  });
+
   it("当前段落数不符合配置时不发起单段重写", async () => {
     const harness = setup([JSON.stringify({ text: "我".repeat(120) })]);
 
