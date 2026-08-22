@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   aiReviewEnvelopeSchema,
+  expectedSampleParagraphCount,
   MAX_REVIEW_IMAGES,
   sampleParagraphSchema,
   type AiReviewEnvelope,
@@ -146,11 +147,14 @@ function buildStudentNameRule(studentName?: string): string {
 const GRADE_RULE =
   "不使用分数，也不输出任何 40 分制字段。只给最终等级：A+、A、A-、B+、B、B-、C。A 档代表结构完整、真实具体且有较成熟的细节与感悟；B 档代表基础达标但需要明确修改；C 代表必须重写。偏题、核心事件缺失、无法形成五段完整叙事，或正文无法支撑结尾主题时，必须给 C。diagnostics 必须逐项输出四维诊断：authenticityAndRelevance（真实度与切题）、materialAndDetails（素材与细节）、structure（五段结构与段落衔接）、language（语言流畅度）。每维 finding 精确指出原文中的一个句子或段落问题，action 给学生一条能直接完成的增删改动作。";
 
+function buildSampleParagraphRule(config: AssignmentConfig): string {
+  const expectedParagraphs = expectedSampleParagraphCount(config);
+  return `sampleParagraphs 必须恰好 ${expectedParagraphs} 段，按题目指定结构排列；title 要能说明段落任务。示范文须保留学生原有核心事件和表达气质，不虚构关键经历；仅 text 合计控制在 600-700 个汉字，每段 suggestion 给出一句可执行的写法提醒。每一段正文开头严禁使用“那天、后来、最后、第二天、一天、早晨、上午、中午、下午、傍晚、晚上、放学后、回家后”等时间词，必须用承接上一段的动作、情绪、对比、因果或核心物件开篇。写前先理清“谁、和谁、因为什么、经过什么、结果怎样”的单一事件线：同一关系只用同一个称呼和人物，不得把朋友、同学、老师等无关人物混入同一事件；原文出现人物关系断裂、无关争吵或枝节时，示范文必须直接删去、合并或改写为与核心人物一致的情节，绝不保留多余人物。`;
+}
+
 function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, studentName?: string): string {
   const fiveParagraphRule =
     "必须逐段核对学生原文是否具备五段式：①开篇点题并交代情境；②事件起因与发展；③困难、转折或关键细节；④自己的行动、突破与结果；⑤回扣题目并写出真实感悟。题目给出的 structureRequirements 优先于此默认名称。缺段、合段混乱、转折缺失或结尾未升华时，必须在对应原文位置给出 structure 批注。";
-  const sampleRule =
-    "sampleParagraphs 必须恰好五段，按上述五段式或题目指定结构排列；title 要能说明段落任务。示范文须保留学生原有核心事件和表达气质，不虚构关键经历；仅 text 合计控制在 600-700 个汉字，每段 suggestion 给出一句可执行的写法提醒。每一段正文开头严禁使用“那天、后来、最后、第二天、一天、早晨、上午、中午、下午、傍晚、晚上、放学后、回家后”等时间词，必须用承接上一段的动作、情绪、对比、因果或核心物件开篇。写前先理清“谁、和谁、因为什么、经过什么、结果怎样”的单一事件线：同一关系只用同一个称呼和人物，不得把朋友、同学、老师等无关人物混入同一事件；原文出现人物关系断裂、无关争吵或枝节时，示范文必须直接删去、合并或改写为与核心人物一致的情节，绝不保留多余人物。";
   return [
     ADVANCED_NARRATIVE_RULE,
     LIFE_LOGIC_REVIEW_RULE,
@@ -165,7 +169,7 @@ function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, student
     "对结构问题使用 annotation，批注要短而可执行，能明确指出缺少哪一段、该补什么或该如何调整。原稿导出时只会显示红圈与红线，不会显示文字批注；因此每条 annotation 必须定位到确实能辨认的整句或段落起点。坐标拿不准时不要生成 annotation，绝不圈画单个字或猜测的位置。",
     "图片上有 10x10 网格。每条批注用 pageIndex 和相对整页的 x/y 0..1 归一化坐标定位，坐标必须落在 0..1。",
     fiveParagraphRule,
-    sampleRule,
+    buildSampleParagraphRule(config),
     SAMPLE_PARAGRAPH_TRANSITION_RULE,
     CONCISE_FEEDBACK_RULE,
     PARENT_FEEDBACK_RULE,
@@ -190,6 +194,7 @@ function buildContinueAnalysisPrompt(
       ? `老师补充观点（必须作为本次批改的重要依据；与可辨认原文冲突时，以原文为准）：${teacherGuidance.trim()}`
       : "",
     PARENT_FEEDBACK_RULE,
+    buildSampleParagraphRule(config),
     "只返回一个 JSON 对象，不要 Markdown，不要解释。结构如下：",
     ENVELOPE_SCHEMA_SUMMARY,
   ].join("\n\n");
@@ -202,8 +207,9 @@ function buildRepairPrompt(
   validationCode: string,
   studentName?: string,
 ): string {
+  const expectedParagraphs = expectedSampleParagraphCount(config);
   const sampleRule =
-    "sampleParagraphs 必须恰好五段对象，每段的 title、text、suggestion 必须是非空字符串，不能是数组、对象或 null；并严格遵循当前 AssignmentConfig 的 structureRequirements。仅 text 字段合计 600-700 个汉字，保留学生原有核心事件，不虚构关键经历。每段正文开头不得使用时间词，必须用动作、情绪、对比、因果或核心物件承接上文。必须把人物关系和事件因果统一成一条主线：删去或合并多余人物、无关争吵和枝节，绝不保留人物称呼前后矛盾的写法。";
+    `sampleParagraphs 必须恰好 ${expectedParagraphs} 段对象，每段的 title、text、suggestion 必须是非空字符串，不能是数组、对象或 null；并严格遵循当前 AssignmentConfig 的 structureRequirements。仅 text 字段合计 600-700 个汉字，保留学生原有核心事件，不虚构关键经历。每段正文开头不得使用时间词，必须用动作、情绪、对比、因果或核心物件承接上文。必须把人物关系和事件因果统一成一条主线：删去或合并多余人物、无关争吵和枝节，绝不保留人物称呼前后矛盾的写法。`;
 
   return [
     "修复以下无效文本，使其严格符合 schema 和全部业务不变量，并只返回 JSON。",
@@ -299,7 +305,7 @@ function safeValidationCode(error: unknown): string {
     return `schema_${path}_${issue?.code || "invalid"}`.slice(0, 64);
   }
   if (!(error instanceof Error)) return "validation_unknown";
-  if (error.message.includes("five sample paragraphs")) return "sample_paragraph_count";
+  if (error.message.includes("sample paragraphs")) return "sample_paragraphs";
   if (error.message.includes("annotation.pageIndex")) return "annotation_page_index";
   if (error.message.includes("off_topic")) return "off_topic_grade";
   return "validation_unknown";
@@ -399,8 +405,9 @@ function validateUsableEnvelope(
     { templateType: "custom" },
   );
   validateParentFeedbackSemantics(report, studentName);
-  if (config.templateType === "preset_self_applause" && report.sampleParagraphs.length !== 5) {
-    throw new Error("preset composition requires five sample paragraphs");
+  const expectedParagraphs = expectedSampleParagraphCount(config);
+  if (report.sampleParagraphs.length !== expectedParagraphs) {
+    throw new Error(`composition requires ${expectedParagraphs} sample paragraphs`);
   }
   return {
     ...envelope,
@@ -694,24 +701,27 @@ export class OpenAIReviewAdapter {
       timeout: AI_TIMEOUT_MS,
       maxRetries: AI_MAX_RETRIES,
     });
+    const expectedParagraphs = expectedSampleParagraphCount(input.config);
     const content = await completionContent(client, {
       model: settings.model,
       response_format: { type: "json_object" },
       messages: [{
         role: "user",
         content: [
-          "你是上海五升六学生的作文老师。请重写整篇五段考场范文，不要只改一段。",
+          `你是上海五升六学生的作文老师。请重写整篇 ${expectedParagraphs} 段考场范文，不要只改一段。`,
           `作文要求：${JSON.stringify(input.config)}`,
-          `当前五段范文：${JSON.stringify(input.sampleParagraphs)}`,
+          `当前 ${expectedParagraphs} 段范文：${JSON.stringify(input.sampleParagraphs)}`,
           `教师附加要求：${input.instruction?.trim() || "请整体提升细节、逻辑和前后衔接。"}`,
           SAMPLE_PARAGRAPH_TRANSITION_RULE,
           LIFE_LOGIC_REVIEW_RULE,
-          "必须输出严格五段。人物称呼、关系、时间顺序和事件因果必须统一；只保留一条核心事件线，删去无关人物、无关争吵和枝节，不得凭空增加关键经历。五段 text 合计 600-700 个汉字，且每段正文不得以时间词开头。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。",
+          `必须输出严格 ${expectedParagraphs} 段。人物称呼、关系、时间顺序和事件因果必须统一；只保留一条核心事件线，删去无关人物、无关争吵和枝节，不得凭空增加关键经历。${expectedParagraphs} 段 text 合计 600-700 个汉字，且每段正文不得以时间词开头。只返回 JSON：{\"sampleParagraphs\":[{\"title\":\"\",\"text\":\"\",\"suggestion\":\"\"}]}。`,
         ].join("\n\n"),
       }],
     });
     try {
-      return z.object({ sampleParagraphs: z.array(sampleParagraphSchema).length(5) }).parse(parseJsonResponse(content));
+      return z.object({
+        sampleParagraphs: z.array(sampleParagraphSchema).length(expectedParagraphs),
+      }).parse(parseJsonResponse(content));
     } catch {
       throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回的整篇示范文无效", 502);
     }

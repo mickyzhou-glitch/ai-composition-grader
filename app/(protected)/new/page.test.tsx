@@ -134,7 +134,7 @@ describe("新建作文批改", () => {
     expect(reviewRequest[0]).toBe("/api/reviews");
     expect(JSON.parse((reviewRequest[1] as RequestInit).body as string)).toMatchObject({
       studentName: "李羿辰",
-      config: { title: "为自己鼓掌" },
+      config: { title: "为自己鼓掌", sampleParagraphCount: 5 },
     });
     const uploaded = (fetchMock.mock.calls[2][1] as RequestInit).body as FormData;
     expect(uploaded.get("expectedRevision")).toBe("0");

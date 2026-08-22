@@ -23,6 +23,7 @@ const presetConfig: AssignmentConfig = {
   structureRequirements: "围绕一件事展开，过程有波折，结尾写出成长感受。",
   scoringFocus: "审题立意、事件完整、细节描写与真情实感。",
   templateType: "preset_self_applause",
+  sampleParagraphCount: 5,
 };
 
 const customConfig: AssignmentConfig = {
@@ -33,6 +34,7 @@ const customConfig: AssignmentConfig = {
   structureRequirements: "",
   scoringFocus: "",
   templateType: "custom",
+  sampleParagraphCount: 5,
 };
 
 interface CropEdges { left: number; top: number; right: number; bottom: number }

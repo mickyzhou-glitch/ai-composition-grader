@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   evaluationReportSchema,
+  expectedSampleParagraphCount,
   type AssignmentConfig,
   type EvaluationReport,
 } from "../domain/contracts";
@@ -61,9 +62,10 @@ function studentNameRule(studentName?: string): string {
 }
 
 function contentPrompt(input: AnalyzeOcrTextInput): string {
-  const sampleParagraphRule = input.config.templateType === "preset_self_applause"
-    ? "sampleParagraphs 必须恰好五段，每段包含非空 title、text、suggestion；五段 text 合计 600-700 个汉字。"
-    : "sampleParagraphs 返回 1-10 段，每段包含非空 title、text、suggestion。";
+  const expectedParagraphs = expectedSampleParagraphCount(input.config);
+  const sampleParagraphRule =
+    `sampleParagraphs 必须恰好 ${expectedParagraphs} 段，每段包含非空 title、text、suggestion；` +
+    `${expectedParagraphs} 段 text 合计 600-700 个汉字。`;
   return [
     "你是一名有十五年上海小升初教学经验的语文老师，负责依据已识别的作文原文完成批改。",
     `作文要求：${JSON.stringify(input.config)}`,

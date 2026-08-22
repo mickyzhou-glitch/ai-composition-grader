@@ -89,6 +89,20 @@ const successEnvelope = {
   ],
 };
 
+function envelopeWithParagraphCount(count: number) {
+  return {
+    ...successEnvelope,
+    report: {
+      ...report,
+      sampleParagraphs: Array.from({ length: count }, (_, index) => ({
+        title: `第 ${index + 1} 段`,
+        text: "围绕礼物展开具体描写。",
+        suggestion: "补充动作与心理。",
+      })),
+    },
+  };
+}
+
 const namedSuccessEnvelope = {
   ...successEnvelope,
   report: {
@@ -209,13 +223,32 @@ describe("OpenAIReviewAdapter", () => {
     })).resolves.toEqual({ sampleParagraphs });
 
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
-    expect(serialized).toContain("重写整篇五段考场范文");
+    expect(serialized).toContain("重写整篇 5 段考场范文");
     expect(serialized).toContain("删去无关人物");
     expect(serialized).toContain("600-700");
     expect(serialized).toContain("第一段不得以时间词开头");
     expect(serialized).toContain("生日那天");
     expect(serialized).toContain("对比、照应、因果");
     expectLifeLogicRule(serialized);
+  });
+
+  it("按显式配置重写整篇示范文", async () => {
+    const configuredEnvelope = envelopeWithParagraphCount(3);
+    const sampleParagraphs = configuredEnvelope.report.sampleParagraphs.map((sample) => ({
+      ...sample,
+      text: `${sample.text}（整体优化）`,
+    }));
+    const harness = setup([JSON.stringify({ sampleParagraphs })]);
+
+    await expect(harness.adapter.rewriteAllSamples({
+      config: { ...config, templateType: "custom", sampleParagraphCount: 3 },
+      sampleParagraphs: configuredEnvelope.report.sampleParagraphs,
+      instruction: "保持三段结构",
+    })).resolves.toEqual({ sampleParagraphs });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("重写整篇 3 段考场范文");
+    expect(serialized).toContain("必须输出严格 3 段");
   });
 
   it("单段重写也避免流水账式时间衔接", async () => {
@@ -340,6 +373,37 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("相比上次");
     expect(serialized).toContain("不得推断妈妈、爸爸或学生性别");
     expect(serialized).toContain("不能只换同义词或机械缩短");
+  });
+
+  it("显式段落数同时约束兼容提示词和响应校验", async () => {
+    const configuredEnvelope = envelopeWithParagraphCount(3);
+    const configured = { ...config, templateType: "custom" as const, sampleParagraphCount: 3 };
+    const harness = setup([JSON.stringify(configuredEnvelope)]);
+
+    const result = await harness.adapter.analyze({
+      config: configured,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    expect(result.report?.sampleParagraphs).toHaveLength(3);
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("sampleParagraphs 必须恰好 3 段");
+  });
+
+  it("兼容链路拒绝与显式配置不符的段落数", async () => {
+    const configured = { ...config, templateType: "custom" as const, sampleParagraphCount: 3 };
+    const harness = setup([
+      JSON.stringify(successEnvelope),
+      JSON.stringify(successEnvelope),
+    ]);
+
+    await expect(harness.adapter.analyze({
+      config: configured,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "sample_paragraphs",
+    });
   });
 
   it("无学生姓名时三份成功反馈都以家长您好开头", async () => {
