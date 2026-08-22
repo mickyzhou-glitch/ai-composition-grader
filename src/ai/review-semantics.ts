@@ -1,8 +1,6 @@
 import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 
-const FORBIDDEN_TIME_OPENING = /^(?:那天(?:以后)?|后来|最后|第二天|第二日|一天(?:以后)?|早晨|清晨|上午|中午|下午|傍晚|晚上|放学后|回家后|过了(?:一会|几天|不久))/u;
-
 const EXPECTED_PARENT_FEEDBACKS = [
   { style: "warm", title: "亲切详细" },
   { style: "professional", title: "专业清晰" },
@@ -38,9 +36,6 @@ export function validateGeneratedReportSemantics(
   });
   if (config.templateType === "preset_self_applause" && report.sampleParagraphs.length !== 5) {
     throw new Error("preset composition requires five sample paragraphs");
-  }
-  if (report.sampleParagraphs.some((paragraph) => FORBIDDEN_TIME_OPENING.test(paragraph.text.trim()))) {
-    throw new Error("sample paragraphs must not begin with a time word");
   }
   const strengths = report.personalizedComment
     .split(/\r?\n/u)

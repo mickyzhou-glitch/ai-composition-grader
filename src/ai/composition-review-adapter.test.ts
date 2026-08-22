@@ -168,6 +168,30 @@ describe("CompositionReviewAdapter", () => {
     expect(repairRequest.messages[1].content).toContain("我终于明白了坚持的意义");
   });
 
+  it("accepts a valid custom report when a sample paragraph begins with a time word", async () => {
+    const harness = setup();
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: {
+        ...report,
+        sampleParagraphs: [{
+          title: "运动会开场",
+          text: "清晨的阳光透过窗帘，我看着准备好的跑鞋，心里充满期待。",
+          suggestion: "用环境描写交代活动背景。",
+        }],
+      },
+      annotationAnchors: [],
+    }) } }] });
+
+    await expect(harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "清晨的阳光透过窗帘，我准备参加运动会。" }],
+      studentName: "小艾",
+    })).resolves.toMatchObject({
+      report: { sampleParagraphs: [{ text: expect.stringMatching(/^清晨/u) }] },
+    });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
   it("normalizes numbered feedback and accepts concise provider wording over twenty characters", async () => {
     const harness = setup();
     const providerReport = {
