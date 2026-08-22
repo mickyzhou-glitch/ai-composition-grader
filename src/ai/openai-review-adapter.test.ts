@@ -348,6 +348,8 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("多余人物");
     expect(serialized).not.toContain("2-4 条");
     expect(serialized).toContain("根据作文实际内容列出优点和需要修改");
+    expect(serialized).not.toContain("一、二、三、四");
+    expect(serialized).toContain("不加序号");
     expect(serialized).toContain("每条 10-20 个汉字");
     expect(serialized).toContain("选材、内容表达、情感、情节完整性");
     expect(serialized).toContain("特别出彩");
