@@ -121,6 +121,8 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("parentFeedbacks 必须按固定顺序生成恰好三份");
     expect(prompt).toContain("小艾家长");
     expect(prompt).toContain("sampleParagraphs 必须恰好 5 段");
+    expect(prompt).not.toContain("2-4 条");
+    expect(prompt).toContain("根据作文实际内容生成优点和修改项");
     expect(prompt).toContain("annotationAnchors={pageIndex:integer");
     for (const phrase of [
       "少见但可能",
@@ -319,7 +321,7 @@ describe("CompositionReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects feedback with more than four non-empty improvements", async () => {
+  it("accepts more than four non-empty improvements", async () => {
     const harness = setup();
     const invalidReport = {
       ...report,
@@ -341,11 +343,18 @@ describe("CompositionReviewAdapter", () => {
       config,
       pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({
-      code: "AI_INVALID_RESPONSE",
-      upstreamCode: "overall_feedback",
+    })).resolves.toMatchObject({
+      report: {
+        painPoints: [
+          "第二段补充事情发生的具体背景",
+          "第三段写清比赛过程中的心理变化",
+          "第四段补充冲线前后的具体动作",
+          "结尾部分要注意回扣题目中心",
+          "开头部分压缩起床和到校的过程",
+        ],
+      },
     });
-    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("rejects coordinates supplied by the content model", async () => {
