@@ -21,16 +21,26 @@ export interface SampleWritingRequirements {
   paragraphCharacterRanges?: SampleParagraphCharacterRange[];
 }
 
-const CHARACTER_RANGE = /(\d{2,4})\s*[-‐‑‒–—−~～至到]\s*(\d{2,4})\s*字?/gu;
+const CHARACTER_REQUIREMENT = /(?:(\d{2,4})\s*[-‐‑‒–—−~～至到]\s*(\d{2,4})\s*字?|(?:约|大约)\s*(\d{2,4})\s*字?|(?<![\d])(?:(\d{2,4})\s*字\s*(?:左右|上下)))/gu;
+
+const APPROXIMATE_CHARACTER_TOLERANCE = 20;
 
 export function parseSampleParagraphCharacterRanges(
   structureRequirements: string,
   paragraphCount: number,
 ): SampleParagraphCharacterRange[] | null {
-  const ranges = [...structureRequirements.matchAll(CHARACTER_RANGE)].map((match) => ({
-    minimumCharacters: Number(match[1]),
-    maximumCharacters: Number(match[2]),
-  }));
+  const ranges = [...structureRequirements.matchAll(CHARACTER_REQUIREMENT)].map((match) => {
+    const minimumCharacters = match[1] ? Number(match[1]) : Number(match[3] ?? match[4]);
+    const maximumCharacters = match[2]
+      ? Number(match[2])
+      : minimumCharacters + APPROXIMATE_CHARACTER_TOLERANCE;
+    return match[1] || match[2]
+      ? { minimumCharacters, maximumCharacters }
+      : {
+        minimumCharacters: Math.max(1, minimumCharacters - APPROXIMATE_CHARACTER_TOLERANCE),
+        maximumCharacters,
+      };
+  });
   if (
     ranges.length !== paragraphCount ||
     ranges.some(({ minimumCharacters, maximumCharacters }) =>

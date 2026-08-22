@@ -30,6 +30,18 @@ const paragraphRangeConfig: AssignmentConfig = {
   ].join("\n\n"),
 };
 
+const approximateParagraphRangeConfig: AssignmentConfig = {
+  ...config,
+  title: "珍贵的礼物",
+  structureRequirements: [
+    "开头段（建议字数：100字左右）：点题。",
+    "第二段（建议字数：100字左右）：写礼物。",
+    "第三段（建议字数：150-200字）：写事件。",
+    "第四段（建议字数：100-150字）：写影响。",
+    "结尾段（建议字数：100-150字）：写感悟。",
+  ].join("\n\n"),
+};
+
 function paragraphs(totalCharacters: number) {
   const baseLength = Math.floor(totalCharacters / 5);
   const remainder = totalCharacters - baseLength * 5;
@@ -60,6 +72,19 @@ describe("sample writing requirements", () => {
         { minimumCharacters: 100, maximumCharacters: 150 },
         { minimumCharacters: 100, maximumCharacters: 150 },
         { minimumCharacters: 200, maximumCharacters: 250 },
+        { minimumCharacters: 100, maximumCharacters: 150 },
+        { minimumCharacters: 100, maximumCharacters: 150 },
+      ],
+    });
+  });
+
+  it("把约数和左右字数转换成带容错的分段范围", () => {
+    expect(resolveSampleWritingRequirements(approximateParagraphRangeConfig)).toMatchObject({
+      paragraphCount: 5,
+      paragraphCharacterRanges: [
+        { minimumCharacters: 80, maximumCharacters: 120 },
+        { minimumCharacters: 80, maximumCharacters: 120 },
+        { minimumCharacters: 150, maximumCharacters: 200 },
         { minimumCharacters: 100, maximumCharacters: 150 },
         { minimumCharacters: 100, maximumCharacters: 150 },
       ],
@@ -115,6 +140,14 @@ describe("sample writing requirements", () => {
     expect(rule).toContain("第3段 text 的汉字数必须为 200-250");
     expect(rule).not.toContain("550-700");
     expect(rule).toContain("按各段范围校验");
+  });
+
+  it("当前珍贵的礼物提示词不退回整篇总量兜底", () => {
+    const rule = buildSampleWritingRule(approximateParagraphRangeConfig);
+
+    expect(rule).toContain("第1段 text 的汉字数必须为 80-120");
+    expect(rule).toContain("第3段 text 的汉字数必须为 150-200");
+    expect(rule).not.toContain("550-700");
   });
 
   it("初中年级只限制为指定年级水平，不误写成小学生规则", () => {
