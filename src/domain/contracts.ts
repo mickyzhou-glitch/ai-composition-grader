@@ -229,7 +229,8 @@ export type EvaluationReport = Omit<CurrentEvaluationReport, "grade" | "diagnost
   parentFeedbacks?: ParentFeedback[];
 };
 
-export function createEvaluationReportSchema(_templateType: TemplateType) {
+export function createEvaluationReportSchema(templateType: TemplateType) {
+  void templateType;
   return evaluationReportSchema;
 }
 

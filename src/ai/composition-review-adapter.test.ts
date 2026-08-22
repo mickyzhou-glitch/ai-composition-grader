@@ -50,7 +50,9 @@ const report: EvaluationReport = {
 };
 
 function setup() {
-  const create = vi.fn(async () => ({
+  const create = vi.fn(async (input: unknown) => {
+    void input;
+    return {
     choices: [{ message: { content: JSON.stringify({
       report,
       annotationAnchors: [{
@@ -61,7 +63,8 @@ function setup() {
         isHighlight: false,
       }],
     }) } }],
-  }));
+    };
+  });
   const factory = vi.fn((options: Parameters<OpenAIClientFactory>[0]): OpenAICompatibleClient => {
     void options;
     return { chat: { completions: { create } } };
