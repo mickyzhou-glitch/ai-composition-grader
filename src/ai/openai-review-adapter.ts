@@ -115,7 +115,7 @@ const SAMPLE_PARAGRAPH_TRANSITION_RULE =
   "范文段落衔接不得依赖流水账式的时间推进：不要连续用“生日那天”“第二天放学后”“半小时后”等时间短语开启段落，第一段不得以时间词开头。优先使用对比、照应、因果、情感变化、人物动作或核心物件来承接上下文；例如可以借鉴“虽然别人的礼物……，但……”这种对比入题的方法，但不要机械照抄固定句式。只有时间变化确实推动关键情节时，才可偶尔在段中简洁交代。";
 
 const CONCISE_FEEDBACK_RULE =
-  "给学生的评价必须简洁、直观：personalizedComment 包含 2-4 条优点，用换行分隔；painPoints 包含 2-4 条需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加“一、二、三、四”等序号，不重复解释，条数由文章实际内容决定。优点从选材、内容表达、情感、情节完整性以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；用六年级学生能直接看懂的短句，例如“结尾部分要注意扣题”“中间段落不要啰嗦”。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。";
+  "给学生的评价必须简洁、直观：根据作文实际内容列出优点和需要修改；personalizedComment 用换行分隔优点，painPoints 使用数组列出需要修改。每条 10-20 个汉字，只说一个具体要点，不写总评段落，不加“一、二、三、四”等序号，不重复解释。优点从选材、内容表达、情感、情节完整性以及特别出彩的部分中选择真实明显的维度；优点只写夸奖，不解释理由，不夹带建议。修改建议必须指出具体段落、问题和修改方法，是学生可以照着做的修改指导，不是评价；用六年级学生能直接看懂的短句，例如“结尾部分要注意扣题”“中间段落不要啰嗦”。commonIssues 和 revisionSuggestions 返回空数组，避免重复展示。";
 
 const ADVANCED_NARRATIVE_RULE =
   "你是一名有十五年上海小升初教学经验的语文老师，做一对一修改辅导。评价必须专业、具体、可操作，绝不空泛表扬或批评。核心目标是把小学生的流水账升级为六年级完整记叙文：必须完成五段式，围绕一个真实生活事件，有清晰的起因、转折、自己的行动、结果和感悟；关键情节必须写出可感知的动作、心理、语言或环境细节，而不是只概括“爸爸很爱我”。优先检查真实生活和真情实感，不能编造脱离原文的故事；倒叙、插叙仅在自然且能服务主题时作为加分项。";
@@ -668,7 +668,7 @@ export class OpenAIReviewAdapter {
           `你是上海五升六学生的作文老师。请只重新生成“${sectionLabel}”，不要改动报告中的其他内容。`,
           `作文要求：${JSON.stringify(input.config)}`,
           `当前批改报告：${JSON.stringify(input.report)}`,
-          "由你判断生成 2-4 条，不要固定凑成四条。",
+          "根据文章实际内容生成，不要为凑数添加重复或空泛内容。",
           "每条必须是 10-20 个汉字，只说一个具体要点，不加序号，不写总评段落。",
           input.section === "improvements"
             ? "每条都要指出哪一段有问题、问题是什么、具体怎么改；给出修改指导，不是评价，并让六年级学生能直接看懂。句式可参考“结尾部分要注意扣题”“中间段落不要啰嗦”，但要结合本篇作文。"
@@ -682,7 +682,7 @@ export class OpenAIReviewAdapter {
         const length = Array.from(item).length;
         return length >= 10 && length <= 20;
       });
-      return z.object({ items: z.array(itemSchema).min(2).max(4) }).parse(parseJsonResponse(content));
+      return z.object({ items: z.array(itemSchema) }).parse(parseJsonResponse(content));
     } catch {
       throw new AiAdapterError("AI_INVALID_RESPONSE", `AI 返回的${sectionLabel}无效`, 502);
     }

@@ -346,8 +346,8 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("600-700");
     expect(serialized).toContain("人物关系");
     expect(serialized).toContain("多余人物");
-    expect(serialized).toContain("personalizedComment 包含 2-4 条优点");
-    expect(serialized).toContain("painPoints 包含 2-4 条需要修改");
+    expect(serialized).not.toContain("2-4 条");
+    expect(serialized).toContain("根据作文实际内容列出优点和需要修改");
     expect(serialized).toContain("每条 10-20 个汉字");
     expect(serialized).toContain("选材、内容表达、情感、情节完整性");
     expect(serialized).toContain("特别出彩");
@@ -573,8 +573,14 @@ describe("OpenAIReviewAdapter", () => {
     });
   });
 
-  it("可以只重新生成优点或需要修改", async () => {
-    const items = ["选材真实贴近自己的生活", "礼物线索贯穿全文始终"];
+  it("可以只重新生成五条优点，数量由文章内容决定", async () => {
+    const items = [
+      "选材真实贴近自己的生活",
+      "礼物线索贯穿全文始终",
+      "人物动作描写具体生动",
+      "情感变化写得自然真切",
+      "结尾感悟紧扣文章主题",
+    ];
     const harness = setup([JSON.stringify({ items })]);
 
     await expect(harness.adapter.rewriteFeedback({
@@ -585,10 +591,27 @@ describe("OpenAIReviewAdapter", () => {
 
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("只重新生成“优点”");
-    expect(serialized).toContain("由你判断生成 2-4 条");
+    expect(serialized).not.toContain("2-4 条");
+    expect(serialized).toContain("根据文章实际内容生成");
     expect(serialized).toContain("10-20 个汉字");
     expect(serialized).toContain("只写夸奖，不解释理由");
     expect(serialized).toContain("选材、内容表达、情感、情节完整性");
+  });
+
+  it("可以只重新生成一条优点，数量由文章内容决定", async () => {
+    const items = ["选材真实贴近自己的生活"];
+    const harness = setup([JSON.stringify({ items })]);
+
+    await expect(harness.adapter.rewriteFeedback({
+      config,
+      report,
+      section: "strengths",
+    })).resolves.toEqual({ items });
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).not.toContain("2-4 条");
+    expect(serialized).toContain("根据文章实际内容生成");
+    expect(serialized).toContain("10-20 个汉字");
   });
 
   it("重新生成修改建议时给六年级学生明确的修改指导", async () => {
