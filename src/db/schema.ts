@@ -69,6 +69,7 @@ export const reviews = sqliteTable(
     pdfPath: text("pdf_path"),
     pdfRevision: integer("pdf_revision"),
     exportedAt: integer("exported_at", { mode: "timestamp_ms" }),
+    teacherReviewedAt: integer("teacher_reviewed_at", { mode: "timestamp_ms" }),
     expiresAt: integer("expires_at", { mode: "timestamp_ms" }),
     deletingAt: integer("deleting_at", { mode: "timestamp_ms" }),
     privacyConsentVersion: text("privacy_consent_version"),
@@ -78,6 +79,7 @@ export const reviews = sqliteTable(
   },
   (table) => [
     index("reviews_owner_created_at_idx").on(table.ownerId, table.createdAt),
+    index("reviews_owner_teacher_reviewed_idx").on(table.ownerId, table.teacherReviewedAt, table.createdAt),
     index("reviews_owner_deleting_at_idx").on(table.ownerId, table.deletingAt),
     index("reviews_expires_deleting_at_idx").on(table.expiresAt, table.deletingAt),
   ],

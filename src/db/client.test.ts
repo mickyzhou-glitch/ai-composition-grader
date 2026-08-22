@@ -339,7 +339,7 @@ describe("openAppDatabase", () => {
     }
   });
 
-  it("reviews 具有强制 owner 和过期删除字段", () => {
+  it("reviews 具有强制 owner、教师审核和删除状态字段", () => {
     const sqlite = new Database(":memory:");
 
     try {
@@ -349,6 +349,7 @@ describe("openAppDatabase", () => {
       expect(columns).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: "owner_id", notnull: 1 }),
+          expect.objectContaining({ name: "teacher_reviewed_at", notnull: 0 }),
           expect.objectContaining({ name: "expires_at", notnull: 0 }),
           expect.objectContaining({ name: "deleting_at", notnull: 0 }),
         ]),
@@ -360,6 +361,30 @@ describe("openAppDatabase", () => {
           expect.objectContaining({ from: "owner_id", table: "users", to: "id" }),
         ]),
       );
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("升级时清空历史作文到期时间且重复初始化保持为空", () => {
+    const sqlite = new Database(":memory:");
+
+    try {
+      initializeSchema(sqlite);
+      sqlite.exec(`
+        INSERT INTO reviews (
+          id, owner_id, status, config, expires_at, created_at, updated_at
+        ) VALUES (
+          'retained-review', 'local-admin', 'ready_for_review', '{}', 9999999999999, 1, 1
+        );
+      `);
+
+      initializeSchema(sqlite);
+      initializeSchema(sqlite);
+
+      expect(
+        sqlite.prepare("SELECT expires_at FROM reviews WHERE id = ?").get("retained-review"),
+      ).toEqual({ expires_at: null });
     } finally {
       sqlite.close();
     }

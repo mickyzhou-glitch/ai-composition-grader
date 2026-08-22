@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS reviews (
   pdf_path TEXT,
   pdf_revision INTEGER,
   exported_at INTEGER,
+  teacher_reviewed_at INTEGER,
   expires_at INTEGER,
   deleting_at INTEGER,
   privacy_consent_version TEXT,
@@ -230,6 +231,7 @@ function migrateReviews(database: Database.Database): void {
     ["pdf_path", "TEXT"],
     ["pdf_revision", "INTEGER"],
     ["exported_at", "INTEGER"],
+    ["teacher_reviewed_at", "INTEGER"],
     ["expires_at", "INTEGER"],
     ["deleting_at", "INTEGER"],
     ["privacy_consent_version", "TEXT"],
@@ -245,9 +247,12 @@ function migrateReviews(database: Database.Database): void {
 
   database.exec(`
     UPDATE reviews SET owner_id = 'local-admin' WHERE owner_id IS NULL;
+    UPDATE reviews SET expires_at = NULL WHERE deleting_at IS NULL;
 
     CREATE INDEX IF NOT EXISTS reviews_owner_created_at_idx
       ON reviews(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS reviews_owner_teacher_reviewed_idx
+      ON reviews(owner_id, teacher_reviewed_at, created_at);
     CREATE INDEX IF NOT EXISTS reviews_owner_deleting_at_idx
       ON reviews(owner_id, deleting_at);
     CREATE INDEX IF NOT EXISTS reviews_expires_deleting_at_idx
@@ -282,6 +287,7 @@ function migrateReviews(database: Database.Database): void {
         pdf_path TEXT,
         pdf_revision INTEGER,
         exported_at INTEGER,
+        teacher_reviewed_at INTEGER,
         expires_at INTEGER,
         deleting_at INTEGER,
         privacy_consent_version TEXT,
@@ -292,12 +298,12 @@ function migrateReviews(database: Database.Database): void {
       INSERT INTO reviews_owner_migration (
         id, owner_id, status, student_name, config, report, revision, image_revision,
         ocr_checkpoint, report_ocr_revision, analysis_run_id,
-        pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
+        pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at,
         deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       )
       SELECT id, owner_id, status, student_name, config, report, revision, image_revision,
         ocr_checkpoint, report_ocr_revision, analysis_run_id,
-        pdf_filename, pdf_path, pdf_revision, exported_at, expires_at,
+        pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at,
         deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at
       FROM reviews;
       DROP TABLE reviews;
@@ -310,6 +316,8 @@ function migrateReviews(database: Database.Database): void {
   database.exec(`
     CREATE INDEX IF NOT EXISTS reviews_owner_created_at_idx
       ON reviews(owner_id, created_at);
+    CREATE INDEX IF NOT EXISTS reviews_owner_teacher_reviewed_idx
+      ON reviews(owner_id, teacher_reviewed_at, created_at);
     CREATE INDEX IF NOT EXISTS reviews_owner_deleting_at_idx
       ON reviews(owner_id, deleting_at);
     CREATE INDEX IF NOT EXISTS reviews_expires_deleting_at_idx
