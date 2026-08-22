@@ -17,6 +17,10 @@ import {
   resolveSampleWritingRequirements,
   validateSampleWritingRequirements,
 } from "./sample-writing-requirements";
+import {
+  buildStructureReviewRule,
+  validateStructureRequirementCoverage,
+} from "./structure-review-requirements";
 
 const AI_TIMEOUT_MS = 180_000;
 const AI_MAX_RETRIES = 1;
@@ -160,8 +164,6 @@ function buildSampleParagraphRule(config: AssignmentConfig): string {
 }
 
 function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, studentName?: string): string {
-  const structureReviewRule =
-    `必须按照教师填写的 structureRequirements 逐段核对学生原文：${JSON.stringify(config.structureRequirements)}。缺少题目要求的部分、合段混乱、顺序错误或格式未完成要求时，必须在对应原文位置给出 structure 批注。`;
   return [
     buildAssignmentDrivenReviewRule(config),
     LIFE_LOGIC_REVIEW_RULE,
@@ -175,7 +177,7 @@ function buildPrompt(config: AssignmentConfig, teacherGuidance?: string, student
     "这版批改只检查题目要求的结构、内容完整性与前后衔接。不要批改错别字、书写、标点、病句或普通字词表达的小问题。annotation 只能使用 structure（结构），anchorText 必须来自可辨认原文；不要臆造。",
     "对结构问题使用 annotation，批注要短而可执行，能明确指出缺少哪一段、该补什么或该如何调整。原稿导出时只会显示红圈与红线，不会显示文字批注；因此每条 annotation 必须定位到确实能辨认的整句或段落起点。坐标拿不准时不要生成 annotation，绝不圈画单个字或猜测的位置。",
     "图片上有 10x10 网格。每条批注用 pageIndex 和相对整页的 x/y 0..1 归一化坐标定位，坐标必须落在 0..1。",
-    structureReviewRule,
+    buildStructureReviewRule(config.structureRequirements),
     buildSampleParagraphRule(config),
     buildTransitionRule(config),
     buildConciseFeedbackRule(config),
@@ -195,6 +197,7 @@ function buildContinueAnalysisPrompt(
     buildAssignmentDrivenReviewRule(config),
     LIFE_LOGIC_REVIEW_RULE,
     GRADE_RULE,
+    buildStructureReviewRule(config.structureRequirements),
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
     teacherGuidance?.trim()
@@ -223,7 +226,7 @@ function buildRepairPrompt(
     `运行时页面约束：pageCount=${pageCount}，annotation.pageIndex 必须是整数 0..${pageCount - 1}。`,
     `当前 AssignmentConfig：${JSON.stringify(config)}`,
     buildStudentNameRule(studentName),
-    `结构核对必须遵循教师要求：${JSON.stringify(config.structureRequirements)}。结构问题要用 annotation.category=structure 标注在原文确实能辨认的整句或段落起点；坐标不确定则不要标注。`,
+    buildStructureReviewRule(config.structureRequirements),
     `${buildAssignmentDrivenReviewRule(config)}\n\n${GRADE_RULE}`,
     LIFE_LOGIC_REVIEW_RULE,
     sampleRule,
@@ -310,6 +313,7 @@ function safeValidationCode(error: unknown): string {
     return `schema_${path}_${issue?.code || "invalid"}`.slice(0, 64);
   }
   if (!(error instanceof Error)) return "validation_unknown";
+  if (error.message.startsWith("structure coverage invalid")) return "structure_coverage";
   if (error.message.includes("sample paragraphs")) return "sample_paragraphs";
   if (error.message.includes("annotation.pageIndex")) return "annotation_page_index";
   if (error.message.includes("off_topic")) return "off_topic_grade";
@@ -418,6 +422,10 @@ function validateUsableEnvelope(
   const report = validateReport(
     envelope.report,
     { config },
+  );
+  validateStructureRequirementCoverage(
+    report.diagnostics.structure.finding,
+    config.structureRequirements,
   );
   validateParentFeedbackSemantics(report, studentName);
   return {

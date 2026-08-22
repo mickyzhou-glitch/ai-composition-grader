@@ -89,6 +89,29 @@ const successEnvelope = {
   ],
 };
 
+const numberedConfig: AssignmentConfig = {
+  ...config,
+  structureRequirements: "1. 开头倒叙。 2. 交代困难。 3. 详写努力。",
+};
+
+const numberedSuccessEnvelope = {
+  ...successEnvelope,
+  report: {
+    ...report,
+    diagnostics: {
+      ...report.diagnostics,
+      structure: {
+        finding: [
+          "【第1项】符合：首段先写比赛结果。",
+          "【第2项】部分符合：第二段只简单提到困难。",
+          "【第3项】不符合：没有详写努力过程。",
+        ].join("\n"),
+        action: "第二段具体交代困难，第三段补写努力过程。",
+      },
+    },
+  },
+};
+
 function envelopeWithParagraphCount(count: number) {
   const baseLength = Math.floor(600 / count);
   const remainder = 600 - baseLength * count;
@@ -774,6 +797,41 @@ describe("OpenAIReviewAdapter", () => {
     expectLifeLogicRule(continuation);
   });
 
+  it("初次图片分析提示逐项核对编号结构要求", async () => {
+    const harness = setup([JSON.stringify(numberedSuccessEnvelope)]);
+
+    await expect(harness.adapter.analyze({
+      config: numberedConfig,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).resolves.toEqual(numberedSuccessEnvelope);
+
+    const prompt = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(prompt).toContain("【第1项】");
+    expect(prompt).toContain("【第3项】");
+    expect(prompt).toContain("详写努力");
+  });
+
+  it("继续图片分析提示仍逐项核对编号结构要求", async () => {
+    const unreadable = {
+      readable: false,
+      pageWarnings: ["手写字局部不清晰"],
+      annotations: [],
+    };
+    const harness = setup([
+      JSON.stringify(unreadable),
+      JSON.stringify(numberedSuccessEnvelope),
+    ]);
+
+    await expect(harness.adapter.analyze({
+      config: numberedConfig,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).resolves.toEqual(numberedSuccessEnvelope);
+
+    const continuation = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(continuation).toContain("【第1项】");
+    expect(continuation).toContain("【第3项】");
+  });
+
   it("首个结构无效时只带无效文本和 schema 摘要修复一次", async () => {
     const invalid = "{bad json containing student draft}";
     const harness = setup([invalid, JSON.stringify(successEnvelope)]);
@@ -795,6 +853,45 @@ describe("OpenAIReviewAdapter", () => {
     expect(repair.messages[0].content).toContain("每份都是一份完整、可直接发送的家长反馈");
     expectLifeLogicRule(repair.messages[0].content);
     expect(JSON.stringify(repair.messages)).not.toContain("data:image");
+  });
+
+  it("图片分析修复提示逐项核对编号结构要求", async () => {
+    const harness = setup(["not-json", JSON.stringify(numberedSuccessEnvelope)]);
+
+    await expect(harness.adapter.analyze({
+      config: numberedConfig,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).resolves.toEqual(numberedSuccessEnvelope);
+
+    const repair = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(repair).toContain("【第1项】");
+    expect(repair).toContain("【第3项】");
+  });
+
+  it("宽容回退也拒绝编号结构要求缺项", async () => {
+    const incompleteEnvelope = {
+      ...numberedSuccessEnvelope,
+      report: {
+        ...numberedSuccessEnvelope.report,
+        diagnostics: {
+          ...numberedSuccessEnvelope.report.diagnostics,
+          structure: { finding: "结构基本完整。", action: "补充努力过程。" },
+        },
+      },
+    };
+    const harness = setup([
+      JSON.stringify(incompleteEnvelope),
+      JSON.stringify(incompleteEnvelope),
+    ]);
+
+    await expect(harness.adapter.analyze({
+      config: numberedConfig,
+      imageDataUrls: ["data:image/jpeg;base64,eA=="],
+    })).rejects.toMatchObject({
+      code: "AI_INVALID_RESPONSE",
+      upstreamCode: "structure_coverage",
+    });
+    expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
   it("修复提示指出修改建议字段必须是非空字符串", async () => {
