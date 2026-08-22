@@ -307,7 +307,7 @@ describe("OpenAIReviewAdapter", () => {
       index: 0,
     });
 
-    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("70-220");
+    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("1-220");
   });
 
   it("单段重写优先使用教师填写的分段字数", async () => {
@@ -539,17 +539,17 @@ describe("OpenAIReviewAdapter", () => {
     expect(prompt).not.toContain("每段正文不得以时间词开头");
   });
 
-  it("单段重写后整篇不足目标字数时拒绝结果", async () => {
+  it("单段重写后整篇不足550字时仍接受结果", async () => {
     const harness = setup([JSON.stringify({ text: "我".repeat(20) })]);
 
     await expect(harness.adapter.rewriteSample({
       config,
       sampleParagraphs: report.sampleParagraphs,
       index: 0,
-    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    })).resolves.toEqual({ text: "我".repeat(20) });
   });
 
-  it("全文重写不足目标字数时拒绝结果", async () => {
+  it("全文重写不足550字时仍接受结果", async () => {
     const sampleParagraphs = report.sampleParagraphs.map((paragraph) => ({
       ...paragraph,
       text: "我".repeat(100),
@@ -559,7 +559,7 @@ describe("OpenAIReviewAdapter", () => {
     await expect(harness.adapter.rewriteAllSamples({
       config,
       sampleParagraphs: report.sampleParagraphs,
-    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    })).resolves.toEqual({ sampleParagraphs });
   });
 
   it("兼容链路拒绝与显式配置不符的段落数", async () => {
@@ -690,7 +690,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("修复后五段范文仍未达到目标字数时拒绝保存", async () => {
+  it("五段范文总字数低于550时直接保存", async () => {
     const shortSampleEnvelope = {
       ...successEnvelope,
       report: {
@@ -701,20 +701,13 @@ describe("OpenAIReviewAdapter", () => {
         })),
       },
     };
-    const harness = setup([
-      JSON.stringify(shortSampleEnvelope),
-      JSON.stringify(shortSampleEnvelope),
-    ]);
+    const harness = setup([JSON.stringify(shortSampleEnvelope)]);
 
     await expect(harness.adapter.analyze({
       config,
       imageDataUrls: ["data:image/jpeg;base64,eA=="],
-    })).rejects.toMatchObject({
-      code: "AI_INVALID_RESPONSE",
-      upstreamCode: "sample_paragraphs",
-    });
-    expect(harness.create).toHaveBeenCalledTimes(2);
-    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("actualCharacters=500");
+    })).resolves.toEqual(shortSampleEnvelope);
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("兼容 MiMo 将需要修改返回为换行分隔字符串", async () => {

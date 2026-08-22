@@ -20,7 +20,9 @@ export function buildSampleWritingRule(config: AssignmentConfig): string {
         `第${index + 1}段 text 的汉字数必须为 ${range.minimumCharacters}-${range.maximumCharacters} 个；`,
       ),
     ].join("\n")
-    : `只统计各段 text 的汉字，合计必须为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字；title、suggestion 和标点不计入。`;
+    : `只统计各段 text 的汉字，目标参考范围为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字；` +
+      `低于${expected.minimumCharacters}个汉字也可正常返回，不要为了凑字数编造内容；超过${expected.maximumCharacters}个汉字才需要精简；` +
+      "title、suggestion 和标点不计入。";
 
   return [
     "教师填写的作业配置是唯一标准，通用教学建议不得覆盖或改写它。",

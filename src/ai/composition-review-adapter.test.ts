@@ -429,11 +429,11 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).not.toContain("段首不要使用");
   });
 
-  it("范文字数不合格时只重写范文并保留原报告", async () => {
+  it("范文超过700字时只重写范文并保留原报告", async () => {
     const harness = setup();
     const shortParagraphs = Array.from({ length: 5 }, (_, index) => ({
       title: `第 ${index + 1} 段`,
-      text: "我".repeat(100),
+      text: "我".repeat(150),
       suggestion: "补充具体细节。",
     }));
     const repairedTexts = Array.from({ length: 5 }, () => "我".repeat(120));
@@ -464,18 +464,19 @@ describe("CompositionReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(2);
     const repairRequest = JSON.stringify(harness.create.mock.calls[1][0]);
     expect(repairRequest).toContain("只修复示范作文正文");
-    expect(repairRequest).toContain("每段 text 各写 110-140 个汉字");
+    expect(repairRequest).toContain("当前正文合计已有 750 个汉字");
+    expect(repairRequest).toContain("每段至少删减 10 个汉字");
     expect(repairRequest).toContain('{\\"texts\\":[\\"第一段正文\\"');
   });
 
-  it("第一次正文修复仍偏短时按实际汉字数再扩写一次", async () => {
+  it("第一次正文修复仍超长时按实际汉字数再精简一次", async () => {
     const harness = setup();
     const shortParagraphs = Array.from({ length: 5 }, (_, index) => ({
       title: `第 ${index + 1} 段`,
-      text: "我".repeat(100),
+      text: "我".repeat(150),
       suggestion: "补充具体细节。",
     }));
-    const firstRepairTexts = Array.from({ length: 5 }, () => "我".repeat(89));
+    const firstRepairTexts = Array.from({ length: 5 }, () => "我".repeat(149));
     const secondRepairTexts = Array.from({ length: 5 }, () => "我".repeat(120));
     harness.create
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
@@ -504,11 +505,11 @@ describe("CompositionReviewAdapter", () => {
 
     expect(harness.create).toHaveBeenCalledTimes(3);
     const secondRepairRequest = JSON.stringify(harness.create.mock.calls[2][0]);
-    expect(secondRepairRequest).toContain("actualCharacters=445");
-    expect(secondRepairRequest).toContain("每段至少新增 21 个汉字");
+    expect(secondRepairRequest).toContain("actualCharacters=745");
+    expect(secondRepairRequest).toContain("每段至少删减 9 个汉字");
   });
 
-  it("短范文最多修复两次，仍不足目标字数则拒绝保存", async () => {
+  it("总字数低于550时直接返回，不触发示范文修复", async () => {
     const harness = setup();
     const shortReport = {
       ...report,
@@ -518,28 +519,20 @@ describe("CompositionReviewAdapter", () => {
         suggestion: "补充具体细节。",
       })),
     };
-    harness.create
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        report: shortReport,
-        annotationAnchors: [],
-      }) } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        texts: shortReport.sampleParagraphs.map(({ text }) => text),
-      }) } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        texts: shortReport.sampleParagraphs.map(({ text }) => text),
-      }) } }] });
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+      report: shortReport,
+      annotationAnchors: [],
+    }) } }] });
 
     await expect(harness.adapter.analyzeText({
       config: { ...config, targetCharacters: 600, sampleParagraphCount: 5 },
       pages: [{ pageIndex: 0, text: "我参加了跳绳比赛。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({
-      code: "AI_INVALID_RESPONSE",
-      upstreamCode: "sample_paragraphs_p5_c500",
+    })).resolves.toMatchObject({
+      report: shortReport,
+      annotationAnchors: [],
     });
-    expect(harness.create).toHaveBeenCalledTimes(3);
-    expect(JSON.stringify(harness.create.mock.calls[2][0])).toContain("actualCharacters=500");
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("accepts a valid custom report when a sample paragraph begins with a time word", async () => {

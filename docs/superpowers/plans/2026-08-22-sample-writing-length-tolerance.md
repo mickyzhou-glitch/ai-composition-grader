@@ -2,9 +2,9 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 将无分段字数要求时目标 600 字的示范作文校验范围从 600–660 调整为 550–700；有分段建议字数时按每段范围生成，然后恢复并完成 `teacher01` 的 36 篇重分析任务。
+**目标：** 将无分段字数要求时目标 600 字的示范作文目标参考范围调整为 550–700，低于 550 也正常返回；有分段建议字数时按每段范围生成，然后恢复并完成 `teacher01` 的 36 篇重分析任务。
 
-**架构：** 由域层 `resolveSampleWritingRequirements` 解析结构要求中的分段字数范围；有完整范围时逐段校验，否则使用目标字数的 550–700 兜底。模型提示词、生成校验和重写入口共享同一结果。保留段落数、Schema 和其他业务校验。
+**架构：** 由域层 `resolveSampleWritingRequirements` 解析结构要求中的分段字数范围；有完整范围时逐段校验，否则使用目标字数的 550–700 作为生成参考，服务端只拒绝超过上限的结果。模型提示词、生成校验和重写入口共享同一结果。保留段落数、Schema 和其他业务校验。
 
 **技术栈：** TypeScript、Vitest、Next.js 16、Cloudflare Workers、D1、Queues。
 
@@ -43,7 +43,7 @@ expect(resolveSampleWritingRequirements(config)).toEqual({
 ```ts
 expect(() => validateSampleWritingRequirements(paragraphs(550), config)).not.toThrow();
 expect(() => validateSampleWritingRequirements(paragraphs(700), config)).not.toThrow();
-expect(() => validateSampleWritingRequirements(paragraphs(549), config)).toThrow(/sample paragraphs invalid/u);
+expect(() => validateSampleWritingRequirements(paragraphs(549), config)).not.toThrow();
 expect(() => validateSampleWritingRequirements(paragraphs(701), config)).toThrow(/sample paragraphs invalid/u);
 ```
 
@@ -55,7 +55,7 @@ expect(() => validateSampleWritingRequirements(paragraphs(701), config)).toThrow
 npm test -- src/ai/sample-writing-requirements.test.ts
 ```
 
-预期：FAIL，现有实现仍返回 600–660，并拒绝 550 和 700。
+预期：FAIL，现有实现仍会拒绝 549 个汉字。
 
 - [ ] **步骤 4：实现最小修改**
 
@@ -77,7 +77,7 @@ return {
 npm test -- src/ai/sample-writing-requirements.test.ts
 ```
 
-预期：该测试文件全部 PASS。
+预期：该测试文件全部 PASS，低于参考下限的正文不会触发错误。
 
 - [ ] **步骤 6：提交修复**
 
@@ -98,7 +98,7 @@ git commit -m "fix(AI): 放宽示范作文字数范围"
 npm test -- src/ai/composition-review-adapter.test.ts src/ai/openai-review-adapter.test.ts
 ```
 
-预期：全部 PASS，提示词断言显示 550–700。
+预期：全部 PASS，提示词说明 550–700 是参考范围且低于 550 可正常返回。
 
 - [ ] **步骤 2：运行全量验证**
 
@@ -146,4 +146,4 @@ Content-Type: application/json
 
 - [ ] **步骤 4：验收线上报告**
 
-确认 36 篇作文均为 `ready_for_review`、`teacher_reviewed_at IS NULL`，最新任务为 `succeeded`，且报告范文为 5 段；有分段建议字数的作文逐段合规，其余作文合计为 550–700 个汉字。
+确认 36 篇作文均为 `ready_for_review`、`teacher_reviewed_at IS NULL`，最新任务为 `succeeded`，且报告范文为 5 段；有分段建议字数的作文逐段合规，其余作文合计不超过 700 个汉字，低于 550 个汉字也可正常返回。

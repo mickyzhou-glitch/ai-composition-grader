@@ -112,9 +112,14 @@ describe("sample writing requirements", () => {
       .not.toThrow();
   });
 
-  it.each([549, 701])("拒绝合计 %i 个汉字的示范正文", (totalCharacters) => {
-    expect(() => validateSampleWritingRequirements(paragraphs(totalCharacters), config))
-      .toThrow(/expectedCharacters=550\.\.700/u);
+  it("总字数低于550时正常返回", () => {
+    expect(() => validateSampleWritingRequirements(paragraphs(549), config))
+      .not.toThrow();
+  });
+
+  it("只拒绝超过700个汉字的示范正文", () => {
+    expect(() => validateSampleWritingRequirements(paragraphs(701), config))
+      .toThrow(/expectedCharacters<=700/u);
   });
 
   it("拒绝段落数不符合题目配置的示范正文", () => {
@@ -127,6 +132,7 @@ describe("sample writing requirements", () => {
 
     expect(rule).toContain("五升六");
     expect(rule).toContain("550-700");
+    expect(rule).toContain("低于550个汉字也可正常返回");
     expect(rule).toContain(config.writingRequirements);
     expect(rule).toContain(config.structureRequirements);
     expect(rule).toContain(config.scoringFocus);

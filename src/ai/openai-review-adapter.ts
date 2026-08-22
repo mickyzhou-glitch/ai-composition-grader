@@ -643,7 +643,7 @@ export class OpenAIReviewAdapter {
     const paragraphRange = expected.paragraphCharacterRanges?.[input.index];
     const minimumCharacters = paragraphRange
       ? paragraphRange.minimumCharacters
-      : Math.max(0, expected.minimumCharacters - otherCharacters);
+      : 1;
     const maximumCharacters = paragraphRange
       ? paragraphRange.maximumCharacters
       : expected.maximumCharacters - otherCharacters;

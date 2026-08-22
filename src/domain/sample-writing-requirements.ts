@@ -111,11 +111,11 @@ export function validateSampleWritingRequirements(
 
   const actualCharacters = countSampleTextCharacters(paragraphs);
 
-  if (actualCharacters < expected.minimumCharacters || actualCharacters > expected.maximumCharacters) {
+  if (actualCharacters > expected.maximumCharacters) {
     throw new Error(
       `sample paragraphs invalid: expectedParagraphs=${expected.paragraphCount}; ` +
       `actualParagraphs=${paragraphs.length}; ` +
-      `expectedCharacters=${expected.minimumCharacters}..${expected.maximumCharacters}; ` +
+      `expectedCharacters<=${expected.maximumCharacters}; ` +
       `actualCharacters=${actualCharacters}`,
     );
   }

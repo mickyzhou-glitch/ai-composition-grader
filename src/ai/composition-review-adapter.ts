@@ -95,12 +95,6 @@ function sampleParagraphRepairPrompt(
   validationError: string,
 ): string {
   const expected = resolveSampleWritingRequirements(input.config);
-  const minimumCharactersPerParagraph = Math.ceil(
-    expected.minimumCharacters / expected.paragraphCount,
-  );
-  const maximumCharactersPerParagraph = Math.floor(
-    expected.maximumCharacters / expected.paragraphCount,
-  );
   const paragraphCharacterRule = expected.paragraphCharacterRanges
     ? [
       "按教师填写的分段字数分别校验，不使用目标总字数范围覆盖分段要求。",
@@ -108,8 +102,8 @@ function sampleParagraphRepairPrompt(
         `第${index + 1}段 text 的汉字数必须为 ${range.minimumCharacters}-${range.maximumCharacters} 个；`,
       ),
     ].join("\n")
-    : `每段 text 各写 ${minimumCharactersPerParagraph}-${maximumCharactersPerParagraph} 个汉字，` +
-      `${expected.paragraphCount} 段合计必须为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字。`;
+    : `未提供分段字数时，整篇示范文以 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字为目标参考范围；` +
+      `低于${expected.minimumCharacters}个汉字也可正常返回，不要为了凑字数编造内容；超过${expected.maximumCharacters}个汉字才需要精简。`;
   const paragraphIssue = /paragraphIndex=(\d+); expectedParagraphCharacters=(\d+)\.\.(\d+); actualParagraphCharacters=(\d+)/u.exec(
     validationError,
   );
@@ -122,11 +116,6 @@ function sampleParagraphRepairPrompt(
         `至少新增 ${Number(paragraphIssue[2]) - Number(paragraphIssue[4])} 个汉字，不得删减。`
       : `第${paragraphIssue[1]}段当前已有 ${paragraphIssue[4]} 个汉字，必须精简重复表达，` +
         `至少删减 ${Number(paragraphIssue[4]) - Number(paragraphIssue[3])} 个汉字。`
-    : Number.isFinite(actualCharacters) && actualCharacters < expected.minimumCharacters
-    ? `当前正文合计只有 ${actualCharacters} 个汉字，必须在现有内容基础上扩写，` +
-      `不得删减；每段至少新增 ${Math.ceil(
-        (expected.minimumCharacters - actualCharacters) / expected.paragraphCount,
-      )} 个汉字，并补充符合原文的动作、语言、心理或场景细节。`
     : Number.isFinite(actualCharacters) && actualCharacters > expected.maximumCharacters
       ? `当前正文合计已有 ${actualCharacters} 个汉字，必须精简重复表达，` +
         `每段至少删减 ${Math.ceil(
