@@ -129,6 +129,18 @@ describe("AnalysisJobService", () => {
     });
   });
 
+  it("任务层接受 1100 字教师意见并拒绝 1101 字", () => {
+    const maximumGuidance = "意".repeat(1_100);
+
+    expect(() => service.enqueue(ownerA, "review-a", maximumGuidance)).not.toThrow();
+    expect(repository.findLatestByReview(ownerA, "review-a")).toMatchObject({
+      teacherGuidance: maximumGuidance,
+    });
+    expect(() => service.enqueue(ownerA, "review-a", `${maximumGuidance}见`)).toThrow(
+      "teacherGuidance must be at most 1100 characters",
+    );
+  });
+
   it("content_only 模式写入任务并传给 Worker", () => {
     sqlite.prepare(`
       UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?

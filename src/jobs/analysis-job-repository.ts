@@ -4,6 +4,7 @@ import { and, asc, desc, eq, gt, lte, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
 import { ocrCheckpointSchema } from "../ocr/contracts";
+import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import {
   analysisJobs,
   type AnalysisJobStatus,
@@ -184,8 +185,10 @@ export class AnalysisJobRepository {
     assertId(reviewId, "reviewId");
     const normalizedGuidance = teacherGuidance?.trim() || null;
     if (mode !== "full" && mode !== "content_only") throw new TypeError("invalid analysis mode");
-    if (normalizedGuidance && normalizedGuidance.length > 1000) {
-      throw new TypeError("teacherGuidance must be at most 1000 characters");
+    if (normalizedGuidance && normalizedGuidance.length > MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS) {
+      throw new TypeError(
+        `teacherGuidance must be at most ${MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS} characters`,
+      );
     }
     const now = assertDate(this.now(), "now");
 

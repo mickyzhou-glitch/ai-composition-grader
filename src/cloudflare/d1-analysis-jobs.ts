@@ -1,3 +1,4 @@
+import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import type { AnalysisJobMode } from "./cloud-analysis-pipeline";
 
 const stages = new Set(["queued", "reading_images", "saving_ocr", "generating_review", "mapping_annotations", "validating_result", "saving_result"]);
@@ -102,8 +103,13 @@ function normalizeEnqueueInput(input: unknown): { mode: AnalysisJobMode; teacher
   if (rawGuidance === undefined || rawGuidance === null || rawGuidance === "") {
     return { mode, teacherGuidance: null };
   }
-  if (typeof rawGuidance !== "string" || rawGuidance.trim().length > 1000) {
-    throw new TypeError("teacherGuidance must be at most 1000 characters");
+  if (
+    typeof rawGuidance !== "string"
+    || rawGuidance.trim().length > MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS
+  ) {
+    throw new TypeError(
+      `teacherGuidance must be at most ${MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS} characters`,
+    );
   }
   return { mode, teacherGuidance: rawGuidance.trim() || null };
 }

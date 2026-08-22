@@ -128,6 +128,56 @@ describe("D1AnalysisJobs", () => {
     expect(statements.find(({ query }) => query.includes("FROM reviews"))?.query).not.toContain("expires_at");
   });
 
+  it("accepts 1100 guidance characters and rejects 1101", async () => {
+    const statements: Array<{ query: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((query: string) => {
+        const statement = {
+          query,
+          bindings: [] as unknown[],
+          bind(...bindings: unknown[]) {
+            this.bindings = bindings;
+            return this;
+          },
+          async first() {
+            if (query.includes("FROM reviews")) return {
+              id: "review-1",
+              revision: 2,
+              image_revision: 4,
+              ocr_checkpoint: null,
+              image_count: 1,
+            };
+            if (query.includes("ORDER BY created_at DESC")) return null;
+            return {
+              id: "job-2",
+              review_id: "review-1",
+              mode: "full",
+              status: "queued",
+              progress_stage: "queued",
+              error_code: null,
+              created_at: 1_700_000_000_000,
+              finished_at: null,
+            };
+          },
+        };
+        statements.push(statement);
+        return statement;
+      }),
+      batch: vi.fn(async () => []),
+    } as unknown as D1Database;
+    const jobs = new D1AnalysisJobs(database);
+    const maximumGuidance = "意".repeat(1_100);
+
+    await expect(jobs.enqueue("teacher-1", "review-1", {
+      teacherGuidance: maximumGuidance,
+    })).resolves.toMatchObject({ newlyQueued: true });
+    expect(statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings)
+      .toContain(maximumGuidance);
+    await expect(jobs.enqueue("teacher-1", "review-1", {
+      teacherGuidance: `${maximumGuidance}见`,
+    })).rejects.toThrow("teacherGuidance must be at most 1100 characters");
+  });
+
   it("accepts the OCR and annotation mapping progress stages", async () => {
     const database = {
       prepare: vi.fn(() => ({
