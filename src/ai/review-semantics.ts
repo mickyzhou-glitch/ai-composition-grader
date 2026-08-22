@@ -39,22 +39,22 @@ export function validateGeneratedReportSemantics(
   }
   const strengths = report.personalizedComment
     .split(/\r?\n/u)
-    .map(normalizeFeedbackItem);
-  const painPoints = report.painPoints.map(normalizeFeedbackItem);
-  const concise = (item: string) => {
-    const length = Array.from(item).length;
-    return length >= 8 && length <= 40;
-  };
+    .map(normalizeFeedbackItem)
+    .filter(Boolean);
+  const painPoints = report.painPoints
+    .map(normalizeFeedbackItem)
+    .filter(Boolean);
   if (
-    strengths.length < 2 || strengths.length > 4 || !strengths.every(concise) ||
-    painPoints.length < 2 || painPoints.length > 4 || !painPoints.every(concise) ||
-    report.commonIssues.length !== 0 || report.revisionSuggestions.length !== 0
+    strengths.length < 2 || strengths.length > 4 ||
+    painPoints.length < 2 || painPoints.length > 4
   ) {
-    throw new Error("overall feedback must contain two to four concise strengths and improvements");
+    throw new Error("overall feedback must contain two to four non-empty strengths and improvements");
   }
   return {
     ...report,
     personalizedComment: strengths.join("\n"),
     painPoints,
+    commonIssues: [],
+    revisionSuggestions: [],
   };
 }

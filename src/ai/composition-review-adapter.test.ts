@@ -229,16 +229,46 @@ describe("CompositionReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects feedback when normalization would hide an empty or extra item", async () => {
+  it("normalizes recoverable feedback formatting without retrying the model", async () => {
+    const harness = setup();
+    const longStrength = "运动会过程中的动作、心理和现场气氛描写彼此配合，让长跑比赛的紧张感和坚持到底的主题都很清楚";
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: {
+        ...report,
+        personalizedComment: `1. ${longStrength}\n\n2、结尾能够回扣坚持的主题`,
+        painPoints: ["1. 第二段压缩到校前的过程", "2、比赛部分补充冲线动作"],
+        commonIssues: ["重复内容"],
+        revisionSuggestions: ["压缩开头"],
+      },
+      annotationAnchors: [],
+    }) } }] });
+
+    const result = await harness.adapter.analyzeText({
+      config,
+      pages: [{ pageIndex: 0, text: "我参加了运动会。" }],
+      studentName: "小艾",
+    });
+
+    expect(result.report).toMatchObject({
+      personalizedComment: `${longStrength}\n结尾能够回扣坚持的主题`,
+      painPoints: ["第二段压缩到校前的过程", "比赛部分补充冲线动作"],
+      commonIssues: [],
+      revisionSuggestions: [],
+    });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects feedback with more than four non-empty improvements", async () => {
     const harness = setup();
     const invalidReport = {
       ...report,
       painPoints: [
-        "第一段补充事情发生的具体背景",
-        "第二段写清收到礼物时的心理变化",
+        "1. 第二段补充事情发生的具体背景",
+        "2、第三段写清比赛过程中的心理变化",
         "3.",
-        "第四段补充比赛最后阶段的具体动作",
+        "第四段补充冲线前后的具体动作",
         "结尾部分要注意回扣题目中心",
+        "开头部分压缩起床和到校的过程",
       ],
     };
     harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
