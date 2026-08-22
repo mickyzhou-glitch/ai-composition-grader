@@ -1,4 +1,8 @@
-import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import {
+  expectedSampleParagraphCount,
+  type AssignmentConfig,
+  type EvaluationReport,
+} from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 
 const EXPECTED_PARENT_FEEDBACKS = [
@@ -34,8 +38,9 @@ export function validateGeneratedReportSemantics(
       throw new Error("parent feedback semantics are invalid");
     }
   });
-  if (config.templateType === "preset_self_applause" && report.sampleParagraphs.length !== 5) {
-    throw new Error("preset composition requires five sample paragraphs");
+  const expectedParagraphs = expectedSampleParagraphCount(config);
+  if (report.sampleParagraphs.length !== expectedParagraphs) {
+    throw new Error(`composition requires ${expectedParagraphs} sample paragraphs`);
   }
   const strengths = report.personalizedComment
     .split(/\r?\n/u)

@@ -14,7 +14,16 @@ const config: AssignmentConfig = {
   structureRequirements: "起因、经过、结果完整。",
   scoringFocus: "内容具体。",
   templateType: "custom",
+  sampleParagraphCount: 1,
 };
+
+function sampleParagraphs(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    title: `第${index + 1}段`,
+    text: "围绕礼物展开具体描写。",
+    suggestion: "补充动作与心理。",
+  }));
+}
 
 const report: EvaluationReport = {
   themeFit: "fits",
@@ -100,7 +109,7 @@ describe("CompositionReviewAdapter", () => {
     });
 
     await harness.adapter.analyzeText({
-      config: { ...config, templateType: "preset_self_applause" },
+      config: { ...config, templateType: "preset_self_applause", sampleParagraphCount: 5 },
       pages: [{ pageIndex: 0, text: "我终于明白了坚持的意义。" }],
       studentName: "小艾",
     });
@@ -111,7 +120,7 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("authenticityAndRelevance:{finding:string,action:string}");
     expect(prompt).toContain("parentFeedbacks 必须按固定顺序生成恰好三份");
     expect(prompt).toContain("小艾家长");
-    expect(prompt).toContain("sampleParagraphs 必须恰好五段");
+    expect(prompt).toContain("sampleParagraphs 必须恰好 5 段");
     expect(prompt).toContain("annotationAnchors={pageIndex:integer");
     for (const phrase of [
       "少见但可能",
@@ -166,6 +175,58 @@ describe("CompositionReviewAdapter", () => {
     const repairRequest = harness.create.mock.calls[1][0] as { messages: Array<{ content: string }> };
     expect(repairRequest.messages[1].content).toContain("parent_feedback_count");
     expect(repairRequest.messages[1].content).toContain("我终于明白了坚持的意义");
+  });
+
+  it("历史自定义配置默认要求5段并拒绝三段响应", async () => {
+    const harness = setup();
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: { ...report, sampleParagraphs: sampleParagraphs(3) },
+      annotationAnchors: [],
+    }) } }] });
+
+    await expect(harness.adapter.analyzeText({
+      config: { ...config, sampleParagraphCount: undefined },
+      pages: [{ pageIndex: 0, text: "爸爸送给我一根跳绳。" }],
+      studentName: "小艾",
+    })).rejects.toMatchObject({ upstreamCode: "sample_paragraphs" });
+
+    const request = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };
+    expect(request.messages[0].content).toContain("sampleParagraphs 必须恰好 5 段");
+  });
+
+  it("历史自定义配置接受五段响应", async () => {
+    const harness = setup();
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: { ...report, sampleParagraphs: sampleParagraphs(5) },
+      annotationAnchors: [],
+    }) } }] });
+
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, sampleParagraphCount: undefined },
+      pages: [{ pageIndex: 0, text: "爸爸送给我一根跳绳。" }],
+      studentName: "小艾",
+    });
+
+    expect(result.report.sampleParagraphs).toHaveLength(5);
+  });
+
+  it("显式段落数同时约束提示词和响应校验", async () => {
+    const harness = setup();
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify({
+      report: { ...report, sampleParagraphs: sampleParagraphs(3) },
+      annotationAnchors: [],
+    }) } }] });
+
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, sampleParagraphCount: 3 },
+      pages: [{ pageIndex: 0, text: "爸爸送给我一根跳绳。" }],
+      studentName: "小艾",
+    });
+
+    expect(result.report.sampleParagraphs).toHaveLength(3);
+
+    const request = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };
+    expect(request.messages[0].content).toContain("sampleParagraphs 必须恰好 3 段");
   });
 
   it("accepts a valid custom report when a sample paragraph begins with a time word", async () => {
