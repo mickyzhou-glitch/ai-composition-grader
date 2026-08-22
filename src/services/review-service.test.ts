@@ -255,6 +255,33 @@ describe("ReviewService analysis CAS", () => {
     await cleanup.mock.results[0]?.value;
   });
 
+  it("教师审核在作文锁内保存并清理旧 PDF，随后移出待审核队列", async () => {
+    const service = serviceFor(async () => readyEnvelope);
+    const ready = repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
+      pdfFilename: "old-review.pdf",
+      pdfPath: "pdf/old-review.pdf",
+      exportedAt: new Date("2026-07-21T06:00:00.000Z"),
+    });
+    const cleanup = vi.spyOn(fileStore, "queuePdfCleanup");
+
+    expect(service.listTeacherReviewQueue(OWNER_ID).map(({ id }) => id)).toEqual(["review-1"]);
+    const saved = await service.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: exported.revision,
+      studentName: "张小明",
+      report: readyEnvelope.report,
+      annotations: [],
+    });
+
+    expect(saved).toMatchObject({
+      studentName: "张小明",
+      teacherReviewedAt: expect.any(Date),
+      pdfFilename: null,
+    });
+    expect(service.listTeacherReviewQueue(OWNER_ID)).toEqual([]);
+    expect(cleanup).toHaveBeenCalledWith(OWNER_ID, "review-1", ["old-review.pdf"]);
+  });
+
   it("缓存 PDF 读取期间教师编辑等待同一把锁，读取结束后缓存失效", async () => {
     const lock = new InMemoryReviewLock();
     const service = new ReviewService(

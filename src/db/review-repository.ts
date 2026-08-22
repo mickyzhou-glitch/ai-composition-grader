@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, isNotNull, lt, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
@@ -54,6 +54,7 @@ export interface ReviewRecord {
   pdfPath: string | null;
   pdfRevision: number | null;
   exportedAt: Date | null;
+  teacherReviewedAt: Date | null;
   expiresAt?: Date | null;
   deletingAt?: Date | null;
   privacyConsentVersion?: string | null;
@@ -325,6 +326,7 @@ export class ReviewRepository {
         pdfPath: reviews.pdfPath,
         pdfRevision: reviews.pdfRevision,
         exportedAt: reviews.exportedAt,
+        teacherReviewedAt: reviews.teacherReviewedAt,
         expiresAt: reviews.expiresAt,
         deletingAt: reviews.deletingAt,
         privacyConsentVersion: reviews.privacyConsentVersion,
@@ -487,6 +489,26 @@ export class ReviewRepository {
     return this.list(ownerId);
   }
 
+  listTeacherReviewQueue(ownerId: string): ReviewRecord[] {
+    return this.database
+      .select({ id: reviews.id })
+      .from(reviews)
+      .where(and(
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        isNull(reviews.teacherReviewedAt),
+        isNotNull(reviews.report),
+        inArray(reviews.status, ["ready_for_review", "exported"]),
+        or(
+          isNull(reviews.ocrCheckpoint),
+          sql`${reviews.reportOcrRevision} = json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision')`,
+        ),
+      ))
+      .orderBy(asc(reviews.createdAt), asc(reviews.id))
+      .all()
+      .map(({ id }) => this.requireById(ownerId, id));
+  }
+
   updateReport(
     ownerId: string,
     id: string,
@@ -546,6 +568,7 @@ export class ReviewRepository {
           updatedAt,
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
+          teacherReviewedAt: null,
           pdfFilename: null,
           pdfPath: null,
           pdfRevision: null,
@@ -559,6 +582,19 @@ export class ReviewRepository {
   }
 
   updateTeacherEdits(ownerId: string, id: string, input: TeacherReviewEdits): ReviewRecord {
+    return this.saveTeacherEdits(ownerId, id, input, false);
+  }
+
+  completeTeacherReview(ownerId: string, id: string, input: TeacherReviewEdits): ReviewRecord {
+    return this.saveTeacherEdits(ownerId, id, input, true);
+  }
+
+  private saveTeacherEdits(
+    ownerId: string,
+    id: string,
+    input: TeacherReviewEdits,
+    markReviewed: boolean,
+  ): ReviewRecord {
     const current = this.requireById(ownerId, id);
     const studentName =
       input.studentName !== undefined
@@ -573,6 +609,9 @@ export class ReviewRepository {
         : input.config !== undefined
           ? null
           : current.report;
+    if (markReviewed && report === null) {
+      throw new TypeError("teacher review requires a report");
+    }
     const savedAnnotations =
       input.annotations !== undefined
         ? input.annotations.map((annotation) => annotationSchema.parse(annotation))
@@ -604,6 +643,11 @@ export class ReviewRepository {
           updatedAt: now,
           revision: sql`${reviews.revision} + 1`,
           analysisRunId: null,
+          teacherReviewedAt: markReviewed
+            ? now
+            : input.config !== undefined
+              ? null
+              : undefined,
           pdfFilename: null,
           pdfPath: null,
           pdfRevision: null,
@@ -653,6 +697,7 @@ export class ReviewRepository {
         imageRevision: sql`${reviews.imageRevision} + 1`,
         ocrCheckpoint: null,
         reportOcrRevision: null,
+        teacherReviewedAt: null,
         pdfFilename: null,
         pdfPath: null,
         pdfRevision: null,
@@ -707,6 +752,7 @@ export class ReviewRepository {
       .set({
         status: "analyzing",
         analysisRunId: runId,
+        teacherReviewedAt: null,
         updatedAt: this.now(),
         pdfFilename: null,
         pdfPath: null,

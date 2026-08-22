@@ -115,6 +115,7 @@ describe("ReviewRepository", () => {
       studentName: "",
       status: "draft",
       revision: 0,
+      teacherReviewedAt: null,
       analysisRunId: null,
       config,
       report: null,
@@ -162,6 +163,105 @@ describe("ReviewRepository", () => {
       "newer",
       "older",
     ]);
+  });
+
+  it("只按创建时间列出报告可复核且尚未审核的作文", () => {
+    repository.create(OWNER_ID, { id: "old-ready", config });
+    repository.create(OWNER_ID, { id: "draft", config });
+    repository.create(OWNER_ID, { id: "new-ready", config });
+    repository.create(OWNER_ID, { id: "failed", config });
+    repository.create(OWNER_ID, { id: "reviewed", config });
+    repository.updateReport(OWNER_ID, "old-ready", report);
+    repository.updateReport(OWNER_ID, "new-ready", report);
+    repository.updateReport(OWNER_ID, "failed", report);
+    repository.updateStatus(OWNER_ID, "failed", "failed");
+    repository.updateReport(OWNER_ID, "reviewed", report);
+    sqlite.prepare("UPDATE reviews SET teacher_reviewed_at = ? WHERE id = ?")
+      .run(Date.parse("2026-07-20T11:00:00.000Z"), "reviewed");
+
+    expect(repository.listTeacherReviewQueue(OWNER_ID).map(({ id }) => id)).toEqual([
+      "old-ready",
+      "new-ready",
+    ]);
+  });
+
+  it("原子保存教师修改并标记审核", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+
+    const saved = repository.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: ready.revision,
+      studentName: "张小明",
+      report: { ...report, personalizedComment: "老师最终确认。" },
+      annotations: [annotation],
+    });
+
+    expect(saved).toMatchObject({
+      studentName: "张小明",
+      status: "ready_for_review",
+      revision: ready.revision + 1,
+      report: { personalizedComment: "老师最终确认。" },
+      annotations: [annotation],
+    });
+    expect(saved.teacherReviewedAt).toBeInstanceOf(Date);
+    expect(repository.listTeacherReviewQueue(OWNER_ID)).toEqual([]);
+  });
+
+  it("教师审核版本冲突时不保存修改也不标记审核", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+
+    expect(() => repository.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: ready.revision - 1,
+      studentName: "不应保存",
+      report,
+      annotations: [annotation],
+    })).toThrow(expect.objectContaining({ code: "REVISION_CONFLICT" }));
+
+    expect(repository.requireById(OWNER_ID, "review-1")).toMatchObject({
+      studentName: "",
+      revision: ready.revision,
+      teacherReviewedAt: null,
+      annotations: [],
+    });
+  });
+
+  it("普通编辑保留审核状态，重新分析、改配置和换图会清空审核状态", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const reviewed = repository.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: ready.revision,
+      report,
+    });
+
+    const edited = repository.updateTeacherEdits(OWNER_ID, "review-1", {
+      expectedRevision: reviewed.revision,
+      studentName: "张小明",
+    });
+    expect(edited.teacherReviewedAt).toEqual(reviewed.teacherReviewedAt);
+
+    repository.beginAnalysis(OWNER_ID, "review-1", "run-1", edited.revision);
+    expect(repository.requireById(OWNER_ID, "review-1").teacherReviewedAt).toBeNull();
+
+    const analyzed = repository.saveAnalysis(OWNER_ID, "review-1", {
+      revision: edited.revision,
+      runId: "run-1",
+    }, { readable: true, pageWarnings: [], report, annotations: [] });
+    const reviewedAgain = repository.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: analyzed.revision,
+      report,
+    });
+    expect(repository.updateConfig(OWNER_ID, "review-1", { ...config, title: "新题目" }).teacherReviewedAt).toBeNull();
+
+    const readyAgain = repository.updateReport(OWNER_ID, "review-1", report);
+    repository.completeTeacherReview(OWNER_ID, "review-1", { expectedRevision: readyAgain.revision, report });
+    expect(repository.replaceImages(
+      OWNER_ID,
+      "review-1",
+      repository.requireById(OWNER_ID, "review-1").revision,
+      [],
+    ).teacherReviewedAt).toBeNull();
+    expect(reviewedAgain.teacherReviewedAt).toBeInstanceOf(Date);
   });
 
   it("更新配置即使仍兼容旧报告也清理分析结果并回到 draft", () => {

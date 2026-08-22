@@ -109,6 +109,10 @@ export class ReviewService {
     return this.repository.list(ownerId);
   }
 
+  listTeacherReviewQueue(ownerId: string): ReviewRecord[] {
+    return this.repository.listTeacherReviewQueue(ownerId);
+  }
+
   get(ownerId: string, id: string): ReviewRecord {
     const review = this.repository.getById(ownerId, id);
     if (!review) throw new ReviewServiceError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
@@ -262,6 +266,24 @@ export class ReviewService {
         const current = this.get(ownerId, id);
         await this.fileStore.migrateLegacyReview(ownerId, id);
         const updated = this.repository.updateTeacherEdits(ownerId, id, input);
+        if (current.pdfFilename) {
+          await this.fileStore.queuePdfCleanup(ownerId, id, [current.pdfFilename]);
+        }
+        return updated;
+      });
+    });
+  }
+
+  async completeTeacherReview(
+    ownerId: string,
+    id: string,
+    input: TeacherReviewEdits,
+  ): Promise<ReviewRecord> {
+    return this.lock.runExclusive(id, async () => {
+      return this.fileStore.withReviewLock(ownerId, id, async () => {
+        const current = this.get(ownerId, id);
+        await this.fileStore.migrateLegacyReview(ownerId, id);
+        const updated = this.repository.completeTeacherReview(ownerId, id, input);
         if (current.pdfFilename) {
           await this.fileStore.queuePdfCleanup(ownerId, id, [current.pdfFilename]);
         }
