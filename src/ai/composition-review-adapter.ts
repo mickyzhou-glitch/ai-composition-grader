@@ -142,6 +142,18 @@ function validationDetail(error: unknown): string {
   return validationCode(error);
 }
 
+function repairValidationCode(error: unknown): string {
+  const code = validationCode(error);
+  if (code !== "sample_paragraphs" || !(error instanceof Error)) return code;
+
+  const paragraphCount = /actualParagraphs=(\d+)/u.exec(error.message)?.[1];
+  const characterCount = /actualCharacters=(\d+)/u.exec(error.message)?.[1];
+  if (!paragraphCount) return code;
+  return characterCount
+    ? `sample_paragraphs_p${paragraphCount}_c${characterCount}`
+    : `sample_paragraphs_p${paragraphCount}`;
+}
+
 function validateContentResult(
   content: string,
   input: AnalyzeOcrTextInput,
@@ -231,7 +243,7 @@ export class CompositionReviewAdapter {
             "作文内容模型返回结果结构无效",
             502,
             undefined,
-            validationCode(repairError),
+            repairValidationCode(repairError),
           );
         }
       }

@@ -284,7 +284,7 @@ describe("CompositionReviewAdapter", () => {
       config: { ...config, sampleParagraphCount: undefined },
       pages: [{ pageIndex: 0, text: "爸爸送给我一根跳绳。" }],
       studentName: "小艾",
-    })).rejects.toMatchObject({ upstreamCode: "sample_paragraphs" });
+    })).rejects.toMatchObject({ upstreamCode: "sample_paragraphs_p3_c10" });
 
     const request = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };
     expect(request.messages[0].content).toContain("sampleParagraphs 必须恰好 5 段");
@@ -445,7 +445,7 @@ describe("CompositionReviewAdapter", () => {
       studentName: "小艾",
     })).rejects.toMatchObject({
       code: "AI_INVALID_RESPONSE",
-      upstreamCode: "sample_paragraphs",
+      upstreamCode: "sample_paragraphs_p5_c500",
     });
     expect(harness.create).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("actualCharacters=500");
