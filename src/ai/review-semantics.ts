@@ -20,6 +20,9 @@ export function validateGeneratedReportSemantics(
   studentName?: string,
 ): EvaluationReport {
   const report = validateReport(input, { config });
+  if (!report.diagnostics) {
+    throw new Error("report diagnostics missing after validation");
+  }
   validateStructureRequirementCoverage(
     report.diagnostics.structure.finding,
     config.structureRequirements,
