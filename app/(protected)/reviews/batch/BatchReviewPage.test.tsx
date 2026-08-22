@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -73,7 +73,180 @@ function mockReviewApi(
 }
 
 describe("BatchReviewPage", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("returns an unsuitable review with the revision guard and immediately opens a prefetched successor", async () => {
+    const queue = [
+      queueItem("review-1", "张小明", 7),
+      queueItem("review-2", "李安然", 3),
+    ];
+    const details = new Map(queue.map((item) => [item.id, detail(item.id, item.studentName, item.revision)]));
+    let revisionBody: unknown;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      const revisionMatch = /^\/api\/reviews\/(review-\d)\/revision-request$/u.exec(url);
+      if (revisionMatch && init?.method === "POST") {
+        revisionBody = JSON.parse(String(init.body));
+        queue.splice(0, 1);
+        return Response.json({ ok: true, data: { newlyQueued: true, job: {
+          id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued",
+          message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null,
+        } } }, { status: 202 });
+      }
+      const detailMatch = /^\/api\/reviews\/(review-\d)$/u.exec(url);
+      if (detailMatch) return Response.json({ ok: true, data: details.get(detailMatch[1]) });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-2", expect.anything()));
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "批改没有回应题目要求");
+    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "请围绕题目重写批改");
+    await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
+
+    expect(revisionBody).toEqual({ expectedRevision: 7, reason: "批改没有回应题目要求", changeRequest: "请围绕题目重写批改" });
+    expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
+    expect(screen.queryByText("正在展开作文与批改报告")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "待导出清单 (0)" })).toBeVisible();
+  });
+
+  it("keeps the current essay, dialog, and fields when revision request fails", async () => {
+    mockReviewApi([queueItem("review-1", "张小明", 2)]);
+    const fetchMock = vi.mocked(globalThis.fetch);
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: [queueItem("review-1", "张小明", 2)] });
+      if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 2) });
+      if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: false, error: { message: "退回失败，请重试" } }, { status: 500 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因保留");
+    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求保留");
+    await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
+
+    expect(await screen.findByText("退回失败，请重试")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "为什么不合适" })).toHaveValue("原因保留");
+    expect(screen.getByRole("textbox", { name: "应该怎么改" })).toHaveValue("要求保留");
+  });
+
+  it("confirms before opening the unsuitable dialog when the current review is dirty", async () => {
+    mockReviewApi([queueItem("review-1", "张小明", 1), queueItem("review-2", "李安然", 2)]);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    const name = await screen.findByRole("textbox", { name: "学生姓名" });
+    await user.type(name, "同学");
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+
+    expect(confirm).toHaveBeenCalledWith("当前修改尚未审核保存，确认切换作文？");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "张小明同学" })).toBeVisible();
+  });
+
+  it("does not add a successfully returned review to reviewed or export collections", async () => {
+    const queue = [queueItem("review-1", "张小明", 1)];
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 1) });
+      if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    await screen.findByRole("heading", { name: "张小明" });
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
+
+    expect(await screen.findByRole("heading", { name: "待审核队列已完成" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "待导出清单 (0)" })).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/revision-request", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("polls revision jobs every two seconds and refreshes the queue without stealing the active review", async () => {
+    const queue = [queueItem("review-1", "张小明", 1), queueItem("review-2", "李安然", 2)];
+    const details = new Map(queue.map((item) => [item.id, detail(item.id, item.studentName, item.revision)]));
+    let statusCalls = 0;
+    let queueCalls = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") {
+        queueCalls += 1;
+        return Response.json({ ok: true, data: queueCalls === 1 ? queue : [queue[1]] });
+      }
+      if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: details.get("review-1") });
+      if (url === "/api/reviews/review-2") return Response.json({ ok: true, data: details.get("review-2") });
+      if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
+      if (url === "/api/reviews/review-1/analyze/status") {
+        statusCalls += 1;
+        return Response.json({ ok: true, data: { job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: statusCalls === 1 ? "queued" : "succeeded", progressStage: statusCalls === 1 ? "queued" : "saving_result", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: statusCalls === 1 ? null : "2026-08-22T06:01:00.000Z" } } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-2", expect.anything()));
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
+    expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(0), { timeout: 3_000 });
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(1), { timeout: 3_000 });
+    await waitFor(() => expect(queueCalls).toBeGreaterThan(1), { timeout: 3_000 });
+    expect(screen.getByRole("heading", { name: "李安然" })).toBeVisible();
+  }, 12_000);
+
+  it("shows a safe failure notice and never requeues a failed revision job", async () => {
+    const queue = [queueItem("review-1", "张小明", 1)];
+    let statusCalls = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 1) });
+      if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
+      if (url === "/api/reviews/review-1/analyze/status") {
+        statusCalls += 1;
+        return Response.json({ ok: true, data: { job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "failed", progressStage: "saving_result", message: "internal details", createdAt: "2026-08-22T06:00:00.000Z", finishedAt: "2026-08-22T06:01:00.000Z" } } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<BatchReviewPage />);
+    await screen.findByRole("heading", { name: "张小明" });
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
+    await screen.findByRole("heading", { name: "待审核队列已完成" });
+
+    await waitFor(() => expect(statusCalls).toBeGreaterThan(0), { timeout: 3_000 });
+    expect(screen.getByRole("status")).toHaveTextContent("退回后的重新分析失败，作文未加入待审核队列。");
+    expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/analyze/status", undefined);
+  }, 7_000);
 
   it("prefetches two successors and switches immediately after atomic teacher review", async () => {
     const queue = [
