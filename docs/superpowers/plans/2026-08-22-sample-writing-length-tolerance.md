@@ -14,6 +14,7 @@
 
 - 修改：`src/ai/sample-writing-requirements.test.ts`，覆盖新的阈值和边界行为。
 - 修改：`src/domain/sample-writing-requirements.ts`，计算目标字数下浮 50、上浮 100 的容错范围。
+- 修改：`src/ai/composition-review-adapter.ts`，在范文校验失败时将现有第二次请求收窄为定向修复。
 - 验证：`src/ai/composition-review-adapter.test.ts` 和 `src/ai/openai-review-adapter.test.ts`，确认两条 AI 链路共享新规则。
 
 ## 任务 1：用 TDD 调整字数范围
@@ -86,6 +87,10 @@ git commit -m "fix(AI): 放宽示范作文字数范围"
 ```
 
 ## 任务 2：验证并部署
+
+- [ ] **步骤 0：用 TDD 实现范文定向修复**
+
+在 `src/ai/composition-review-adapter.test.ts` 模拟初次完整报告只有范文字数不合格，第二次只返回合格 `sampleParagraphs`。先确认旧实现因缺少完整 `report` 而失败，再实现定向解析、合并和整份报告复验。修复后仍不在 550–700 或段落数错误时，仍必须返回 `AI_INVALID_RESPONSE`。
 
 - [ ] **步骤 1：运行 AI 适配器回归测试**
 

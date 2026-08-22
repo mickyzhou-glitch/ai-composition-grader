@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   evaluationReportSchema,
+  sampleParagraphSchema,
   type AssignmentConfig,
   type EvaluationReport,
 } from "../domain/contracts";
@@ -15,12 +16,19 @@ import {
   type OpenAICompatibleClient,
 } from "./openai-review-adapter";
 import { validateGeneratedReportSemantics } from "./review-semantics";
-import { buildSampleWritingRule } from "./sample-writing-requirements";
+import {
+  buildSampleWritingRule,
+  validateSampleWritingRequirements,
+} from "./sample-writing-requirements";
 import { buildStructureReviewRule } from "./structure-review-requirements";
 
 const resultSchema = z.object({
   report: evaluationReportSchema,
   annotationAnchors: z.array(reviewAnnotationAnchorSchema),
+}).strict();
+
+const sampleParagraphRepairSchema = z.object({
+  sampleParagraphs: z.array(sampleParagraphSchema).min(1).max(10),
 }).strict();
 
 export interface AnalyzeOcrTextInput {
@@ -80,6 +88,20 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "只返回一个 JSON 对象，不要 Markdown，不要解释。严格结构如下：",
     CONTENT_RESULT_SCHEMA,
   ].filter(Boolean).join("\n\n");
+}
+
+function sampleParagraphRepairPrompt(
+  input: AnalyzeOcrTextInput,
+  validationError: string,
+): string {
+  return [
+    "你只修复示范作文，不要返回报告其他字段。",
+    `作文要求：${JSON.stringify(input.config)}`,
+    buildSampleWritingRule(input.config),
+    "保留原文的核心材料，不得编造关键内容；文体、结构、段落顺序和衔接方式必须服从教师配置。",
+    `校验失败原因：${validationError}`,
+    '只返回 JSON：{"sampleParagraphs":[{"title":"","text":"","suggestion":""}]}。',
+  ].join("\n\n");
 }
 
 function validationCode(error: unknown): string {
@@ -156,6 +178,43 @@ export class CompositionReviewAdapter {
     try {
       return validateContentResult(content, input);
     } catch (initialError) {
+      if (validationCode(initialError) === "sample_paragraphs") {
+        try {
+          const original = resultSchema.parse(parseJsonResponse(content));
+          const repaired = await completionContent(client, {
+            ...requestOptions,
+            messages: [
+              {
+                role: "system",
+                content: sampleParagraphRepairPrompt(input, validationDetail(initialError)),
+              },
+              {
+                role: "user",
+                content: JSON.stringify({
+                  pages: input.pages,
+                  currentSampleParagraphs: original.report.sampleParagraphs,
+                }),
+              },
+            ],
+          });
+          const { sampleParagraphs } = sampleParagraphRepairSchema.parse(
+            parseJsonResponse(repaired),
+          );
+          validateSampleWritingRequirements(sampleParagraphs, input.config);
+          return validateContentResult(JSON.stringify({
+            ...original,
+            report: { ...original.report, sampleParagraphs },
+          }), input);
+        } catch (repairError) {
+          throw new AiAdapterError(
+            "AI_INVALID_RESPONSE",
+            "作文内容模型返回结果结构无效",
+            502,
+            undefined,
+            validationCode(repairError),
+          );
+        }
+      }
       const repaired = await completionContent(client, {
         ...requestOptions,
         messages: [
