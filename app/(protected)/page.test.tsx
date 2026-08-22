@@ -144,4 +144,72 @@ describe("历史首页", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(open).not.toHaveBeenCalled();
   });
+
+  it("预览并按最新框架重新分析，成功项移除选择而跳过项保留", async () => {
+    const secondReview = {
+      ...review,
+      id: "review-2",
+      studentName: "李安然",
+      config: { title: "我的周末" },
+      revision: 3,
+    };
+    let loadCount = 0;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews") {
+        loadCount += 1;
+        return json(loadCount === 1 ? [review, secondReview] : [review, secondReview]);
+      }
+      if (url === "/api/reviews/batch-reanalysis/preview" && init?.method === "POST") {
+        return json({
+          matched: [{
+            reviewId: "review-1",
+            studentName: "张小明",
+            title: "为自己鼓掌",
+            expectedRevision: 1,
+            assignmentId: "assignment-1",
+            assignmentUpdatedAt: "2026-08-22T09:30:00.000Z",
+          }],
+          skipped: [{
+            reviewId: "review-2",
+            studentName: "李安然",
+            title: "我的周末",
+            code: "FRAMEWORK_NOT_FOUND",
+            reason: "没有找到同名的已保存题目框架",
+          }],
+        });
+      }
+      if (url === "/api/reviews/batch-reanalysis" && init?.method === "POST") {
+        return json({
+          submitted: [{ reviewId: "review-1", jobId: "job-1", revision: 2 }],
+          skipped: [{
+            reviewId: "review-2",
+            studentName: "李安然",
+            title: "我的周末",
+            code: "FRAMEWORK_NOT_FOUND",
+            reason: "没有找到同名的已保存题目框架",
+          }],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await screen.findByRole("heading", { name: "为自己鼓掌" });
+    await user.click(screen.getByRole("checkbox", { name: "选择《为自己鼓掌》" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择《我的周末》" }));
+    await user.click(screen.getByRole("button", { name: "按最新框架重新分析" }));
+
+    expect(await screen.findByRole("heading", { name: "按最新框架重新分析" })).toBeVisible();
+    expect(screen.getByText("没有找到同名的已保存题目框架")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "确认重新分析 1 篇" }));
+
+    expect(await screen.findByText((_, element) => element instanceof HTMLElement && element.classList.contains("batch-reanalysis-summary"))).toHaveTextContent("已提交 1 篇重新分析任务，1 篇保留选择");
+    expect(screen.getByText("已选择 1 篇")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith("/api/reviews/batch-reanalysis", expect.objectContaining({ method: "POST" }));
+    expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/batch-reanalysis")?.[1]?.body))).toEqual({
+      items: [{ reviewId: "review-1", expectedRevision: 1, assignmentId: "assignment-1", expectedAssignmentUpdatedAt: "2026-08-22T09:30:00.000Z" }],
+    });
+  });
 });

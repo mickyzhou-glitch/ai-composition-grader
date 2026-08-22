@@ -4,13 +4,15 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AppHeader } from "../components/AppHeader";
+import { BatchReanalysisDialog } from "../components/BatchReanalysisDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadReviewPdf, downloadReviewPdfArchive } from "../lib/pdf-download";
 import { filterReviewsByStudentName } from "../lib/review-queue";
-import type { ReviewView } from "../lib/types";
+import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal } from "@/src/domain/contracts";
+import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
 
 function reviewDate(value: string) {
   const date = new Date(value);
@@ -28,6 +30,12 @@ export default function Home() {
   const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(() => new Set());
   const [batchExporting, setBatchExporting] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
+  const [reanalysisOpen, setReanalysisOpen] = useState(false);
+  const [reanalysisLoading, setReanalysisLoading] = useState(false);
+  const [reanalysisSubmitting, setReanalysisSubmitting] = useState(false);
+  const [reanalysisPreview, setReanalysisPreview] = useState<BatchReanalysisPreview | null>(null);
+  const [reanalysisResult, setReanalysisResult] = useState<BatchReanalysisCommitResult | null>(null);
+  const [reanalysisError, setReanalysisError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -62,6 +70,7 @@ export default function Home() {
   const selectedVisibleCount = visibleReviews.filter(({ id }) => selectedReviewIds.has(id)).length;
   const hiddenSelectedCount = selectedReviewIds.size - selectedVisibleCount;
   const allVisibleSelected = visibleReviews.length > 0 && selectedVisibleCount === visibleReviews.length;
+  const reanalysisBusy = reanalysisLoading || reanalysisSubmitting;
 
   async function remove(review: ReviewView) {
     if (!window.confirm(`确认永久删除《${review.config.title}》？删除后不可恢复。`)) return;
@@ -133,6 +142,60 @@ export default function Home() {
     }
   }
 
+  async function openBatchReanalysis() {
+    if (selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || reanalysisBusy || batchExporting || exporting) return;
+    setReanalysisOpen(true);
+    setReanalysisLoading(true);
+    setReanalysisPreview(null);
+    setReanalysisResult(null);
+    setReanalysisError("");
+    try {
+      const preview = await apiFetch<BatchReanalysisPreview>("/api/reviews/batch-reanalysis/preview", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reviewIds: [...selectedReviewIds] }),
+      });
+      setReanalysisPreview(preview);
+    } catch (caught) {
+      setReanalysisError(errorMessage(caught));
+    } finally {
+      setReanalysisLoading(false);
+    }
+  }
+
+  async function submitBatchReanalysis(items: BatchReanalysisCommitItem[]) {
+    if (reanalysisSubmitting || items.length === 0) return;
+    setReanalysisSubmitting(true);
+    setReanalysisError("");
+    try {
+      const result = await apiFetch<BatchReanalysisCommitResult>("/api/reviews/batch-reanalysis", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      setReanalysisResult(result);
+      setSelectedReviewIds((current) => {
+        const next = new Set(current);
+        result.submitted.forEach(({ reviewId }) => next.delete(reviewId));
+        return next;
+      });
+      await load();
+    } catch (caught) {
+      setReanalysisError(errorMessage(caught));
+    } finally {
+      setReanalysisSubmitting(false);
+    }
+  }
+
+  function closeBatchReanalysis() {
+    if (reanalysisBusy) return;
+    setReanalysisOpen(false);
+    setReanalysisLoading(false);
+    setReanalysisPreview(null);
+    setReanalysisResult(null);
+    setReanalysisError("");
+  }
+
   return (
     <div className="app-shell">
       <AppHeader />
@@ -163,16 +226,20 @@ export default function Home() {
           </div>
           {reviews.length ? (
             <div className="history-batch-actions">
-              <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0} onChange={toggleAllReviews} /> 全选当前结果</label>
+              <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0 || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
               <span className="muted">已选择 {selectedReviewIds.size} 篇</span>
               {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
-              <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || batchExporting || exporting !== null} onClick={() => void exportSelectedPdfs()}>
+              <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void exportSelectedPdfs()}>
                 {batchExporting
                   ? "正在打包导出…"
                   : selectedReviewIds.size > 1
                     ? `导出所选 ${selectedReviewIds.size} 篇（ZIP）`
                     : "导出所选 PDF"}
               </button>
+              <button className="button button--primary" type="button" disabled={selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
+                {reanalysisLoading ? "正在预览…" : "按最新框架重新分析"}
+              </button>
+              {selectedReviewIds.size > BATCH_REANALYSIS_LIMIT ? <span className="history-limit-note" role="status">每次最多重新分析 {BATCH_REANALYSIS_LIMIT} 篇</span> : null}
             </div>
           ) : null}
           {error ? <ErrorBanner message={error} onRetry={load} /> : null}
@@ -189,7 +256,7 @@ export default function Home() {
             {!loading && reviews.length > 0 && visibleReviews.length === 0 ? <p className="muted">没有找到该学生的作文</p> : null}
             {visibleReviews.map((review) => (
               <article className="history-card" key={review.id}>
-                <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting} onChange={() => toggleReviewSelection(review.id)} /></label>
+                <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting || reanalysisBusy} onChange={() => toggleReviewSelection(review.id)} /></label>
                 <div className="history-main">
                   <div className="history-meta">
                     <StatusBadge status={review.status} />
@@ -211,7 +278,7 @@ export default function Home() {
                   >
                     {exporting === review.id ? "正在生成 PDF…" : "下载 PDF"}
                   </button>
-                  <button className="button button--danger-quiet" type="button" disabled={deleting === review.id || batchExporting} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
+                  <button className="button button--danger-quiet" type="button" disabled={deleting === review.id || batchExporting || reanalysisBusy} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
                     {deleting === review.id ? "删除中…" : "删除"}
                   </button>
                 </div>
@@ -220,6 +287,16 @@ export default function Home() {
           </div>
         </section>
       </main>
+      <BatchReanalysisDialog
+        open={reanalysisOpen}
+        preview={reanalysisPreview}
+        loading={reanalysisLoading}
+        submitting={reanalysisSubmitting}
+        error={reanalysisError}
+        result={reanalysisResult}
+        onClose={closeBatchReanalysis}
+        onConfirm={(items) => { void submitBatchReanalysis(items); }}
+      />
     </div>
   );
 }

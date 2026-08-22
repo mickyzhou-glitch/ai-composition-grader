@@ -5,6 +5,13 @@ import type {
   NormalizedCrop,
   ReviewStatus,
 } from "@/src/domain/contracts";
+export type {
+  BatchReanalysisCommitItem,
+  BatchReanalysisCommitResult,
+  BatchReanalysisMatchedItem,
+  BatchReanalysisPreview,
+  BatchReanalysisSkippedItem,
+} from "@/src/reanalysis/contracts";
 
 export interface ReviewImageView {
   id: number;

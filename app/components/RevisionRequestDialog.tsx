@@ -69,6 +69,8 @@ export function RevisionRequestDialog({
               <textarea
                 ref={reasonRef}
                 aria-label="为什么不合适"
+                aria-required="true"
+                required
                 maxLength={MAX_FIELD_CHARS}
                 value={reason}
                 disabled={submitting}
@@ -80,6 +82,8 @@ export function RevisionRequestDialog({
               <span>应该怎么改</span>
               <textarea
                 aria-label="应该怎么改"
+                aria-required="true"
+                required
                 maxLength={MAX_FIELD_CHARS}
                 value={changeRequest}
                 disabled={submitting}
