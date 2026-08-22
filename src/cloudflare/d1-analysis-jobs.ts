@@ -49,7 +49,7 @@ export class D1AnalysisJobs {
     const mode = options.mode;
     const review = await this.database.prepare(`
       SELECT reviews.id, reviews.revision, reviews.image_revision, reviews.ocr_checkpoint,
-        reviews.expires_at, COUNT(review_images.id) AS image_count
+        COUNT(review_images.id) AS image_count
       FROM reviews LEFT JOIN review_images ON review_images.review_id = reviews.id
       WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.deleting_at IS NULL GROUP BY reviews.id
     `).bind(reviewId, ownerId).first<{
@@ -57,11 +57,9 @@ export class D1AnalysisJobs {
       revision: number;
       image_revision: number;
       ocr_checkpoint: string | null;
-      expires_at: number | null;
       image_count: number;
     }>();
     if (!review) return { job: null, newlyQueued: false };
-    if (review.expires_at !== null && review.expires_at <= Date.now()) throw new Error("REVIEW_UNAVAILABLE");
     if (review.image_count < 1 || review.image_count > 4) throw new Error("IMAGES_REQUIRED");
     if (mode === "content_only" && !hasCurrentOcr(review.ocr_checkpoint, review.image_revision)) {
       throw new Error("OCR_NOT_FOUND");
@@ -75,7 +73,7 @@ export class D1AnalysisJobs {
         INSERT INTO analysis_jobs (id, review_id, owner_id, mode, status, attempt, available_at, lease_expires_at, progress_stage, error_code, message, teacher_guidance, created_at, started_at, finished_at)
         VALUES (?, ?, ?, ?, 'queued', 0, ?, NULL, 'queued', NULL, NULL, ?, ?, NULL, NULL)
       `).bind(id, reviewId, ownerId, mode, now, guidance, now),
-      this.database.prepare(`UPDATE reviews SET status = 'analyzing', analysis_run_id = ?, updated_at = ? WHERE id = ? AND owner_id = ? AND revision = ?`).bind(id, now, reviewId, ownerId, review.revision),
+      this.database.prepare(`UPDATE reviews SET status = 'analyzing', analysis_run_id = ?, teacher_reviewed_at = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND revision = ?`).bind(id, now, reviewId, ownerId, review.revision),
     ]);
     const job = await this.byId(ownerId, id);
     return { job, newlyQueued: true };

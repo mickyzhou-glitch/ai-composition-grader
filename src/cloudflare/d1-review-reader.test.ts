@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { D1ReviewReader } from "./d1-review-reader";
 
@@ -17,7 +17,8 @@ function database(): D1Database {
               if (query.includes("FROM reviews WHERE owner_id")) return { results: [{
                 id: "r1", status: "draft", student_name: "小明", config, report: null, revision: 2,
                 image_revision: 3, ocr_checkpoint: null, report_ocr_revision: null,
-                pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null, expires_at: null,
+                pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null,
+                teacher_reviewed_at: null, expires_at: null,
                 created_at: 1_700_000_000_000, updated_at: 1_700_000_100_000,
               }] };
               if (query.includes("FROM review_images")) return { results: [{
@@ -45,10 +46,54 @@ describe("D1ReviewReader", () => {
     const reader = new D1ReviewReader(database());
     await expect(reader.list("teacher-1")).resolves.toEqual([expect.objectContaining({
       id: "r1", status: "draft", hasPdf: false, ocr: null, reportStale: false,
+      teacherReviewedAt: null,
       images: [expect.objectContaining({ id: 7, rotation: 0 })],
     })]);
     await expect(reader.imageObjectKey("teacher-1", "r1", 7, "annotation")).resolves.toEqual({
       key: "users/teacher-1/reviews/r1/images/annotation.jpg", contentType: "image/jpeg",
     });
+  });
+
+  it("returns a lightweight oldest-first queue scoped to unreviewed ready reports", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        all: vi.fn().mockResolvedValue({ results: [{
+          id: "ready-1",
+          student_name: "张小明",
+          config,
+          status: "ready_for_review",
+          revision: 3,
+          created_at: 1_700_000_000_000,
+        }] }),
+      })),
+    }));
+
+    await expect(new D1ReviewReader({ prepare } as unknown as D1Database).queue("teacher-1"))
+      .resolves.toEqual([{
+        id: "ready-1",
+        studentName: "张小明",
+        title: "我的老师",
+        status: "ready_for_review",
+        revision: 3,
+        createdAt: new Date(1_700_000_000_000).toISOString(),
+      }]);
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("teacher_reviewed_at IS NULL"));
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("ORDER BY created_at ASC"));
+  });
+
+  it("requires every requested revision to be current and teacher reviewed before export", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        all: vi.fn().mockResolvedValue({ results: [{ id: "ready-1", revision: 3 }] }),
+      })),
+    }));
+    const reader = new D1ReviewReader({ prepare } as unknown as D1Database);
+
+    await expect(reader.checkExportable("teacher-1", [
+      { id: "ready-1", revision: 3 },
+      { id: "not-reviewed", revision: 2 },
+    ])).resolves.toBe(false);
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("teacher_reviewed_at IS NOT NULL"));
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("report_ocr_revision"));
   });
 });

@@ -29,5 +29,7 @@ describe("D1ImageWriter", () => {
     expect(update?.sql).toContain("image_revision = image_revision + 1");
     expect(update?.sql).toContain("ocr_checkpoint = NULL");
     expect(update?.sql).toContain("report_ocr_revision = NULL");
+    expect(update?.sql).toContain("teacher_reviewed_at = NULL");
+    expect(update?.sql).not.toContain("expires_at");
   });
 });

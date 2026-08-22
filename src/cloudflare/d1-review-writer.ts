@@ -51,9 +51,10 @@ export class D1ReviewWriter {
     const updated = await this.database.prepare(`
       UPDATE reviews SET student_name = ?, config = ?, report = ?, status = ?, revision = revision + 1, updated_at = ?,
         analysis_run_id = CASE WHEN ? THEN NULL ELSE analysis_run_id END,
+        teacher_reviewed_at = CASE WHEN ? THEN NULL ELSE teacher_reviewed_at END,
         pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
-    `).bind(parsed.studentName ?? current.student_name, JSON.stringify(config), report === null ? null : JSON.stringify(report), status, now, parsed.config !== undefined ? 1 : 0, reviewId, ownerId, parsed.expectedRevision).run();
+    `).bind(parsed.studentName ?? current.student_name, JSON.stringify(config), report === null ? null : JSON.stringify(report), status, now, parsed.config !== undefined ? 1 : 0, parsed.config !== undefined ? 1 : 0, reviewId, ownerId, parsed.expectedRevision).run();
     if (updated.meta.changes === 0) throw new RevisionConflictError();
     if (annotations !== undefined) {
       await this.database.batch([
@@ -67,10 +68,82 @@ export class D1ReviewWriter {
     return { revision: parsed.expectedRevision + 1 };
   }
 
+  async completeTeacherReview(
+    ownerId: string,
+    reviewId: string,
+    input: unknown,
+  ): Promise<{ revision: number } | null> {
+    const parsed = z.object({
+      expectedRevision: z.number().int().nonnegative(),
+      studentName: studentNameSchema,
+      report: evaluationReportSchema,
+      annotations: z.array(annotationSchema),
+    }).strict().parse(input);
+    const now = Date.now();
+    const nextRevision = parsed.expectedRevision + 1;
+    const eligibility = `
+      EXISTS (
+        SELECT 1 FROM reviews
+        WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+          AND revision = ? AND teacher_reviewed_at = ?
+      )
+    `;
+    const statements: D1PreparedStatement[] = [
+      this.database.prepare(`
+        UPDATE reviews SET student_name = ?, report = ?, status = 'ready_for_review',
+          revision = revision + 1, teacher_reviewed_at = ?, updated_at = ?,
+          analysis_run_id = NULL,
+          pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
+        WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+          AND revision = ? AND report IS NOT NULL
+          AND status IN ('ready_for_review', 'exported')
+      `).bind(
+        parsed.studentName,
+        JSON.stringify(parsed.report),
+        now,
+        now,
+        reviewId,
+        ownerId,
+        parsed.expectedRevision,
+      ),
+      this.database.prepare(`
+        DELETE FROM annotations WHERE review_id = ? AND ${eligibility}
+      `).bind(reviewId, reviewId, ownerId, nextRevision, now),
+      ...parsed.annotations.map((annotation, position) => this.database.prepare(`
+        INSERT INTO annotations (
+          review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight
+        )
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${eligibility}
+      `).bind(
+        reviewId,
+        position,
+        annotation.pageIndex,
+        annotation.x,
+        annotation.y,
+        annotation.category,
+        annotation.anchorText,
+        annotation.comment,
+        annotation.isHighlight ? 1 : 0,
+        reviewId,
+        ownerId,
+        nextRevision,
+        now,
+      )),
+    ];
+    const outcomes = await this.database.batch(statements);
+    if ((outcomes[0]?.meta.changes ?? 0) === 1) return { revision: nextRevision };
+    const exists = await this.database.prepare(
+      "SELECT id FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
+    ).bind(reviewId, ownerId).first<{ id: string }>();
+    if (!exists) return null;
+    throw new RevisionConflictError();
+  }
+
   async markExported(ownerId: string, reviewId: string): Promise<boolean> {
     const updated = await this.database.prepare(`
       UPDATE reviews SET status = 'exported', updated_at = ?
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND report IS NOT NULL
+        AND teacher_reviewed_at IS NOT NULL
         AND status IN ('ready_for_review', 'exported')
     `).bind(Date.now(), reviewId, ownerId).run();
     return updated.meta.changes > 0;
@@ -93,4 +166,9 @@ export class D1ReviewWriter {
   }
 }
 
-class RevisionConflictError extends Error {}
+class RevisionConflictError extends Error {
+  constructor() {
+    super("review revision conflict");
+    this.name = "RevisionConflictError";
+  }
+}

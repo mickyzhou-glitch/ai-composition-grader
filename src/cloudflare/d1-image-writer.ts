@@ -21,11 +21,11 @@ export class D1ImageWriter {
     const updated = await this.database.prepare(`
       UPDATE reviews SET status = 'draft', report = NULL, revision = revision + 1,
         image_revision = image_revision + 1, ocr_checkpoint = NULL, report_ocr_revision = NULL,
-        analysis_run_id = NULL,
-        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL, expires_at = COALESCE(expires_at, ?),
+        analysis_run_id = NULL, teacher_reviewed_at = NULL,
+        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL,
         privacy_consent_version = COALESCE(privacy_consent_version, ?), privacy_consented_at = COALESCE(privacy_consented_at, ?), updated_at = ?
       WHERE id = ? AND owner_id = ? AND revision = ?
-    `).bind(now + 30 * 24 * 60 * 60_000, PRIVACY_NOTICE_VERSION, now, now, reviewId, ownerId, expectedRevision).run();
+    `).bind(PRIVACY_NOTICE_VERSION, now, now, reviewId, ownerId, expectedRevision).run();
     if (updated.meta.changes === 0) throw new Error("REVISION_CONFLICT");
     await this.database.batch([
       this.database.prepare("DELETE FROM annotations WHERE review_id = ?").bind(reviewId),

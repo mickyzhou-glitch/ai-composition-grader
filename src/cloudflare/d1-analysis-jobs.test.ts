@@ -123,6 +123,9 @@ describe("D1AnalysisJobs", () => {
     expect(result.job).toMatchObject({ mode: "content_only" });
     expect(statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings)
       .toContain("content_only");
+    const reviewUpdate = statements.find(({ query }) => query.includes("UPDATE reviews SET"));
+    expect(reviewUpdate?.query).toContain("teacher_reviewed_at = NULL");
+    expect(statements.find(({ query }) => query.includes("FROM reviews"))?.query).not.toContain("expires_at");
   });
 
   it("accepts the OCR and annotation mapping progress stages", async () => {

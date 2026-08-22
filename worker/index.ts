@@ -25,7 +25,7 @@ import {
 } from "../src/cloudflare/cloud-analysis-pipeline";
 import { openSetting, sealSetting } from "../src/cloudflare/settings-secret";
 import type { ReviewView } from "../app/lib/types";
-import { ZodError } from "zod";
+import { z, ZodError } from "zod";
 
 function apiError(code: string, message: string, status: number, details?: unknown): Response {
   return Response.json({
@@ -218,6 +218,35 @@ export default {
         return apiError("VALIDATION_ERROR", "请求参数无效", 400);
       }
     }
+    if (url.pathname === "/api/reviews/review-queue" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      return Response.json(
+        { ok: true, data: await new D1ReviewReader(env.DB).queue(user.id) },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
+    if (url.pathname === "/api/reviews/export-check" && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const exportEntrySchema = z.object({
+          id: z.string().min(1).max(128).regex(/^[A-Za-z0-9_-]+$/u),
+          revision: z.number().int().nonnegative(),
+        }).strict();
+        const input = z.object({
+          reviews: z.array(exportEntrySchema).min(1).max(20),
+        }).strict().superRefine(({ reviews }, context) => {
+          if (new Set(reviews.map(({ id }) => id)).size !== reviews.length) {
+            context.addIssue({ code: "custom", path: ["reviews"], message: "duplicate review id" });
+          }
+        }).parse(await request.json());
+        const exportable = await new D1ReviewReader(env.DB).checkExportable(user.id, input.reviews);
+        return exportable
+          ? Response.json({ ok: true, data: { exportable: true } }, { headers: { "cache-control": "no-store" } })
+          : apiError("EXPORT_NOT_AVAILABLE", "仅已审核且未变更的作文可以导出", 422);
+      } catch (error) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
+      }
+    }
     if (url.pathname === "/api/saved-assignments" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).savedAssignments(user.id) }, { headers: { "cache-control": "no-store" } });
@@ -236,6 +265,27 @@ export default {
       if (!exported) return apiError("EXPORT_NOT_AVAILABLE", "仅已完成且未变更的批改记录可以标记为已导出", 422);
       const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
       return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
+    }
+    const teacherReviewMatch = /^\/api\/reviews\/([^/]+)\/teacher-review$/u.exec(url.pathname);
+    if (teacherReviewMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const reviewId = decodeURIComponent(teacherReviewMatch[1]);
+        const updated = await new D1ReviewWriter(env.DB).completeTeacherReview(user.id, reviewId, await request.json());
+        if (!updated) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+        const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
+        return review
+          ? Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } })
+          : apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+      } catch (error) {
+        const revisionConflict = error instanceof Error && error.name === "RevisionConflictError";
+        return apiError(
+          revisionConflict ? "REVISION_CONFLICT" : "VALIDATION_ERROR",
+          revisionConflict ? "批改记录已更新，请刷新后重试" : "请求参数无效",
+          revisionConflict ? 409 : 400,
+          revisionConflict ? undefined : validationErrorDetails(error),
+        );
+      }
     }
     const reviewMatch = /^\/api\/reviews\/([^/]+)$/u.exec(url.pathname);
     if (reviewMatch && request.method === "GET") {

@@ -9,6 +9,34 @@ function workerEnv(assetResponse: () => Response, database?: unknown) {
   } as never;
 }
 
+const reviewConfig = {
+  title: "为自己鼓掌",
+  grade: "六年级",
+  writingRequirements: "叙事",
+  targetCharacters: 600,
+  structureRequirements: "完整",
+  scoringFocus: "细节",
+  templateType: "custom",
+};
+
+const teacherReviewedReport = {
+  themeFit: "fits",
+  themeReason: "切题",
+  personalizedComment: "细节真实",
+  painPoints: ["补充转折"],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "B+",
+  diagnostics: {
+    authenticityAndRelevance: { finding: "事件真实。", action: "保留真实细节。" },
+    materialAndDetails: { finding: "动作略少。", action: "补写动作。" },
+    structure: { finding: "衔接清楚。", action: "强化转折。" },
+    language: { finding: "语言通顺。", action: "精简长句。" },
+  },
+  sampleParagraphs: [{ title: "示范", text: "示范正文", suggestion: "补充动作" }],
+  parentFeedbacks: [],
+};
+
 describe("Cloudflare Worker", () => {
   it.each([
     ["GET", "/api/settings"],
@@ -436,6 +464,119 @@ describe("Cloudflare Worker", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, data: { status: "ok" } });
+  });
+
+  it("serves the authenticated teacher review queue without full review payloads", async () => {
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({
+        first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+          id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
+          expires_at: Date.now() + 60_000,
+        } : null),
+        all: vi.fn().mockResolvedValue(sql.includes("teacher_reviewed_at IS NULL") ? { results: [{
+          id: "review-1", student_name: "张小明", config: JSON.stringify(reviewConfig),
+          status: "ready_for_review", revision: 3, created_at: 1_700_000_000_000,
+        }] } : { results: [] }),
+        run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
+      })),
+    }));
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-queue", {
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    }), workerEnv(() => new Response("asset"), { prepare }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, data: [{
+      id: "review-1",
+      studentName: "张小明",
+      title: "为自己鼓掌",
+      status: "ready_for_review",
+      revision: 3,
+      createdAt: new Date(1_700_000_000_000).toISOString(),
+    }] });
+  });
+
+  it("atomically completes teacher review and returns the current hydrated review", async () => {
+    const prepared: Array<{ sql: string }> = [];
+    const prepare = vi.fn((sql: string) => {
+      prepared.push({ sql });
+      const statement = {
+        bind: vi.fn(() => statement),
+        first: vi.fn().mockResolvedValue(
+          sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM reviews WHERE id") ? {
+            id: "review-1", status: "ready_for_review", student_name: "张小明",
+            config: JSON.stringify(reviewConfig), report: JSON.stringify(teacherReviewedReport),
+            revision: 4, image_revision: 1, ocr_checkpoint: null, report_ocr_revision: null,
+            pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null,
+            teacher_reviewed_at: 1_700_000_100_000, expires_at: null,
+            created_at: 1_700_000_000_000, updated_at: 1_700_000_100_000,
+          } : null,
+        ),
+        all: vi.fn().mockResolvedValue({ results: [] }),
+        run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
+      };
+      return statement;
+    });
+    const batch = vi.fn().mockResolvedValue([{ meta: { changes: 1 } }]);
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/teacher-review", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        expectedRevision: 3,
+        studentName: "张小明",
+        report: teacherReviewedReport,
+        annotations: [],
+      }),
+    }), workerEnv(() => new Response("asset"), { prepare, batch }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      ok: true,
+      data: expect.objectContaining({
+        id: "review-1",
+        revision: 4,
+        teacherReviewedAt: new Date(1_700_000_100_000).toISOString(),
+      }),
+    }));
+    expect(prepared.some(({ sql }) => sql.includes("teacher_reviewed_at = ?"))).toBe(true);
+  });
+
+  it("rejects the entire export check when any requested review is not eligible", async () => {
+    const prepare = vi.fn((sql: string) => ({
+      bind: vi.fn(() => ({
+        first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+          id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
+          expires_at: Date.now() + 60_000,
+        } : null),
+        all: vi.fn().mockResolvedValue({ results: [{ id: "review-1", revision: 3 }] }),
+        run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
+      })),
+    }));
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/export-check", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ reviews: [
+        { id: "review-1", revision: 3 },
+        { id: "review-2", revision: 2 },
+      ] }),
+    }), workerEnv(() => new Response("asset"), { prepare }));
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "EXPORT_NOT_AVAILABLE" },
+    });
   });
 
   it("redirects an unauthenticated HTML root request to the same-origin login page without caching", async () => {

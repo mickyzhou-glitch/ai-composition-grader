@@ -22,6 +22,7 @@ interface ReviewRow {
   pdf_path: string | null;
   pdf_revision: number | null;
   exported_at: number | null;
+  teacher_reviewed_at: number | null;
   expires_at: number | null;
   created_at: number;
   updated_at: number;
@@ -62,15 +63,68 @@ export class D1ReviewReader {
 
   async list(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
-      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
       FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
     `).bind(ownerId).all<ReviewRow>();
     return Promise.all(results.map((review) => this.hydrate(ownerId, review)));
   }
 
+  async queue(ownerId: string): Promise<unknown[]> {
+    const { results = [] } = await this.database.prepare(`
+      SELECT id, student_name, config, status, revision, created_at
+      FROM reviews
+      WHERE owner_id = ?
+        AND deleting_at IS NULL
+        AND teacher_reviewed_at IS NULL
+        AND report IS NOT NULL
+        AND status IN ('ready_for_review', 'exported')
+        AND (
+          ocr_checkpoint IS NULL
+          OR report_ocr_revision = json_extract(ocr_checkpoint, '$.ocrRevision')
+        )
+      ORDER BY created_at ASC, id ASC
+    `).bind(ownerId).all<Pick<ReviewRow, "id" | "student_name" | "config" | "status" | "revision" | "created_at">>();
+    return results.map((review) => ({
+      id: review.id,
+      studentName: review.student_name,
+      title: assignmentConfigSchema.parse(JSON.parse(review.config)).title,
+      status: reviewStatusSchema.parse(review.status),
+      revision: review.revision,
+      createdAt: date(review.created_at),
+    }));
+  }
+
+  async checkExportable(
+    ownerId: string,
+    entries: Array<{ id: string; revision: number }>,
+  ): Promise<boolean> {
+    if (entries.length === 0) return false;
+    const requestedPairs = entries.map(() => "(id = ? AND revision = ?)").join(" OR ");
+    const { results = [] } = await this.database.prepare(`
+      SELECT id, revision
+      FROM reviews
+      WHERE owner_id = ?
+        AND deleting_at IS NULL
+        AND teacher_reviewed_at IS NOT NULL
+        AND report IS NOT NULL
+        AND status IN ('ready_for_review', 'exported')
+        AND (
+          ocr_checkpoint IS NULL
+          OR report_ocr_revision = json_extract(ocr_checkpoint, '$.ocrRevision')
+        )
+        AND (${requestedPairs})
+    `).bind(ownerId, ...entries.flatMap(({ id, revision }) => [id, revision])).all<{
+      id: string;
+      revision: number;
+    }>();
+    const eligible = new Set(results.map(({ id, revision }) => `${id}:${revision}`));
+    return entries.length === eligible.size
+      && entries.every(({ id, revision }) => eligible.has(`${id}:${revision}`));
+  }
+
   async get(ownerId: string, reviewId: string): Promise<unknown | null> {
     const row = await this.database.prepare(`
-      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
       FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
     `).bind(reviewId, ownerId).first<ReviewRow>();
     return row ? this.hydrate(ownerId, row) : null;
@@ -136,7 +190,8 @@ export class D1ReviewReader {
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
     return {
       id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, config, report,
-      revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at), expiresAt: date(review.expires_at),
+      revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at),
+      teacherReviewedAt: date(review.teacher_reviewed_at), expiresAt: date(review.expires_at),
       images, annotations, ocr, reportStale, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,
     };
   }
