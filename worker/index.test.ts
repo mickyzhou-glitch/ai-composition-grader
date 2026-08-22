@@ -1,12 +1,41 @@
 import { describe, expect, it, vi } from "vitest";
 
 import worker, { savePipelineResult, saveUnreadableResult } from "./index";
+import { D1Reanalysis, D1ReanalysisBatchError } from "../src/cloudflare/d1-reanalysis";
 
 function workerEnv(assetResponse: () => Response, database?: unknown) {
   return {
     ASSETS: { fetch: async () => assetResponse() },
     ...(database ? { DB: database } : {}),
   } as never;
+}
+
+function authenticatedDatabase() {
+  return {
+    prepare: vi.fn((sql: string) => {
+      const statement = {
+        bind() { return statement; },
+        first: vi.fn(async () => sql.includes("FROM sessions INNER JOIN users") ? {
+          id: "teacher-1",
+          username: "teacher",
+          role: "teacher",
+          must_change_password: 0,
+          expires_at: Date.now() + 60_000,
+        } : null),
+        all: vi.fn(async () => ({ results: [] })),
+        run: vi.fn(async () => ({ meta: { changes: 0 } })),
+      };
+      return statement;
+    }),
+    batch: vi.fn(async () => []),
+  };
+}
+
+function queue() {
+  return {
+    send: vi.fn(async () => ({})),
+    sendBatch: vi.fn(async () => ({})),
+  };
 }
 
 const reviewConfig = {
@@ -721,5 +750,235 @@ describe("Cloudflare Worker", () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get("content-security-policy")).not.toContain("'unsafe-eval'");
+  });
+
+  it("认证失败时不会读取重分析 JSON、写 D1 或投递 Queue", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/revision-request", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{bad json",
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(401);
+    expect(database.batch).not.toHaveBeenCalled();
+    expect(jobs.send).not.toHaveBeenCalled();
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+  });
+
+  it("重分析 schema 错误返回 400 且不调用服务或 Queue", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const requestRevision = vi.spyOn(D1Reanalysis.prototype, "requestRevision");
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/revision-request", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ expectedRevision: "3" }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(400);
+    expect(requestRevision).not.toHaveBeenCalled();
+    expect(database.batch).not.toHaveBeenCalled();
+    expect(jobs.send).not.toHaveBeenCalled();
+    requestRevision.mockRestore();
+  });
+
+  it("revision request 成功后发送单条 Queue 并返回 202 no-store", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const requestRevision = vi.spyOn(D1Reanalysis.prototype, "requestRevision").mockResolvedValue({
+      newlyQueued: true,
+      job: {
+        id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued",
+        progressStage: "queued", message: null, createdAt: new Date(1_700_000_000_000).toISOString(), finishedAt: null,
+      },
+    });
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/revision-request", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ expectedRevision: 3, reason: "原因", changeRequest: "要求" }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(202);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(jobs.send).toHaveBeenCalledWith({ jobId: "job-1" });
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+    requestRevision.mockRestore();
+  });
+
+  it("preview 成功不发送 Queue，D1/内部错误返回安全 500", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const preview = vi.spyOn(D1Reanalysis.prototype, "preview").mockRejectedValue(new Error("SQLITE secret details"));
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/batch-reanalysis/preview", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ reviewIds: ["review-1"] }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).not.toContain("SQLITE secret details");
+    expect(jobs.send).not.toHaveBeenCalled();
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+    preview.mockRestore();
+  });
+
+  it("batch 只对 submitted 做一次 sendBatch", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const commitBatch = vi.spyOn(D1Reanalysis.prototype, "commitBatch").mockResolvedValue({
+      submitted: [{ reviewId: "review-1", jobId: "job-1", revision: 4 }],
+      skipped: [{ reviewId: "review-2", code: "FRAMEWORK_CHANGED", reason: "题目框架已更新，请重新预览" }],
+    });
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/batch-reanalysis", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ items: [{ reviewId: "review-1", expectedRevision: 3, assignmentId: "assignment-1", expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString() }] }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(jobs.send).not.toHaveBeenCalled();
+    expect(jobs.sendBatch).toHaveBeenCalledOnce();
+    expect(jobs.sendBatch).toHaveBeenCalledWith([{ body: { jobId: "job-1" } }]);
+    commitBatch.mockRestore();
+  });
+
+  it("Queue send 失败执行补偿并返回 503，不泄露 Queue 错误", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    jobs.send.mockRejectedValue(new Error("queue internals"));
+    const requestRevision = vi.spyOn(D1Reanalysis.prototype, "requestRevision").mockResolvedValue({
+      newlyQueued: true,
+      job: {
+        id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued",
+        progressStage: "queued", message: null, createdAt: new Date(1_700_000_000_000).toISOString(), finishedAt: null,
+      },
+    });
+    const markDispatchFailed = vi.spyOn(D1Reanalysis.prototype, "markDispatchFailed").mockResolvedValue();
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/revision-request", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ expectedRevision: 3, reason: "原因", changeRequest: "要求" }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+    const body = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).not.toContain("queue internals");
+    expect(markDispatchFailed).toHaveBeenCalledWith("teacher-1", ["job-1"]);
+    requestRevision.mockRestore();
+    markDispatchFailed.mockRestore();
+  });
+
+  it("Queue sendBatch 失败补偿整批 submitted job 并返回 503", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    jobs.sendBatch.mockRejectedValue(new Error("batch queue internals"));
+    const commitBatch = vi.spyOn(D1Reanalysis.prototype, "commitBatch").mockResolvedValue({
+      submitted: [
+        { reviewId: "review-1", jobId: "job-1", revision: 4 },
+        { reviewId: "review-3", jobId: "job-3", revision: 5 },
+      ],
+      skipped: [],
+    });
+    const markDispatchFailed = vi.spyOn(D1Reanalysis.prototype, "markDispatchFailed").mockResolvedValue();
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/batch-reanalysis", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ items: [{
+        reviewId: "review-1", expectedRevision: 3, assignmentId: "assignment-1",
+        expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString(),
+      }] }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(503);
+    expect(markDispatchFailed).toHaveBeenCalledWith("teacher-1", ["job-1", "job-3"]);
+    expect(jobs.sendBatch).toHaveBeenCalledWith([
+      { body: { jobId: "job-1" } },
+      { body: { jobId: "job-3" } },
+    ]);
+    commitBatch.mockRestore();
+    markDispatchFailed.mockRestore();
+  });
+
+  it("批量未知错误补偿此前已提交 job，返回 500 no-store 且不投递 Queue", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const commitBatch = vi.spyOn(D1Reanalysis.prototype, "commitBatch").mockRejectedValue(
+      new D1ReanalysisBatchError([{ reviewId: "review-1", jobId: "job-1", revision: 4 }]),
+    );
+    const markDispatchFailed = vi.spyOn(D1Reanalysis.prototype, "markDispatchFailed").mockResolvedValue();
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/batch-reanalysis", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ items: [
+        { reviewId: "review-1", expectedRevision: 3, assignmentId: "assignment-1", expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString() },
+        { reviewId: "review-2", expectedRevision: 3, assignmentId: "assignment-2", expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString() },
+      ] }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).not.toContain("D1 raw internal details");
+    expect(markDispatchFailed).toHaveBeenCalledWith("teacher-1", ["job-1"]);
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+    commitBatch.mockRestore();
+    markDispatchFailed.mockRestore();
+  });
+
+  it("批量未知错误的补偿失败仍返回安全 500", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const commitBatch = vi.spyOn(D1Reanalysis.prototype, "commitBatch").mockRejectedValue(
+      new D1ReanalysisBatchError([{ reviewId: "review-1", jobId: "job-1", revision: 4 }]),
+    );
+    const markDispatchFailed = vi.spyOn(D1Reanalysis.prototype, "markDispatchFailed").mockRejectedValue(
+      new Error("compensation D1 raw details"),
+    );
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/batch-reanalysis", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ items: [
+        { reviewId: "review-1", expectedRevision: 3, assignmentId: "assignment-1", expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString() },
+      ] }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+    const body = await response.text();
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(body).not.toContain("compensation D1 raw details");
+    expect(markDispatchFailed).toHaveBeenCalledWith("teacher-1", ["job-1"]);
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+    commitBatch.mockRestore();
+    markDispatchFailed.mockRestore();
   });
 });
