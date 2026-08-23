@@ -63,7 +63,11 @@ const report = {
     structure: { finding: "结构完整。", action: "加强转折承接。" },
     language: { finding: "表达自然。", action: "精简长句。" },
   },
-  sampleParagraphs: [{ title: "示例", text: "我为自己鼓掌。", suggestion: "补充细节。" }],
+  sampleParagraphs: Array.from({ length: 5 }, (_, index) => ({
+    title: `示例${index + 1}`,
+    text: "我为自己鼓掌。",
+    suggestion: "补充细节。",
+  })),
   parentFeedbacks: [],
 };
 
