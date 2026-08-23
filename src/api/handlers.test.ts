@@ -429,7 +429,7 @@ describe("review route handlers", () => {
     });
   });
 
-  it("教师 PATCH 保存不符合题目字数的范文时返回参数错误", async () => {
+  it("教师 PATCH 可保存不再符合 AI 生成字数的草稿", async () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const ready = repository.updateReport(OWNER_ID, "review-1", report);
     const item = createReviewRouteHandlers({ reviewService, ownerId: OWNER_ID });
@@ -442,10 +442,10 @@ describe("review route handlers", () => {
       { params: Promise.resolve({ id: "review-1" }) },
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
     expect(await json(response)).toMatchObject({
-      ok: false,
-      error: { code: "VALIDATION_ERROR" },
+      ok: true,
+      data: { report: { sampleParagraphs: [report.sampleParagraphs[0]] } },
     });
   });
 

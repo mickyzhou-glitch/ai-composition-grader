@@ -85,7 +85,7 @@ describe("D1ReviewWriter", () => {
     expect(update).not.toContain("ocr_checkpoint");
   });
 
-  it("rejects report edits that violate the stored assignment config", async () => {
+  it("allows teacher draft edits that no longer satisfy AI generation constraints", async () => {
     const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
     const database = {
       prepare: vi.fn((query: string) => ({
@@ -101,8 +101,8 @@ describe("D1ReviewWriter", () => {
     await expect(new D1ReviewWriter(database).update("teacher-1", "review-1", {
       expectedRevision: 4,
       report: invalidReport,
-    })).rejects.toThrow(/sample paragraphs invalid/u);
-    expect(run).not.toHaveBeenCalled();
+    })).resolves.toEqual({ revision: 5 });
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it("marks a completed review as exported only for its owner", async () => {

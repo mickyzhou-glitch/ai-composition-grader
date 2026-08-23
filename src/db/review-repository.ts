@@ -637,7 +637,9 @@ export class ReviewRepository {
       : current.config;
     const report =
       input.report !== undefined
-        ? validateReport(input.report, { config })
+        ? markReviewed
+          ? validateReport(input.report, { config })
+          : validateReport(input.report, { templateType: config.templateType })
         : input.config !== undefined
           ? null
           : current.report;

@@ -299,7 +299,7 @@ describe("OpenAIReviewAdapter", () => {
     expectLifeLogicRule(serialized);
   });
 
-  it("单段重写提示给出扣除其余段落后的可用字数", async () => {
+  it("单段重写只提示总字数参考，不计算剩余段落上限", async () => {
     const harness = setup([JSON.stringify({ text: "我".repeat(120) })]);
 
     await harness.adapter.rewriteSample({
@@ -308,7 +308,10 @@ describe("OpenAIReviewAdapter", () => {
       index: 0,
     });
 
-    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("1-220");
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("550-700");
+    expect(serialized).toContain("仅作生成参考");
+    expect(serialized).not.toContain("1-220");
   });
 
   it("单段重写优先使用教师填写的分段字数", async () => {
@@ -337,8 +340,9 @@ describe("OpenAIReviewAdapter", () => {
     })).resolves.toEqual({ text });
 
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
-    expect(serialized).toContain("本段 text 必须写 200-250 个汉字");
-    expect(serialized).not.toContain("其余段落正文合计 400 个汉字；本段 text 必须写 150-300");
+    expect(serialized).toContain("本段 text 建议参考 200-250 个汉字");
+    expect(serialized).not.toContain("本段 text 必须写 200-250");
+    expect(serialized).not.toContain("其余段落正文合计");
   });
 
   it("当前段落数不符合配置时不发起单段重写", async () => {
@@ -363,7 +367,7 @@ describe("OpenAIReviewAdapter", () => {
     })).resolves.toEqual({ text });
   });
 
-  it("其余段落已占满最大字数时不发起单段重写", async () => {
+  it("其余段落超过总量参考值时仍发起单段重写", async () => {
     const paragraphs = report.sampleParagraphs.map((paragraph, index) => ({
       ...paragraph,
       text: index === 0 ? "我" : "我".repeat(175),
@@ -374,8 +378,9 @@ describe("OpenAIReviewAdapter", () => {
       config,
       sampleParagraphs: paragraphs,
       index: 0,
-    })).rejects.toThrow(/全文重新生成/u);
-    expect(harness.create).not.toHaveBeenCalled();
+    })).resolves.toEqual({ text: "我" });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("实际不足或超出也正常返回");
   });
 
   it("只读取 SettingsService 的原子运行时快照", async () => {

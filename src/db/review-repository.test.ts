@@ -306,7 +306,7 @@ describe("ReviewRepository", () => {
     ).toThrow(/grade C/);
   });
 
-  it("教师保存报告时按完整作业配置校验示范作文字数和段落数", () => {
+  it("教师保存草稿时允许报告不再满足 AI 生成约束", () => {
     repository.create(OWNER_ID, {
       id: "review-1",
       config: {
@@ -316,9 +316,10 @@ describe("ReviewRepository", () => {
       },
     });
 
-    expect(() => repository.updateReport(OWNER_ID, "review-1", report)).toThrow(
-      /sample paragraphs invalid/u,
-    );
+    expect(repository.updateTeacherEdits(OWNER_ID, "review-1", {
+      expectedRevision: 0,
+      report,
+    })).toMatchObject({ revision: 1, report });
   });
 
   it("从 custom 改为 preset 时清理不合规报告与批注并降级为 draft", () => {

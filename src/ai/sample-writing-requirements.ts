@@ -15,13 +15,13 @@ export function buildSampleWritingRule(config: AssignmentConfig): string {
 
   const characterRule = expected.paragraphCharacterRanges
     ? [
-      "教师已为每段填写建议字数；这些分段范围优先于目标总字数，按各段范围校验，不再用总字数范围覆盖它们。",
+      "教师已为每段填写建议字数；这些数字只作生成参考，不是校验条件，实际不足或超出都正常返回。",
       ...expected.paragraphCharacterRanges.map((range, index) =>
-        `第${index + 1}段 text 的汉字数必须为 ${range.minimumCharacters}-${range.maximumCharacters} 个；`,
+        `第${index + 1}段 text 建议参考 ${range.minimumCharacters}-${range.maximumCharacters} 个汉字；`,
       ),
     ].join("\n")
-    : `只统计各段 text 的汉字，目标参考范围为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字；` +
-      `低于${expected.minimumCharacters}个汉字也可正常返回，不要为了凑字数编造内容；超过${expected.maximumCharacters}个汉字才需要精简；` +
+    : `只统计各段 text 的汉字，目标参考范围为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字，仅作生成参考；` +
+      `实际低于${expected.minimumCharacters}或超过${expected.maximumCharacters}个汉字也可正常返回，不要为了凑字数或删减编造内容；` +
       "title、suggestion 和标点不计入。";
 
   return [

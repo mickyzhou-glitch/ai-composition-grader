@@ -97,38 +97,19 @@ function sampleParagraphRepairPrompt(
   const expected = resolveSampleWritingRequirements(input.config);
   const paragraphCharacterRule = expected.paragraphCharacterRanges
     ? [
-      "按教师填写的分段字数分别校验，不使用目标总字数范围覆盖分段要求。",
+      "教师填写的分段字数只作生成参考，不是校验条件；实际不足或超出都正常返回。",
       ...expected.paragraphCharacterRanges.map((range, index) =>
-        `第${index + 1}段 text 的汉字数必须为 ${range.minimumCharacters}-${range.maximumCharacters} 个；`,
+        `第${index + 1}段 text 建议参考 ${range.minimumCharacters}-${range.maximumCharacters} 个汉字；`,
       ),
     ].join("\n")
-    : `未提供分段字数时，整篇示范文以 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字为目标参考范围；` +
-      `低于${expected.minimumCharacters}个汉字也可正常返回，不要为了凑字数编造内容；超过${expected.maximumCharacters}个汉字才需要精简。`;
-  const paragraphIssue = /paragraphIndex=(\d+); expectedParagraphCharacters=(\d+)\.\.(\d+); actualParagraphCharacters=(\d+)/u.exec(
-    validationError,
-  );
-  const actualCharacters = Number(
-    /actualCharacters=(\d+)/u.exec(validationError)?.[1] ?? Number.NaN,
-  );
-  const adjustmentRule = paragraphIssue
-    ? Number(paragraphIssue[4]) < Number(paragraphIssue[2])
-      ? `第${paragraphIssue[1]}段当前只有 ${paragraphIssue[4]} 个汉字，必须在现有内容基础上扩写，` +
-        `至少新增 ${Number(paragraphIssue[2]) - Number(paragraphIssue[4])} 个汉字，不得删减。`
-      : `第${paragraphIssue[1]}段当前已有 ${paragraphIssue[4]} 个汉字，必须精简重复表达，` +
-        `至少删减 ${Number(paragraphIssue[4]) - Number(paragraphIssue[3])} 个汉字。`
-    : Number.isFinite(actualCharacters) && actualCharacters > expected.maximumCharacters
-      ? `当前正文合计已有 ${actualCharacters} 个汉字，必须精简重复表达，` +
-        `每段至少删减 ${Math.ceil(
-          (actualCharacters - expected.maximumCharacters) / expected.paragraphCount,
-        )} 个汉字。`
-      : "";
+    : `未提供分段字数时，整篇示范文以 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字为目标参考范围，仅作生成参考；` +
+      `实际不足或超出也可正常返回，不要为了凑字数或删减编造内容。`;
 
   return [
     "你只修复示范作文正文，不要返回标题、修改建议或报告其他字段。",
     `作文要求：${JSON.stringify(input.config)}`,
     buildSampleWritingRule(input.config),
     paragraphCharacterRule,
-    adjustmentRule,
     "保留原文的核心材料，不得编造关键内容；文体、结构、段落顺序和衔接方式必须服从教师配置。",
     `校验失败原因：${validationError}`,
     '只返回 JSON：{"texts":["第一段正文","第二段正文"]}。',
@@ -168,16 +149,7 @@ function repairValidationCode(error: unknown): string {
   if (code !== "sample_paragraphs" || !(error instanceof Error)) return code;
 
   const paragraphCount = /actualParagraphs=(\d+)/u.exec(error.message)?.[1];
-  const paragraphIndex = /paragraphIndex=(\d+)/u.exec(error.message)?.[1];
-  const paragraphCharacterCount = /actualParagraphCharacters=(\d+)/u.exec(error.message)?.[1];
-  const characterCount = /actualCharacters=(\d+)/u.exec(error.message)?.[1];
-  if (!paragraphCount) return code;
-  if (paragraphIndex && paragraphCharacterCount) {
-    return `sample_paragraphs_p${paragraphCount}_i${paragraphIndex}_c${paragraphCharacterCount}`;
-  }
-  return characterCount
-    ? `sample_paragraphs_p${paragraphCount}_c${characterCount}`
-    : `sample_paragraphs_p${paragraphCount}`;
+  return paragraphCount ? `sample_paragraphs_p${paragraphCount}` : code;
 }
 
 function validateContentResult(
@@ -232,7 +204,7 @@ export class CompositionReviewAdapter {
         let currentValidationError: unknown = initialError;
         let finalRepairError: unknown = initialError;
 
-        for (let repairAttempt = 0; repairAttempt < 2; repairAttempt += 1) {
+        for (let repairAttempt = 0; repairAttempt < 3; repairAttempt += 1) {
           try {
             const repaired = await completionContent(client, {
               ...requestOptions,
@@ -274,7 +246,7 @@ export class CompositionReviewAdapter {
           } catch (repairError) {
             finalRepairError = repairError;
             if (
-              repairAttempt === 1 ||
+              repairAttempt === 2 ||
               validationCode(repairError) !== "sample_paragraphs"
             ) break;
             currentValidationError = repairError;

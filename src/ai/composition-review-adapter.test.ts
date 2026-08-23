@@ -306,6 +306,9 @@ describe("CompositionReviewAdapter", () => {
       }) } }] })
       .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
         texts: sampleParagraphs(3).map(({ text }) => text),
+      }) } }] })
+      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+        texts: sampleParagraphs(3).map(({ text }) => text),
       }) } }] });
 
     await expect(harness.adapter.analyzeText({
@@ -387,7 +390,7 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("按开头、经过、高潮、结果、感受展开");
   });
 
-  it("定向修复遵守教师提供的分段字数而不使用总量范围", async () => {
+  it("分段字数未达标时直接接受模型结果，不触发修复", async () => {
     const rangeConfig = {
       ...config,
       sampleParagraphCount: 5,
@@ -407,29 +410,19 @@ describe("CompositionReviewAdapter", () => {
     const invalidParagraphs = rangeParagraphs.map((paragraph, index) =>
       index === 2 ? { ...paragraph, text: "我".repeat(199) } : paragraph,
     );
-    const repairedTexts = rangeParagraphs.map(({ text }) => text);
     const harness = setup();
-    harness.create
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        report: { ...report, sampleParagraphs: invalidParagraphs },
-        annotationAnchors: [],
-      }) } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        texts: repairedTexts,
-      }) } }] });
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+      report: { ...report, sampleParagraphs: invalidParagraphs },
+      annotationAnchors: [],
+    }) } }] });
     await expect(harness.adapter.analyzeText({
       config: rangeConfig,
       pages: [{ pageIndex: 0, text: "我参加了活动。" }],
       studentName: "小艾",
     })).resolves.toMatchObject({
-      report: { sampleParagraphs: rangeParagraphs },
+      report: { sampleParagraphs: invalidParagraphs },
     });
-
-    const repairRequest = JSON.stringify(harness.create.mock.calls[1][0]);
-    expect(repairRequest).toContain("第1段 text 的汉字数必须为 100-150");
-    expect(repairRequest).toContain("第3段 text 的汉字数必须为 200-250");
-    expect(repairRequest).not.toContain("550-700");
-    expect(repairRequest).toContain("第3段当前只有 199 个汉字");
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("书信题不追加小学记叙文和禁用时间词规则", async () => {
@@ -454,22 +447,17 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).not.toContain("段首不要使用");
   });
 
-  it("范文超过700字时只重写范文并保留原报告", async () => {
+  it("范文超过700字时直接返回并保留原报告", async () => {
     const harness = setup();
-    const shortParagraphs = Array.from({ length: 5 }, (_, index) => ({
+    const longParagraphs = Array.from({ length: 5 }, (_, index) => ({
       title: `第 ${index + 1} 段`,
       text: "我".repeat(150),
       suggestion: "补充具体细节。",
     }));
-    const repairedTexts = Array.from({ length: 5 }, () => "我".repeat(120));
-    harness.create
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        report: { ...report, sampleParagraphs: shortParagraphs },
-        annotationAnchors: [],
-      }) } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        texts: repairedTexts,
-      }) } }] });
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
+      report: { ...report, sampleParagraphs: longParagraphs },
+      annotationAnchors: [],
+    }) } }] });
 
     await expect(harness.adapter.analyzeText({
       config: { ...config, targetCharacters: 600, sampleParagraphCount: 5 },
@@ -478,60 +466,12 @@ describe("CompositionReviewAdapter", () => {
     })).resolves.toMatchObject({
       report: {
         themeReason: report.themeReason,
-        sampleParagraphs: shortParagraphs.map((paragraph, index) => ({
-          ...paragraph,
-          text: repairedTexts[index],
-        })),
+        sampleParagraphs: longParagraphs,
       },
       annotationAnchors: [],
     });
 
-    expect(harness.create).toHaveBeenCalledTimes(2);
-    const repairRequest = JSON.stringify(harness.create.mock.calls[1][0]);
-    expect(repairRequest).toContain("只修复示范作文正文");
-    expect(repairRequest).toContain("当前正文合计已有 750 个汉字");
-    expect(repairRequest).toContain("每段至少删减 10 个汉字");
-    expect(repairRequest).toContain('{\\"texts\\":[\\"第一段正文\\"');
-  });
-
-  it("第一次正文修复仍超长时按实际汉字数再精简一次", async () => {
-    const harness = setup();
-    const shortParagraphs = Array.from({ length: 5 }, (_, index) => ({
-      title: `第 ${index + 1} 段`,
-      text: "我".repeat(150),
-      suggestion: "补充具体细节。",
-    }));
-    const firstRepairTexts = Array.from({ length: 5 }, () => "我".repeat(149));
-    const secondRepairTexts = Array.from({ length: 5 }, () => "我".repeat(120));
-    harness.create
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        report: { ...report, sampleParagraphs: shortParagraphs },
-        annotationAnchors: [],
-      }) } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        texts: firstRepairTexts,
-      }) } }] })
-      .mockResolvedValueOnce({ choices: [{ message: { content: JSON.stringify({
-        texts: secondRepairTexts,
-      }) } }] });
-
-    await expect(harness.adapter.analyzeText({
-      config: { ...config, targetCharacters: 600, sampleParagraphCount: 5 },
-      pages: [{ pageIndex: 0, text: "我参加了跳绳比赛。" }],
-      studentName: "小艾",
-    })).resolves.toMatchObject({
-      report: {
-        sampleParagraphs: shortParagraphs.map((paragraph, index) => ({
-          ...paragraph,
-          text: secondRepairTexts[index],
-        })),
-      },
-    });
-
-    expect(harness.create).toHaveBeenCalledTimes(3);
-    const secondRepairRequest = JSON.stringify(harness.create.mock.calls[2][0]);
-    expect(secondRepairRequest).toContain("actualCharacters=745");
-    expect(secondRepairRequest).toContain("每段至少删减 9 个汉字");
+    expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
   it("总字数低于550时直接返回，不触发示范文修复", async () => {

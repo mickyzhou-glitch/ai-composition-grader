@@ -13,7 +13,6 @@ import { validateReport } from "../domain/report-validation";
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import {
   buildSampleWritingRule,
-  countSampleTextCharacters,
   resolveSampleWritingRequirements,
   validateSampleWritingRequirements,
 } from "./sample-writing-requirements";
@@ -638,18 +637,7 @@ export class OpenAIReviewAdapter {
     if (input.sampleParagraphs.length !== expected.paragraphCount) {
       throw new TypeError("当前示范文段落数与题目要求不一致，请使用全文重新生成");
     }
-    const otherParagraphs = input.sampleParagraphs.filter((_, index) => index !== input.index);
-    const otherCharacters = countSampleTextCharacters(otherParagraphs);
     const paragraphRange = expected.paragraphCharacterRanges?.[input.index];
-    const minimumCharacters = paragraphRange
-      ? paragraphRange.minimumCharacters
-      : 1;
-    const maximumCharacters = paragraphRange
-      ? paragraphRange.maximumCharacters
-      : expected.maximumCharacters - otherCharacters;
-    if (maximumCharacters < minimumCharacters || maximumCharacters < 1) {
-      throw new TypeError("当前其余段落字数已超出题目要求，请使用全文重新生成");
-    }
     const settings = await this.settings.getRuntimeConfig("content");
     if (!settings) {
       throw new AiAdapterError("AI_SETTINGS_INCOMPLETE", "请先配置 AI 服务地址、模型和 API Key", 400);
@@ -673,8 +661,8 @@ export class OpenAIReviewAdapter {
           `当前整篇范文：${JSON.stringify(input.sampleParagraphs)}`,
           `要重写第 ${input.index + 1} 段：${JSON.stringify(current)}`,
           paragraphRange
-            ? `本段 text 必须写 ${minimumCharacters}-${maximumCharacters} 个汉字，title、suggestion 和标点不计入；其他段落按各自的教师分段要求执行。`
-            : `其余段落正文合计 ${otherCharacters} 个汉字；本段 text 必须写 ${minimumCharacters}-${maximumCharacters} 个汉字，title、suggestion 和标点不计入。`,
+            ? `本段 text 建议参考 ${paragraphRange.minimumCharacters}-${paragraphRange.maximumCharacters} 个汉字，title、suggestion 和标点不计入；实际不足或超出也正常返回。`
+            : `整篇范文目标参考范围为 ${expected.minimumCharacters}-${expected.maximumCharacters} 个汉字，仅作生成参考；本段 text 按教师要求自然改写，实际不足或超出也正常返回，title、suggestion 和标点不计入。`,
           `教师附加要求：${input.instruction?.trim() || "请换一种更具体、更自然的写法。"}`,
           buildTransitionRule(input.config),
           LIFE_LOGIC_REVIEW_RULE,

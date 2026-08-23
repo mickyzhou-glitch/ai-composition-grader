@@ -2,9 +2,9 @@
 
 > **面向 AI 代理的工作者：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans 逐任务实现此计划。步骤使用复选框（`- [ ]`）语法来跟踪进度。
 
-**目标：** 将无分段字数要求时目标 600 字的示范作文目标参考范围调整为 550–700，低于 550 也正常返回；有分段建议字数时按每段范围生成，然后恢复并完成 `teacher01` 的 36 篇重分析任务。
+**目标：** 将示范作文的总字数和分段字数都降为生成参考：目标 600 字时提示 550–700，教师填写的分段数量也只作对应段落参考；任何未达标或超出都正常返回，然后恢复并完成 `teacher01` 的 36 篇重分析任务。
 
-**架构：** 由域层 `resolveSampleWritingRequirements` 解析结构要求中的分段字数范围；有完整范围时逐段校验，否则使用目标字数的 550–700 作为生成参考，服务端只拒绝超过上限的结果。模型提示词、生成校验和重写入口共享同一结果。保留段落数、Schema 和其他业务校验。
+**架构：** 由域层 `resolveSampleWritingRequirements` 解析结构要求中的分段字数范围；范围仅用于提示词，服务端不因总字数或分段字数低于、超过参考范围拒绝结果。模型提示词、生成流程和重写入口共享同一结果。保留段落数、Schema 和其他业务校验。
 
 **技术栈：** TypeScript、Vitest、Next.js 16、Cloudflare Workers、D1、Queues。
 
@@ -14,7 +14,7 @@
 
 - 修改：`src/ai/sample-writing-requirements.test.ts`，覆盖新的阈值和边界行为。
 - 修改：`src/domain/sample-writing-requirements.ts`，解析分段范围并保留目标字数下浮 50、上浮 100 的兜底范围。
-- 修改：`src/ai/composition-review-adapter.ts`，在范文校验失败时将现有第二次请求收窄为定向修复。
+- 修改：`src/ai/composition-review-adapter.ts`，仅在段落结构错误时使用定向修复，字数不触发修复。
 - 验证：`src/ai/composition-review-adapter.test.ts` 和 `src/ai/openai-review-adapter.test.ts`，确认两条 AI 链路共享新规则。
 
 ## 任务 1：用 TDD 调整字数范围
@@ -26,7 +26,7 @@
 
 - [ ] **步骤 1：编写失败的阈值测试**
 
-将目标 600 字的解析结果期望改为：
+将目标 600 字的提示参考解析结果保留为：
 
 ```ts
 expect(resolveSampleWritingRequirements(config)).toEqual({
@@ -38,13 +38,13 @@ expect(resolveSampleWritingRequirements(config)).toEqual({
 
 - [ ] **步骤 2：编写失败的边界测试**
 
-对同一个 5 段配置断言：
+对同一个 5 段配置断言总字数边界都不拒绝：
 
 ```ts
 expect(() => validateSampleWritingRequirements(paragraphs(550), config)).not.toThrow();
 expect(() => validateSampleWritingRequirements(paragraphs(700), config)).not.toThrow();
 expect(() => validateSampleWritingRequirements(paragraphs(549), config)).not.toThrow();
-expect(() => validateSampleWritingRequirements(paragraphs(701), config)).toThrow(/sample paragraphs invalid/u);
+expect(() => validateSampleWritingRequirements(paragraphs(701), config)).not.toThrow();
 ```
 
 - [ ] **步骤 3：运行测试并确认红灯**
@@ -59,14 +59,12 @@ npm test -- src/ai/sample-writing-requirements.test.ts
 
 - [ ] **步骤 4：实现最小修改**
 
-在 `resolveSampleWritingRequirements` 中使用：
+在 `validateSampleWritingRequirements` 中只保留：
 
 ```ts
-return {
-  paragraphCount: expectedSampleParagraphCount(config),
-  minimumCharacters: Math.max(1, config.targetCharacters - 50),
-  maximumCharacters: config.targetCharacters + 100,
-};
+if (paragraphs.length !== expectedSampleParagraphCount(config)) {
+  throw new Error("sample paragraphs invalid");
+}
 ```
 
 - [ ] **步骤 5：运行聚焦测试并确认绿灯**
@@ -90,7 +88,7 @@ git commit -m "fix(AI): 放宽示范作文字数范围"
 
 - [ ] **步骤 0：用 TDD 实现范文定向修复**
 
-在 `src/ai/composition-review-adapter.test.ts` 模拟初次完整报告只有范文字数不合格，后续只返回正文 `texts`。先确认旧实现因缺少完整 `report` 而失败，再实现定向解析、合并和整份报告复验；分段字数错误时最多按实测缺口再修复一次，仍不满足分段范围或总量兜底时必须返回 `AI_INVALID_RESPONSE`。
+在 `src/ai/composition-review-adapter.test.ts` 确认分段字数不达标的完整报告直接通过，不触发定向修复；段落数量错误仍使用正文 `texts` 定向修复并复验。
 
 - [ ] **步骤 1：运行 AI 适配器回归测试**
 
@@ -98,7 +96,7 @@ git commit -m "fix(AI): 放宽示范作文字数范围"
 npm test -- src/ai/composition-review-adapter.test.ts src/ai/openai-review-adapter.test.ts
 ```
 
-预期：全部 PASS，提示词说明 550–700 是参考范围且低于 550 可正常返回。
+预期：全部 PASS，提示词说明 550–700 和分段范围都只是参考，低于或超过都可正常返回。
 
 - [ ] **步骤 2：运行全量验证**
 
@@ -146,4 +144,4 @@ Content-Type: application/json
 
 - [ ] **步骤 4：验收线上报告**
 
-确认 36 篇作文均为 `ready_for_review`、`teacher_reviewed_at IS NULL`，最新任务为 `succeeded`，且报告范文为 5 段；有分段建议字数的作文逐段合规，其余作文合计不超过 700 个汉字，低于 550 个汉字也可正常返回。
+确认 36 篇作文均为 `ready_for_review`、`teacher_reviewed_at IS NULL`，最新任务为 `succeeded`，且报告范文为 5 段；总字数和分段建议字数仅作提示词参考，低于或超过都可正常返回。

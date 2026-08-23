@@ -91,32 +91,6 @@ export function validateSampleWritingRequirements(
     );
   }
 
-  if (expected.paragraphCharacterRanges) {
-    const invalidIndex = expected.paragraphCharacterRanges.findIndex((range, index) => {
-      const actualCharacters = paragraphs[index].text.match(/\p{Script=Han}/gu)?.length ?? 0;
-      return actualCharacters < range.minimumCharacters || actualCharacters > range.maximumCharacters;
-    });
-    if (invalidIndex >= 0) {
-      const range = expected.paragraphCharacterRanges[invalidIndex];
-      const actualCharacters = paragraphs[invalidIndex].text.match(/\p{Script=Han}/gu)?.length ?? 0;
-      throw new Error(
-        `sample paragraphs invalid: expectedParagraphs=${expected.paragraphCount}; ` +
-        `actualParagraphs=${paragraphs.length}; paragraphIndex=${invalidIndex + 1}; ` +
-        `expectedParagraphCharacters=${range.minimumCharacters}..${range.maximumCharacters}; ` +
-        `actualParagraphCharacters=${actualCharacters}`,
-      );
-    }
-    return;
-  }
-
-  const actualCharacters = countSampleTextCharacters(paragraphs);
-
-  if (actualCharacters > expected.maximumCharacters) {
-    throw new Error(
-      `sample paragraphs invalid: expectedParagraphs=${expected.paragraphCount}; ` +
-      `actualParagraphs=${paragraphs.length}; ` +
-      `expectedCharacters<=${expected.maximumCharacters}; ` +
-      `actualCharacters=${actualCharacters}`,
-    );
-  }
+  // Character targets are generation guidance only. The paragraph count remains
+  // the structural requirement enforced by this validator.
 }
