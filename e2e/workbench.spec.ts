@@ -103,6 +103,7 @@ function batchReview(id: string, studentName: string, revision: number) {
       structureRequirements: "前后连贯",
       scoringFocus: "真实与逻辑",
       templateType: "custom",
+      sampleParagraphCount: 1,
     },
     images: [{
       id: revision,
@@ -297,7 +298,11 @@ for (const viewport of [
     await expect(page.getByRole("heading", { name: "李安然" })).toBeVisible();
     await expect(page.getByText("正在展开作文与批改报告")).toHaveCount(0);
 
-    await page.getByRole("button", { name: "待导出清单 (1)" }).click();
+    await page.getByRole("link", { name: "返回历史" }).click();
+    await expect(page.getByRole("heading", { name: "批改历史" })).toBeVisible();
+    await page.getByRole("link", { name: "开始批量审核" }).click();
+    await expect(page.getByRole("button", { name: "已复核待导出清单 (1)" })).toBeVisible();
+    await page.getByRole("button", { name: "已复核待导出清单 (1)" }).click();
     await expect(page.getByRole("heading", { name: "张小明" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "生活常识与真实度" })).toBeVisible();
     await expect(page.getByText("修改：核对当天放学时间。")).toBeVisible();
