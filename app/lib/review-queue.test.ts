@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { exportEligibility, filterReviewsByStudentName, normalizeStudentSearch, reviewPrefetchWindow } from "./review-queue";
+import {
+  exportEligibility,
+  filterReviewsByStudentName,
+  isReviewedPendingExport,
+  normalizeStudentSearch,
+  reviewDisplayStatus,
+  reviewPrefetchWindow,
+} from "./review-queue";
 
 describe("review queue helpers", () => {
   it("normalizes whitespace and letter case for student-name search", () => {
@@ -25,5 +32,18 @@ describe("review queue helpers", () => {
     expect(exportEligibility({ report: {}, teacherReviewedAt: "2026-08-22T06:00:00.000Z" })).toEqual({ eligible: true });
     expect(exportEligibility({ report: {}, teacherReviewedAt: null })).toMatchObject({ eligible: false });
     expect(exportEligibility({ report: null, teacherReviewedAt: "2026-08-22T06:00:00.000Z" })).toMatchObject({ eligible: false });
+  });
+
+  it("只把已复核且未导出的记录归入已复核状态", () => {
+    const reviewed = { status: "ready_for_review" as const, teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+    const pending = { status: "ready_for_review" as const, teacherReviewedAt: null };
+    const exported = { status: "exported" as const, teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+
+    expect(isReviewedPendingExport(reviewed)).toBe(true);
+    expect(reviewDisplayStatus(reviewed)).toBe("reviewed");
+    expect(isReviewedPendingExport(pending)).toBe(false);
+    expect(reviewDisplayStatus(pending)).toBe("ready_for_review");
+    expect(isReviewedPendingExport(exported)).toBe(false);
+    expect(reviewDisplayStatus(exported)).toBe("exported");
   });
 });

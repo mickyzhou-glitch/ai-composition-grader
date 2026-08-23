@@ -1,3 +1,10 @@
+import type { ReviewStatus } from "@/src/domain/contracts";
+import type { ReviewView } from "./types";
+
+export type ReviewDisplayStatus = ReviewStatus | "reviewed";
+
+type ReviewLifecycleFields = Pick<ReviewView, "status" | "teacherReviewedAt">;
+
 export function normalizeStudentSearch(value: string): string {
   return value.trim().toLocaleLowerCase("zh-CN");
 }
@@ -16,6 +23,14 @@ export function reviewPrefetchWindow(ids: string[], activeId: string | null): st
   if (!activeId) return [];
   const index = ids.indexOf(activeId);
   return index < 0 ? [] : ids.slice(index, index + 3);
+}
+
+export function isReviewedPendingExport(review: ReviewLifecycleFields): boolean {
+  return Boolean(review.teacherReviewedAt) && review.status !== "exported";
+}
+
+export function reviewDisplayStatus(review: ReviewLifecycleFields): ReviewDisplayStatus {
+  return isReviewedPendingExport(review) ? "reviewed" : review.status;
 }
 
 export function exportEligibility(review: {

@@ -22,6 +22,7 @@ import { StatusBadge } from "../../components/StatusBadge";
 import { ApiError, apiFetch, errorMessage } from "../../lib/api";
 import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
 import { downloadReviewPdf } from "../../lib/pdf-download";
+import { reviewDisplayStatus } from "../../lib/review-queue";
 import type { ReviewView } from "../../lib/types";
 
 interface AnalysisJobView {
@@ -605,7 +606,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       <main className="review-page">
         <header className="review-heading">
           <div className="review-title-block">
-            <div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div>
+            <div className="history-meta"><StatusBadge status={reviewDisplayStatus(review)} /><span>{review.config.grade}</span></div>
             <h1>{review.config.title}</h1>
             <label className="student-name-field">
               <span>学生姓名</span>

@@ -94,6 +94,17 @@ describe("复核页", () => {
     expect(screen.queryByText(/30 天|到期|自动永久删除/u)).not.toBeInTheDocument();
   });
 
+  it("已完成教师复核的详情显示已复核标记", async () => {
+    const reviewed = { ...review, teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(reviewed))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+
+    expect(await screen.findByText("已复核", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.queryByText("待复核", { selector: ".status-badge" })).not.toBeInTheDocument();
+  });
+
   it("在状态提示之后、作文复核工作区之前展示三份家长反馈", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
