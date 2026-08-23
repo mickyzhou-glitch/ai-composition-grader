@@ -534,16 +534,41 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   }
 
   async function exportPdf() {
-    if (!review || !report || busy || dirty) return;
+    if (!review || !report || busy) return;
+    const validationMessage = reportValidationMessage(report);
+    if (validationMessage) {
+      setError(validationMessage);
+      setNotice("");
+      return;
+    }
     setBusy("export");
     setError("");
     setNotice("");
     try {
+      if (dirty || !review.teacherReviewedAt) {
+        const reviewed = await apiFetch<ReviewView>(
+          `/api/reviews/${encodeURIComponent(review.id)}/teacher-review`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              expectedRevision: review.revision,
+              studentName,
+              report,
+              annotations,
+            }),
+          },
+        );
+        applyReview(reviewed);
+        setDirty(false);
+      }
       await downloadReviewPdf(review.id);
       await loadReview(false);
       setNotice("PDF 已导出并开始下载。");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(caught instanceof ApiError && caught.status === 409
+        ? "内容发生冲突，请刷新后重新检查。"
+        : saveErrorMessage(caught));
     } finally {
       setBusy(null);
     }
@@ -604,8 +629,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
                 className="button button--quiet"
                 busy={busy === "export"}
                 busyLabel="正在生成 PDF…"
-                disabled={dirty || busy !== null || analysisActive}
-                title={dirty ? "请先保存复核修改再导出" : undefined}
+                disabled={busy !== null || analysisActive}
                 onClick={() => void exportPdf()}
               >{review.hasPdf ? "下载 PDF" : "导出 PDF"}</AsyncButton>
             ) : null}

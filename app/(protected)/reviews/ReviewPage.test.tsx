@@ -33,6 +33,7 @@ const review = {
   id: "review-1",
   status: "ready_for_review",
   revision: 1,
+  teacherReviewedAt: null,
   studentName: "",
   config: { title: "为自己鼓掌", templateType: "custom" },
   images: [{ id: 1, position: 0, originalName: "作文.jpg", mimeType: "image/jpeg", width: 100, height: 100, rotation: 0, crop: null }],
@@ -412,37 +413,103 @@ describe("复核页", () => {
     saved.resolve(await json({ ...review, revision: 2 }));
   });
 
-  it("有未保存修改时禁止导出并提示先保存", async () => {
+  it("有未保存修改时点击导出会保存当前内容并下载", async () => {
+    const reviewed = {
+      ...review,
+      revision: 2,
+      teacherReviewedAt: "2026-08-23T08:00:00.000Z",
+      report: { ...review.report, personalizedComment: "导出时保存的修改" },
+    };
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
-      .mockImplementationOnce(() => json({ job: null }));
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(reviewed))
+      .mockImplementationOnce(() => json({ ...reviewed, status: "exported" }));
     const user = userEvent.setup();
     render(<ReviewPage />);
 
     const exportButton = await screen.findByRole("button", { name: "导出 PDF" });
-    expect(exportButton).toBeEnabled();
     await user.clear(screen.getByLabelText("优点一"));
-    await user.type(screen.getByLabelText("优点一"), "未保存修改");
+    await user.type(screen.getByLabelText("优点一"), "导出时保存的修改");
 
-    expect(exportButton).toBeDisabled();
-    expect(exportButton).toHaveAttribute("title", "请先保存复核修改再导出");
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(exportButton).toBeEnabled();
+    await user.click(exportButton);
+
+    await waitFor(() => expect(pdfDownloads.single).toHaveBeenCalledWith("review-1"));
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1/teacher-review");
+    expect(JSON.parse(String((fetchMock.mock.calls[2][1] as RequestInit).body))).toMatchObject({
+      expectedRevision: 1,
+      report: { personalizedComment: "导出时保存的修改" },
+    });
   });
 
-  it("导出时直接下载 PDF，不打开打印页", async () => {
+  it("未复核记录点击导出时先保存为教师已复核再下载", async () => {
+    const reviewed = {
+      ...review,
+      revision: 2,
+      teacherReviewedAt: "2026-08-23T08:00:00.000Z",
+    };
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
       .mockImplementationOnce(() => json({ job: null }))
-      .mockImplementationOnce(() => json(review));
+      .mockImplementationOnce(() => json(reviewed))
+      .mockImplementationOnce(() => json({ ...reviewed, status: "exported" }));
     const open = vi.spyOn(window, "open");
     const user = userEvent.setup();
     render(<ReviewPage />);
 
     await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1");
+    await waitFor(() => expect(pdfDownloads.single).toHaveBeenCalledWith("review-1"));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/reviews/review-1/teacher-review",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          expectedRevision: 1,
+          studentName: "",
+          report: review.report,
+          annotations: [],
+        }),
+      }),
+    );
     expect(pdfDownloads.single).toHaveBeenCalledWith("review-1");
     expect(open).not.toHaveBeenCalled();
+  });
+
+  it("已复核且没有修改时直接下载，不重复提交教师复核", async () => {
+    const reviewed = {
+      ...review,
+      teacherReviewedAt: "2026-08-23T08:00:00.000Z",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(reviewed))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({ ...reviewed, status: "exported" }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "导出 PDF" }));
+
+    await waitFor(() => expect(pdfDownloads.single).toHaveBeenCalledWith("review-1"));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/teacher-review"))).toBe(false);
+  });
+
+  it("导出前教师复核保存失败时保留当前修改且不下载", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({ message: "保存失败，请重试" }, 500));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.clear(await screen.findByLabelText("优点一"));
+    await user.type(screen.getByLabelText("优点一"), "需要保留的修改");
+    await user.click(screen.getByRole("button", { name: "导出 PDF" }));
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("保存失败，请重试"));
+    expect(pdfDownloads.single).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("优点一")).toHaveValue("需要保留的修改");
+    expect(screen.getByRole("button", { name: "导出 PDF" })).toBeEnabled();
   });
 
   it("替换图片控件使用 file-label 显示键盘焦点", async () => {
