@@ -118,7 +118,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .hero-cta { min-width: 168px; background: var(--teal); color: white; box-shadow: 0 10px 24px rgb(1 101 75 / 22%); }
 .hero-cta span { margin-left: 14px; font-size: 1.2em; }
 
-.stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 22px 0 54px; }
+.stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 22px 0 54px; }
 .stats-grid > div { display: flex; padding: 18px 22px; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 12px; background: rgb(251 254 252 / 78%); }
 .stats-grid dt { color: var(--muted); font-size: .9rem; }
 .stats-grid dd { margin: 0; font: 700 1.5rem/1 STKaiti, KaiTi, serif; }
@@ -212,6 +212,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .status-badge { display: inline-flex; padding: 3px 9px; border-radius: 999px; font-size: .74rem; font-weight: 800; }
 .status-badge--draft, .status-badge--analyzing { background: var(--gold-soft); color: var(--gold); }
 .status-badge--ready_for_review, .status-badge--exported { background: var(--green-soft); color: var(--green); }
+.status-badge--reviewed { background: #e5eef5; color: #2f5d78; }
 .status-badge--needs_better_images, .status-badge--failed { background: var(--danger-soft); color: var(--danger); }
 .batch-reanalysis-backdrop { position: fixed; inset: 0; z-index: 110; display: grid; padding: 20px; place-items: center; background: rgb(22 27 25 / 48%); }
 .batch-reanalysis-dialog { display: flex; width: min(760px, 100%); max-height: min(820px, calc(100dvh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--ivory); box-shadow: 0 20px 55px rgb(22 27 25 / 22%); }
@@ -484,7 +485,7 @@ textarea { min-height: 100px; resize: vertical; }
   .page-container, .narrow-page { width: calc(100% - 32px); padding-top: 32px; }
   .hero { grid-template-columns: 1fr; min-height: 0; padding: 34px 26px; gap: 24px; }
   .hero-cta { width: 100%; }
-  .stats-grid { gap: 8px; margin-bottom: 38px; }
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 38px; }
   .stats-grid > div { padding: 13px 12px; align-items: flex-start; flex-direction: column; gap: 8px; }
   .history-card { align-items: flex-start; flex-direction: column; gap: 18px; }
   .card-actions { width: 100%; }

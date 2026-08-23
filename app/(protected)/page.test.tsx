@@ -26,6 +26,7 @@ const review = {
   report: { scores: { total: 36, level: "优秀作文" } },
   createdAt: "2026-07-20T08:00:00.000Z",
   updatedAt: "2026-07-20T08:00:00.000Z",
+  teacherReviewedAt: null,
   expiresAt: "2026-08-19T08:00:00.000Z",
   hasPdf: false,
   pdfFilename: null,
@@ -77,6 +78,29 @@ describe("历史首页", () => {
     expect(await screen.findByText("长期保留，可手动永久删除")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "开始批量审核" })).toHaveAttribute("href", "/reviews/batch");
     expect(screen.queryByText(/30 天|到期|自动永久删除/u)).not.toBeInTheDocument();
+  });
+
+  it("区分待复核、已复核和已导出，并一键导出全部已复核记录", async () => {
+    const reviewed = {
+      ...review,
+      id: "review-reviewed",
+      studentName: "李安然",
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+    };
+    const exported = { ...reviewed, id: "review-exported", status: "exported" };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json([review, reviewed, exported]))
+      .mockImplementationOnce(() => json([review, reviewed, { ...exported, status: "exported" }]));
+    const user = userEvent.setup();
+    render(<Home />);
+
+    expect(await screen.findByText("已复核", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.getByText("已复核", { selector: "dt" })).toBeInTheDocument();
+    expect(screen.getByText("已导出", { selector: ".status-badge" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "一键导出已复核（1）" }));
+
+    await waitFor(() => expect(pdfDownloads.batch).toHaveBeenCalledWith(["review-reviewed"]));
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/reviews");
   });
 
   it("可直接按学生姓名搜索且不匹配作文题目", async () => {
@@ -211,5 +235,22 @@ describe("历史首页", () => {
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/batch-reanalysis")?.[1]?.body))).toEqual({
       items: [{ reviewId: "review-1", expectedRevision: 1, assignmentId: "assignment-1", expectedAssignmentUpdatedAt: "2026-08-22T09:30:00.000Z" }],
     });
+  });
+
+  it("一键导出已复核失败时保留记录并显示错误", async () => {
+    const reviewed = {
+      ...review,
+      id: "review-reviewed",
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([reviewed]));
+    pdfDownloads.batch.mockRejectedValueOnce(new Error("导出失败"));
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.click(await screen.findByRole("button", { name: "一键导出已复核（1）" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("导出失败");
+    expect(screen.getByText("已复核", { selector: ".status-badge" })).toBeInTheDocument();
   });
 });

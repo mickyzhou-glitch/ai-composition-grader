@@ -9,7 +9,7 @@ import { ErrorBanner } from "../components/ErrorBanner";
 import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadReviewPdf, downloadReviewPdfArchive } from "../lib/pdf-download";
-import { filterReviewsByStudentName } from "../lib/review-queue";
+import { filterReviewsByStudentName, isReviewedPendingExport, reviewDisplayStatus } from "../lib/review-queue";
 import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal } from "@/src/domain/contracts";
 import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
@@ -58,11 +58,18 @@ export default function Home() {
     return () => { active = false; };
   }, []);
 
+  const reviewedPendingExport = useMemo(
+    () => reviews.filter(isReviewedPendingExport),
+    [reviews],
+  );
   const stats = useMemo(() => ({
     draft: reviews.filter(({ status }) => status === "draft").length,
-    review: reviews.filter(({ status }) => ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(status)).length,
+    review: reviews.filter(({ status, teacherReviewedAt }) =>
+      !teacherReviewedAt && ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(status),
+    ).length,
+    reviewed: reviewedPendingExport.length,
     exported: reviews.filter(({ status }) => status === "exported").length,
-  }), [reviews]);
+  }), [reviews, reviewedPendingExport.length]);
   const visibleReviews = useMemo(
     () => filterReviewsByStudentName(reviews, studentSearch),
     [reviews, studentSearch],
@@ -142,6 +149,20 @@ export default function Home() {
     }
   }
 
+  async function exportReviewedPdfs() {
+    if (reviewedPendingExport.length === 0 || batchExporting || exporting || reanalysisBusy) return;
+    setBatchExporting(true);
+    setError("");
+    try {
+      await downloadReviewPdfArchive(reviewedPendingExport.map(({ id }) => id));
+      await load();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBatchExporting(false);
+    }
+  }
+
   async function openBatchReanalysis() {
     if (selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || reanalysisBusy || batchExporting || exporting) return;
     setReanalysisOpen(true);
@@ -212,6 +233,7 @@ export default function Home() {
         <dl className="stats-grid" aria-label="批改统计">
           <div><dt>草稿</dt><dd>{stats.draft}</dd></div>
           <div><dt>待复核</dt><dd>{stats.review}</dd></div>
+          <div><dt>已复核</dt><dd>{stats.reviewed}</dd></div>
           <div><dt>已导出</dt><dd>{stats.exported}</dd></div>
         </dl>
 
@@ -229,6 +251,9 @@ export default function Home() {
               <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0 || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
               <span className="muted">已选择 {selectedReviewIds.size} 篇</span>
               {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
+              <button className="button button--primary" type="button" disabled={reviewedPendingExport.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void exportReviewedPdfs()}>
+                {batchExporting ? "正在打包导出…" : `一键导出已复核（${reviewedPendingExport.length}）`}
+              </button>
               <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void exportSelectedPdfs()}>
                 {batchExporting
                   ? "正在打包导出…"
@@ -259,7 +284,7 @@ export default function Home() {
                 <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting || reanalysisBusy} onChange={() => toggleReviewSelection(review.id)} /></label>
                 <div className="history-main">
                   <div className="history-meta">
-                    <StatusBadge status={review.status} />
+                    <StatusBadge status={reviewDisplayStatus(review)} />
                     <span>学生：{review.studentName || "未填写"}</span>
                     <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
                   </div>
