@@ -11,7 +11,7 @@ import { ReportEditor } from "../../../components/ReportEditor";
 import { ReviewExportList } from "../../../components/ReviewExportList";
 import { apiFetch, errorMessage } from "../../../lib/api";
 import { downloadReviewPdfArchive } from "../../../lib/pdf-download";
-import { filterReviewsByStudentName, reviewPrefetchWindow } from "../../../lib/review-queue";
+import { filterReviewsByStudentName, isReviewedPendingExport, reviewPrefetchWindow } from "../../../lib/review-queue";
 import type { PublicAnalysisJobView, RevisionRequestResult, ReviewView } from "../../../lib/types";
 
 export interface ReviewQueueItemView {
@@ -85,11 +85,15 @@ export function BatchReviewPage() {
   useEffect(() => {
     let active = true;
     const requests = requestsRef.current;
-    void apiFetch<ReviewQueueItemView[]>("/api/reviews/review-queue")
-      .then((loaded) => {
+    void Promise.all([
+      apiFetch<ReviewQueueItemView[]>("/api/reviews/review-queue"),
+      apiFetch<ReviewView[]>("/api/reviews"),
+    ])
+      .then(([loadedQueue, loadedReviews]) => {
         if (!active) return;
-        setQueue(loaded);
-        setActiveId(loaded[0]?.id ?? null);
+        setQueue(loadedQueue);
+        setReviewed(loadedReviews.filter(isReviewedPendingExport));
+        setActiveId(loadedQueue[0]?.id ?? null);
       })
       .catch((caught) => { if (active) setError(errorMessage(caught)); })
       .finally(() => { if (active) setLoading(false); });
@@ -254,12 +258,28 @@ export function BatchReviewPage() {
     }
   }
 
-  async function exportSelected() {
-    const ids = reviewed.filter(({ id }) => selectedExportIds.has(id)).map(({ id }) => id);
+  async function exportReviewIds(ids: string[]) {
     if (ids.length === 0) return;
     setExporting(true);
     setError("");
-    try { await downloadReviewPdfArchive(ids); } catch (caught) { setError(errorMessage(caught)); } finally { setExporting(false); }
+    try {
+      await downloadReviewPdfArchive(ids);
+      const latest = await apiFetch<ReviewView[]>("/api/reviews");
+      setReviewed(latest.filter(isReviewedPendingExport));
+      setSelectedExportIds(new Set());
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function exportSelected() {
+    await exportReviewIds(reviewed.filter(({ id }) => selectedExportIds.has(id)).map(({ id }) => id));
+  }
+
+  async function exportAllReviewed() {
+    await exportReviewIds(reviewed.map(({ id }) => id));
   }
 
   return <div className="app-shell batch-review-shell">
@@ -269,14 +289,14 @@ export function BatchReviewPage() {
         <div><p className="eyebrow">教师审核</p><h1>批量作文审核</h1></div>
         <div className="segmented-control" aria-label="批量审核视图">
           <button type="button" aria-pressed={view === "review"} onClick={() => setView("review")}>连续审核</button>
-          <button type="button" aria-pressed={view === "export"} onClick={() => setView("export")}>待导出清单 ({reviewed.length})</button>
+          <button type="button" aria-pressed={view === "export"} onClick={() => setView("export")}>已复核待导出清单 ({reviewed.length})</button>
         </div>
         <Link className="button button--quiet" href="/">返回历史</Link>
       </header>
       {error ? <ErrorBanner message={error} /> : null}
       {revisionNotice ? <div className="revision-job-notice" role="status">{revisionNotice}</div> : null}
       {view === "export" ? <section className="batch-export-view">
-        <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><button type="button" className="button button--primary" disabled={selectedExportIds.size === 0 || exporting} onClick={() => void exportSelected()}>{exporting ? "正在导出…" : "导出所选作文"}</button></div>
+        <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><div className="batch-export-action-buttons"><button type="button" className="button button--quiet" disabled={selectedExportIds.size === 0 || exporting} onClick={() => void exportSelected()}>{exporting ? "正在导出…" : "导出所选作文"}</button><button type="button" className="button button--primary" disabled={reviewed.length === 0 || exporting} onClick={() => void exportAllReviewed()}>{exporting ? "正在导出…" : `一键导出已复核（${reviewed.length}）`}</button></div></div>
         <ReviewExportList reviews={reviewed} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setReview(target); setActiveId(id); setView("review"); } }} />
       </section> : <div className="batch-review-layout">
         <aside className="batch-queue" aria-label="待审核作文队列">

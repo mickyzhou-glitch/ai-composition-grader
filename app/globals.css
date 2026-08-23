@@ -176,6 +176,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .revision-dialog-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 10px; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--surface); }
 .batch-export-view { width: min(1100px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 48px; }
 .batch-export-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.batch-export-action-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
 .review-export-list { display: grid; gap: 12px; }
 .review-export-item { padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .review-export-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
@@ -476,6 +477,9 @@ textarea { min-height: 100px; resize: vertical; }
   .batch-review-footer-actions { width: 100%; }
   .batch-review-footer-actions .button { flex: 1 1 220px; }
   .review-export-comments { grid-template-columns: 1fr; }
+  .batch-export-actions { align-items: flex-start; flex-direction: column; }
+  .batch-export-action-buttons { width: 100%; justify-content: stretch; }
+  .batch-export-action-buttons .button { flex: 1 1 220px; }
   .app-header { width: calc(100% - 32px); padding: 13px 0; align-items: flex-start; }
   .wordmark { font-size: .9rem; }
   .seal { width: 32px; height: 32px; }

@@ -12,7 +12,7 @@ interface ReviewExportListProps {
 
 export function ReviewExportList({ reviews, selectedIds, onToggle, onReturnToReview }: ReviewExportListProps) {
   if (reviews.length === 0) {
-    return <div className="batch-empty"><h2>还没有已审核作文</h2><p>审核完成的作文会出现在这里，导出前可再次核对修改意见。</p></div>;
+    return <div className="batch-empty"><h2>还没有已复核待导出作文</h2><p>完成教师复核的作文会出现在这里，导出前可再次核对修改意见。</p></div>;
   }
   return <div className="review-export-list">
     {reviews.map((review) => {

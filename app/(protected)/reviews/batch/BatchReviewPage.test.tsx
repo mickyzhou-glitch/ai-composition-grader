@@ -2,6 +2,14 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const pdfDownloads = vi.hoisted(() => ({
+  batch: vi.fn().mockResolvedValue("作文批改批量导出.zip"),
+}));
+
+vi.mock("../../../lib/pdf-download", () => ({
+  downloadReviewPdfArchive: pdfDownloads.batch,
+}));
+
 import { BatchReviewPage } from "./BatchReviewPage";
 
 const report = {
@@ -58,6 +66,7 @@ function mockReviewApi(
   return vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = String(input);
     if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+    if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
     const teacherMatch = /^\/api\/reviews\/(review-\d)\/teacher-review$/u.exec(url);
     if (teacherMatch && init?.method === "POST") {
       if (options.rejectTeacherReview) {
@@ -96,6 +105,7 @@ describe("BatchReviewPage", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
       const revisionMatch = /^\/api\/reviews\/(review-\d)\/revision-request$/u.exec(url);
       if (revisionMatch && init?.method === "POST") {
         revisionBody = JSON.parse(String(init.body));
@@ -123,7 +133,7 @@ describe("BatchReviewPage", () => {
     expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
     expect(screen.queryByText("正在展开作文与批改报告")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "待导出清单 (0)" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "已复核待导出清单 (0)" })).toBeVisible();
   });
 
   it("keeps the current essay, dialog, and fields when revision request fails", async () => {
@@ -132,6 +142,7 @@ describe("BatchReviewPage", () => {
     fetchMock.mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: [queueItem("review-1", "张小明", 2)] });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [detail("review-1", "张小明", 2)] });
       if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 2) });
       if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: false, error: { message: "退回失败，请重试" } }, { status: 500 });
       throw new Error(`Unexpected request: ${url}`);
@@ -171,6 +182,7 @@ describe("BatchReviewPage", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [detail("review-1", "张小明", 1)] });
       if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 1) });
       if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
       throw new Error(`Unexpected request: ${url}`);
@@ -185,7 +197,7 @@ describe("BatchReviewPage", () => {
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
     expect(await screen.findByRole("heading", { name: "待审核队列已完成" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "待导出清单 (0)" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "已复核待导出清单 (0)" })).toBeVisible();
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/revision-request", expect.objectContaining({ method: "POST" }));
   });
 
@@ -200,6 +212,7 @@ describe("BatchReviewPage", () => {
         queueCalls += 1;
         return Response.json({ ok: true, data: queueCalls === 1 ? queue : [queue[1]] });
       }
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
       if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: details.get("review-1") });
       if (url === "/api/reviews/review-2") return Response.json({ ok: true, data: details.get("review-2") });
       if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
@@ -232,6 +245,7 @@ describe("BatchReviewPage", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [detail("review-1", "张小明", 1)] });
       if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 1) });
       if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
       if (url === "/api/reviews/review-1/analyze/status") {
@@ -269,6 +283,7 @@ describe("BatchReviewPage", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
       const teacherMatch = /^\/api\/reviews\/(review-\d)\/teacher-review$/u.exec(url);
       if (teacherMatch && init?.method === "POST") {
         const current = details.get(teacherMatch[1])!;
@@ -349,7 +364,7 @@ describe("BatchReviewPage", () => {
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
 
     expect(await screen.findByRole("heading", { name: "待审核队列已完成" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "待导出清单 (1)" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "已复核待导出清单 (1)" })).toBeVisible();
   });
 
   it("历史段落数不符合题目配置时引导到单篇复核且禁止审核", async () => {
@@ -368,5 +383,53 @@ describe("BatchReviewPage", () => {
       "href",
       "/reviews?id=review-1",
     );
+  });
+
+  it("重新进入页面时从历史接口恢复已复核待导出清单", async () => {
+    const queue = [queueItem("review-2", "李安然", 2)];
+    const reviewed = { ...detail("review-1", "张小明", 1), teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+    const pending = detail("review-2", "李安然", 2);
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [reviewed, pending] });
+      if (url === "/api/reviews/review-2") return Response.json({ ok: true, data: pending });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "已复核待导出清单 (1)" }));
+
+    expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/reviews")).toBe(true);
+  });
+
+  it("一键导出已复核成功后重新读取历史并移除已导出记录", async () => {
+    const queue = [queueItem("review-2", "李安然", 2)];
+    const reviewed = { ...detail("review-1", "张小明", 1), teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+    const pending = detail("review-2", "李安然", 2);
+    let exported = false;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [exported ? { ...reviewed, status: "exported" } : reviewed, pending] });
+      if (url === "/api/reviews/review-2") return Response.json({ ok: true, data: pending });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    pdfDownloads.batch.mockImplementationOnce(async () => {
+      exported = true;
+      return "作文批改批量导出.zip";
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "已复核待导出清单 (1)" }));
+    await user.click(screen.getByRole("button", { name: "一键导出已复核（1）" }));
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "已复核待导出清单 (0)" })).toBeVisible());
+    expect(screen.getByText("还没有已复核待导出作文")).toBeVisible();
+    expect(pdfDownloads.batch).toHaveBeenCalledWith(["review-1"]);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/reviews").length).toBe(2);
   });
 });
