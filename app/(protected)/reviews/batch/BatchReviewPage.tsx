@@ -159,6 +159,7 @@ export function BatchReviewPage() {
       }
     }
 
+    void pollRevisionJobs();
     const timer = window.setInterval(() => { void pollRevisionJobs(); }, 2000);
     return () => {
       active = false;

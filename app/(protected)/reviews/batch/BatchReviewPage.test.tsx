@@ -239,9 +239,8 @@ describe("BatchReviewPage", () => {
     expect(screen.getByRole("heading", { name: "李安然" })).toBeVisible();
   }, 12_000);
 
-  it("shows a safe failure notice and never requeues a failed revision job", async () => {
+  it("immediately shows a safe failure notice and never requeues a failed revision job", async () => {
     const queue = [queueItem("review-1", "张小明", 1)];
-    let statusCalls = 0;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
@@ -249,7 +248,6 @@ describe("BatchReviewPage", () => {
       if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: detail("review-1", "张小明", 1) });
       if (url === "/api/reviews/review-1/revision-request" && init?.method === "POST") return Response.json({ ok: true, data: { newlyQueued: true, job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "queued", progressStage: "queued", message: null, createdAt: "2026-08-22T06:00:00.000Z", finishedAt: null } } }, { status: 202 });
       if (url === "/api/reviews/review-1/analyze/status") {
-        statusCalls += 1;
         return Response.json({ ok: true, data: { job: { id: "job-1", reviewId: "review-1", mode: "content_only", status: "failed", progressStage: "saving_result", message: "internal details", createdAt: "2026-08-22T06:00:00.000Z", finishedAt: "2026-08-22T06:01:00.000Z" } } });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -263,8 +261,7 @@ describe("BatchReviewPage", () => {
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
     await screen.findByRole("heading", { name: "待审核队列已完成" });
 
-    await waitFor(() => expect(statusCalls).toBeGreaterThan(0), { timeout: 3_000 });
-    expect(screen.getByRole("status")).toHaveTextContent("退回后的重新分析失败，作文未加入待审核队列。");
+    expect(await screen.findByRole("status")).toHaveTextContent("退回后的重新分析失败，作文未加入待审核队列。");
     expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/analyze/status", undefined);
   }, 7_000);
