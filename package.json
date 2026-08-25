@@ -33,6 +33,7 @@
     "hash-wasm": "^4.12.0",
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
+    "lxgw-wenkai-webfont": "^1.7.0",
     "next": "16.2.10",
     "openai": "^6.48.0",
     "playwright": "^1.61.1",

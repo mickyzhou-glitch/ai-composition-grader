@@ -122,7 +122,7 @@ function harness(options: {
     queuePdfCleanup: vi.fn().mockResolvedValue(undefined),
   };
   const service = new PdfService(repository, fileStore, browserFactory, {
-    now: () => new Date("2026-08-08T06:05:00.000Z"),
+    now: () => new Date("2026-08-25T04:05:00.000Z"),
     timeZone: "Asia/Shanghai",
     timeoutMs: options.timeoutMs,
   });
@@ -183,7 +183,7 @@ describe("PdfService", () => {
     expect(repository.markExported).toHaveBeenCalledWith(OWNER_ID, "review-1", 7, {
       pdfFilename: result.filename,
       pdfPath: `pdf/${result.filename}`,
-      exportedAt: new Date("2026-08-08T06:05:00.000Z"),
+      exportedAt: new Date("2026-08-25T04:05:00.000Z"),
     });
     expect(page.close).toHaveBeenCalledOnce();
     expect(browser.close).toHaveBeenCalledOnce();
@@ -196,7 +196,7 @@ describe("PdfService", () => {
       pdfRevision: 8,
       pdfFilename: "作文批改-为-自己-鼓掌-李羿辰.pdf",
       pdfPath: "pdf/作文批改-为-自己-鼓掌-李羿辰.pdf",
-      exportedAt: new Date("2026-08-08T07:00:00.000Z"),
+      exportedAt: new Date("2026-08-25T04:00:00.000Z"),
     });
     const { service, fileStore, browserFactory, repository } = harness({ current: cached });
     fileStore.readFile.mockResolvedValue(Buffer.from("cached-pdf"));
@@ -219,7 +219,7 @@ describe("PdfService", () => {
       pdfRevision: 8,
       pdfFilename: "作文批改-为-自己-鼓掌-李羿辰.pdf",
       pdfPath: "pdf/作文批改-为-自己-鼓掌-李羿辰.pdf",
-      exportedAt: new Date("2026-08-07T16:00:00.000Z"),
+      exportedAt: new Date("2026-08-25T03:00:00.000Z"),
     });
     const { service, browserFactory } = harness({ current: oldLayout });
 

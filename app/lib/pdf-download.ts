@@ -5,7 +5,8 @@ const PDF_WIDTH = 841.89;
 const PDF_HEIGHT = 595.28;
 const RENDER_SCALE = 2;
 const HEITI_FONT = '"SimHei", "Heiti SC", "Microsoft YaHei", sans-serif';
-const KAITI_FONT = '"KaiTi", "STKaiti", "Kaiti SC", serif';
+const KAITI_FONT_FACE = '"LXGW WenKai"';
+const KAITI_FONT = `${KAITI_FONT_FACE}, "KaiTi", "STKaiti", "Kaiti SC", serif`;
 const BLUE = "#1557b0";
 const RED = "#c62828";
 
@@ -86,6 +87,17 @@ function paintPageBackground(context: CanvasRenderingContext2D) {
 function samplesForImage<T>(samples: T[], imageIndex: number, imageCount: number) {
   if (samples.length === 0) return [];
   return samples.filter((_, index) => Math.floor((index * imageCount) / samples.length) === imageIndex);
+}
+
+async function loadExportKaiti(report: NonNullable<ReviewView["report"]>) {
+  const text = [
+    "范文",
+    ...report.sampleParagraphs.flatMap(({ title, text: sampleText }) => [title, sampleText]),
+  ].join("");
+  await Promise.all([
+    document.fonts.load(`400 16px ${KAITI_FONT_FACE}`, text),
+    document.fonts.load(`700 16px ${KAITI_FONT_FACE}`, text),
+  ]);
 }
 
 async function loadReviewImage(reviewId: string, imageId: number) {
@@ -203,6 +215,7 @@ async function createReviewPdf(review: ReviewView) {
   if (!review.report || review.images.length === 0) {
     throw new Error("批改尚未完成，暂不能导出 PDF");
   }
+  await loadExportKaiti(review.report);
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({
     orientation: "landscape",
@@ -210,7 +223,7 @@ async function createReviewPdf(review: ReviewView) {
     format: "a4",
     compress: true,
   });
-  pdf.setProperties({ title: review.config.title, subject: "作文批改报告", author: "青藤未来作文批改助手" });
+  pdf.setProperties({ title: review.config.title, subject: "作文批改报告", author: "臧老师" });
   const pages: HTMLCanvasElement[] = [];
   for (let index = 0; index < review.images.length; index += 1) {
     pages.push(await drawFeedbackPage(review, index));

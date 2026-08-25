@@ -7,7 +7,7 @@
   --blue: #255ab1;
   --red: #c90000;
   --heiti: SimHei, "Heiti SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --kaiti: STKaiti, KaiTi, "Kaiti SC", "FZKai-Z03", serif;
+  --kaiti: "LXGW WenKai", STKaiti, KaiTi, "Kaiti SC", "FZKai-Z03", serif;
   min-height: 100%;
   background: #fff;
   color: var(--blue);

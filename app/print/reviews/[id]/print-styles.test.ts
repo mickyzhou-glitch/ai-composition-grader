@@ -17,6 +17,7 @@ describe("PDF 打印样式", () => {
   });
 
   it("范文使用红色楷体，其他文字使用蓝色黑体", () => {
+    expect(css).toMatch(/--kaiti:\s*"LXGW WenKai",/s);
     expect(css).toMatch(/\.document\s*{[^}]*color:\s*var\(--blue\);[^}]*font-family:\s*var\(--heiti\);/s);
     expect(css).toMatch(/\.modelColumn\s*{[^}]*color:\s*var\(--red\);[^}]*font-family:\s*var\(--kaiti\);[^}]*font-size:\s*9\.5pt;[^}]*line-height:\s*1\.3;/s);
   });

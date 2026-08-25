@@ -29,6 +29,7 @@ describe("PDF 文件下载", () => {
     pdfMock.addImage.mockReset();
     pdfMock.output.mockClear();
     pdfMock.setProperties.mockReset();
+    delete (document as unknown as { fonts?: unknown }).fonts;
     delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
     delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
   });
@@ -48,7 +49,16 @@ describe("PDF 文件下载", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:review-pdf");
   });
 
-  it("云端导出按作文原图生成 A4 横版三栏页并使用指定字体颜色", async () => {
+  it("云端导出加载自托管楷体后按作文原图生成 A4 横版三栏页", async () => {
+    const renderEvents: string[] = [];
+    const fontLoad = vi.fn(async () => {
+      renderEvents.push("font");
+      return [{} as FontFace];
+    });
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load: fontLoad },
+    });
     const paintedText: Array<{ text: string; color: string; font: string }> = [];
     const context = {
       fillStyle: "", strokeStyle: "", font: "", textAlign: "left", textBaseline: "top", lineWidth: 1,
@@ -58,7 +68,10 @@ describe("PDF 文件下载", () => {
       measureText: (text: string) => ({ width: text.length * 8 }),
       fillText(text: string) { paintedText.push({ text, color: this.fillStyle, font: this.font }); },
     };
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => {
+      renderEvents.push("canvas");
+      return context as never;
+    });
     vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,page");
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
     Object.assign(URL, { createObjectURL: vi.fn(() => "blob:image"), revokeObjectURL: vi.fn() });
@@ -92,7 +105,7 @@ describe("PDF 文件下载", () => {
       if (url === "/api/reviews/export-check") {
         return new Response(JSON.stringify({ ok: true, data: { exportable: true } }), { headers: { "content-type": "application/json" } });
       }
-      if (url.includes("/files?")) return new Response(new Blob(["image"], { type: "image/jpeg" }));
+      if (url.includes("/files?")) return new Response(new Uint8Array([1]), { headers: { "content-type": "image/jpeg" } });
       if (url === "/api/reviews/review-1/exported") {
         return new Response(JSON.stringify({ ok: true, data: { status: "exported" } }), { headers: { "content-type": "application/json" } });
       }
@@ -101,13 +114,22 @@ describe("PDF 文件下载", () => {
 
     await downloadReviewPdf("review-1");
 
+    const modelText = "范文第一段范文一第二段范文二";
+    expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', modelText);
+    expect(fontLoad).toHaveBeenCalledWith('700 16px "LXGW WenKai"', modelText);
+    expect(renderEvents.slice(0, 3)).toEqual(["font", "font", "canvas"]);
     expect(pdfMock.constructorOptions).toMatchObject({ orientation: "landscape", format: "a4" });
+    expect(pdfMock.setProperties).toHaveBeenCalledWith({
+      title: "珍贵的礼物",
+      subject: "作文批改报告",
+      author: "臧老师",
+    });
     expect(pdfMock.addImage).toHaveBeenCalledTimes(2);
     expect(pdfMock.addPage).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/files?imageId=11&variant=original");
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/files?imageId=12&variant=original");
     expect(paintedText.find(({ text }) => text === "修改建议一")).toMatchObject({ color: "#1557b0", font: expect.stringContaining("SimHei") });
-    expect(paintedText.find(({ text }) => text === "范文一")).toMatchObject({ color: "#c62828", font: expect.stringContaining("KaiTi") });
+    expect(paintedText.find(({ text }) => text === "范文一")).toMatchObject({ color: "#c62828", font: expect.stringContaining("LXGW WenKai") });
     expect(paintedText.some(({ text }) => text === "优点" || text === "需要修改")).toBe(false);
     expect(paintedText.some(({ text }) => text.includes("青藤未来") || text.startsWith("学生：") || /第 \d+ 页批注/u.test(text))).toBe(false);
     expect(context.fillRect).toHaveBeenCalledTimes(2);
