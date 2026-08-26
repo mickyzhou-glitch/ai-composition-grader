@@ -6,6 +6,8 @@ import {
   createEvaluationReportSchema,
   evaluationReportSchema,
   expectedSampleParagraphCount,
+  isParagraphEvaluationReport,
+  paragraphEvaluationReportSchema,
   privacyUploadConsentSchema,
   scoreLevelSchema,
 } from "./contracts";
@@ -119,6 +121,34 @@ describe("annotationSchema", () => {
 });
 
 describe("evaluationReportSchema", () => {
+  it("区分旧示范报告与 version 2 逐段批改报告", () => {
+    const { sampleParagraphs: _sampleParagraphs, ...baseReport } = validReport;
+    const paragraphReport = {
+      ...baseReport,
+      version: 2 as const,
+      grade: "A" as const,
+      diagnostics: validReport.diagnostics,
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        suggestions: [{
+          problem: "描写单一",
+          advice: "补充听觉细节",
+          example: "风吹过树叶，沙沙作响。",
+        }],
+        revisedText: "风吹过树叶，沙沙作响。",
+      }],
+    };
+
+    expect(evaluationReportSchema.parse(validReport)).toEqual(validReport);
+    expect(paragraphEvaluationReportSchema.parse(paragraphReport)).toEqual(paragraphReport);
+    expect(() => evaluationReportSchema.parse({
+      ...paragraphReport,
+      sampleParagraphs: [],
+    })).toThrow();
+    expect(isParagraphEvaluationReport(paragraphReport)).toBe(true);
+    expect(isParagraphEvaluationReport(validReport)).toBe(false);
+  });
+
   it("接受并保留固定顺序的三份家长反馈", () => {
     expect(evaluationReportSchema.parse(validReport).parentFeedbacks).toEqual(parentFeedbacks);
   });

@@ -158,28 +158,33 @@ const parentFeedbacksSchema = z.union([
   ]),
 ]).default([]);
 
-const reportBaseSchema = z.object({
+export const reportContentBaseSchema = z.object({
   themeFit: z.enum(["fits", "partial", "off_topic"]),
   themeReason: z.string().trim().min(1),
   personalizedComment: z.string().trim().min(1),
   painPoints: z.array(z.string()),
   commonIssues: z.array(z.string()),
   revisionSuggestions: z.array(z.string()),
-  sampleParagraphs: z.array(sampleParagraphSchema).min(1).max(10),
   parentFeedbacks: parentFeedbacksSchema,
 });
 
-const currentEvaluationReportSchema = reportBaseSchema.extend({
+const legacyReportContentSchema = reportContentBaseSchema.extend({
+  sampleParagraphs: z.array(sampleParagraphSchema).min(1).max(10),
+  version: z.never().optional(),
+  paragraphReviews: z.never().optional(),
+});
+
+export const legacyEvaluationReportSchema = legacyReportContentSchema.extend({
   grade: compositionGradeSchema,
   diagnostics: diagnosticsSchema,
 });
-type CurrentEvaluationReport = z.infer<typeof currentEvaluationReportSchema>;
+type CurrentLegacyEvaluationReport = z.infer<typeof legacyEvaluationReportSchema>;
 
-const legacyEvaluationReportSchema = reportBaseSchema.extend({
+const historicalEvaluationReportSchema = legacyReportContentSchema.extend({
   scores: legacyScoreBreakdownSchema,
 });
 
-function legacyDiagnostics(report: z.infer<typeof legacyEvaluationReportSchema>): Diagnostics {
+function legacyDiagnostics(report: z.infer<typeof historicalEvaluationReportSchema>): Diagnostics {
   return {
     authenticityAndRelevance: {
       finding: report.themeReason,
@@ -202,33 +207,89 @@ function legacyDiagnostics(report: z.infer<typeof legacyEvaluationReportSchema>)
   };
 }
 
+export const paragraphSuggestionSchema = z.object({
+  problem: z.string().trim().min(1),
+  advice: z.string().trim().min(1),
+  example: z.string().trim().min(1),
+}).strict();
+export type ParagraphSuggestion = z.infer<typeof paragraphSuggestionSchema>;
+
+export const paragraphReviewSchema = z.object({
+  paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
+  suggestions: z.array(paragraphSuggestionSchema).min(1).max(4),
+  revisedText: z.string().trim().min(1),
+}).strict();
+export type ParagraphReview = z.infer<typeof paragraphReviewSchema>;
+
+export const paragraphEvaluationReportSchema = reportContentBaseSchema.extend({
+  version: z.literal(2),
+  grade: compositionGradeSchema,
+  diagnostics: diagnosticsSchema,
+  paragraphReviews: z.array(paragraphReviewSchema).min(1),
+}).strict();
+export type ParagraphEvaluationReport = z.infer<typeof paragraphEvaluationReportSchema>;
+
 /**
- * 新报告只保存等级和四维诊断；历史 40 分报告在读入时自动转换，
- * 这样既不再向界面暴露旧分数，也不会让已有记录失效。
+ * 旧版报告仍以示范段落为核心。可选字段保留历史持久化类型兼容，
+ * schema 读入后始终补齐 grade、diagnostics 与 parentFeedbacks。
  */
-export const evaluationReportSchema = z.union([
-  currentEvaluationReportSchema,
-  legacyEvaluationReportSchema,
-]).transform((report): z.infer<typeof currentEvaluationReportSchema> => {
-  if ("grade" in report) return report;
-  return {
-    ...report,
-    grade: gradeFromLegacyTotal(report.scores.total),
-    diagnostics: legacyDiagnostics(report),
-  };
-});
-export const EvaluationReportSchema = evaluationReportSchema;
-/**
- * 持久化层与旧测试夹具可能仍携带 scores；读取和保存时会由 schema
- * 归一化为 CurrentEvaluationReport。界面层据此提供安全的历史回退。
- */
-export type EvaluationReport = Omit<CurrentEvaluationReport, "grade" | "diagnostics" | "parentFeedbacks"> & {
+export type LegacyEvaluationReport = Omit<
+  CurrentLegacyEvaluationReport,
+  "grade" | "diagnostics" | "parentFeedbacks"
+> & {
   grade?: CompositionGrade;
   diagnostics?: Diagnostics;
   scores?: z.infer<typeof legacyScoreBreakdownSchema>;
   parentFeedbacks?: ParentFeedback[];
 };
 
+/**
+ * 任务 4 接入逐段报告前，旧界面和 AI adapter 仍会直接读取 sampleParagraphs。
+ * 兼容字段只保留联合类型上的旧属性访问能力，不会向 v2 schema 注入该字段；
+ * v2 对象仍由 strict schema 拒绝 sampleParagraphs。
+ */
+type ParagraphEvaluationReportWithLegacyAccess = Omit<
+  ParagraphEvaluationReport,
+  "parentFeedbacks"
+> & {
+  parentFeedbacks: ParentFeedback[];
+  sampleParagraphs: SampleParagraph[];
+};
+
+export type EvaluationReport = LegacyEvaluationReport | ParagraphEvaluationReportWithLegacyAccess;
+
+export function isParagraphEvaluationReport(
+  report: unknown,
+): report is ParagraphEvaluationReport {
+  return paragraphEvaluationReportSchema.safeParse(report).success;
+}
+
+/**
+ * 新报告只保存等级和四维诊断；历史 40 分报告在读入时自动转换，
+ * 这样既不再向界面暴露旧分数，也不会让已有记录失效。
+ */
+const parsedEvaluationReportSchema = z.union([
+  legacyEvaluationReportSchema,
+  historicalEvaluationReportSchema,
+  paragraphEvaluationReportSchema,
+]);
+export const evaluationReportSchema = parsedEvaluationReportSchema.transform(
+  (report): EvaluationReport => {
+    if ("version" in report || "grade" in report) {
+      return report as EvaluationReport;
+    }
+    return {
+      ...report,
+      grade: gradeFromLegacyTotal(report.scores.total),
+      diagnostics: legacyDiagnostics(report),
+    };
+  },
+);
+export const EvaluationReportSchema = evaluationReportSchema;
+/**
+ * 持久化层与旧测试夹具可能仍携带 scores；读取和保存时会由 schema
+ * 归一化为 LegacyEvaluationReport。界面层据此提供安全的历史回退。
+ */
 export function createEvaluationReportSchema(templateType: TemplateType) {
   void templateType;
   return evaluationReportSchema;

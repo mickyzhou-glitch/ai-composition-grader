@@ -1,5 +1,6 @@
 import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import type { OcrCheckpoint } from "../ocr/contracts";
 import { validateStructureRequirementCoverage } from "./structure-review-requirements";
 
 const EXPECTED_PARENT_FEEDBACKS = [
@@ -18,8 +19,9 @@ export function validateGeneratedReportSemantics(
   input: unknown,
   config: AssignmentConfig,
   studentName?: string,
+  ocr?: OcrCheckpoint,
 ): EvaluationReport {
-  const report = validateReport(input, { config });
+  const report = validateReport(input, { config, ocr });
   if (!report.diagnostics) {
     throw new Error("report diagnostics missing after validation");
   }
