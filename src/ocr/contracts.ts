@@ -139,14 +139,24 @@ function combineParagraphSegmentText(segments: OcrParagraphSegment[]): string {
   }).join("");
 }
 
-export const ocrCheckpointV2Schema = z.object({
+const ocrCheckpointV2BaseShape = {
   version: z.literal(2),
   sourceRevision: z.number().int().nonnegative(),
   ocrRevision: z.number().int().nonnegative(),
   editedAt: z.string().datetime().nullable(),
   pages: z.array(ocrPageSchema).min(1).max(4),
-  paragraphs: z.array(ocrParagraphSchema).min(1),
-}).strict().superRefine((checkpoint, context) => {
+};
+
+type OcrCheckpointV2ValidationInput = {
+  editedAt: string | null;
+  pages: OcrPage[];
+  paragraphs: Array<Pick<OcrParagraph, "paragraphIndex" | "text" | "segments">>;
+};
+
+function validateOcrCheckpointV2BusinessRules(
+  checkpoint: OcrCheckpointV2ValidationInput,
+  context: z.RefinementCtx,
+): void {
   checkpoint.pages.forEach((page, index) => {
     if (page.pageIndex !== index) {
       context.addIssue({
@@ -218,7 +228,17 @@ export const ocrCheckpointV2Schema = z.object({
       });
     });
   });
-});
+}
+
+const ocrCheckpointV2CandidateSchema = z.object({
+  ...ocrCheckpointV2BaseShape,
+  paragraphs: z.array(ocrParagraphSchema.omit({ id: true })).min(1),
+}).strict().superRefine(validateOcrCheckpointV2BusinessRules);
+
+export const ocrCheckpointV2Schema = z.object({
+  ...ocrCheckpointV2BaseShape,
+  paragraphs: z.array(ocrParagraphSchema).min(1),
+}).strict().superRefine(validateOcrCheckpointV2BusinessRules);
 
 export const ocrCheckpointSchema = z.union([
   ocrCheckpointV2Schema,
@@ -242,8 +262,8 @@ export type OcrCheckpointV2 = z.infer<typeof ocrCheckpointV2Schema>;
 export type OcrCheckpoint = z.infer<typeof ocrCheckpointSchema>;
 export type ReviewAnnotationAnchor = z.infer<typeof reviewAnnotationAnchorSchema>;
 
-export function isOcrCheckpointV2(value: unknown): value is OcrCheckpointV2 {
-  return ocrCheckpointV2Schema.safeParse(value).success;
+export function isOcrCheckpointV2(value: OcrCheckpoint): value is OcrCheckpointV2 {
+  return value.version === 2;
 }
 
 export function createOcrCheckpointV2(input: {
@@ -253,20 +273,24 @@ export function createOcrCheckpointV2(input: {
   pages: OcrPage[];
   paragraphs: Array<Omit<OcrParagraph, "id"> & { id?: unknown }>;
 }): OcrCheckpointV2 {
-  const paragraphs = input.paragraphs.map((paragraph, index) => {
-    const paragraphWithoutModelId = { ...paragraph };
-    delete paragraphWithoutModelId.id;
-    return {
-      ...paragraphWithoutModelId,
-      id: `paragraph-${index + 1}`,
-    };
-  });
-
-  return ocrCheckpointV2Schema.parse({
-    ...input,
+  const candidate = ocrCheckpointV2CandidateSchema.parse({
     version: 2,
+    sourceRevision: input.sourceRevision,
     ocrRevision: input.ocrRevision ?? 0,
     editedAt: input.editedAt ?? null,
-    paragraphs,
+    pages: input.pages,
+    paragraphs: input.paragraphs.map((paragraph) => ({
+      paragraphIndex: paragraph.paragraphIndex,
+      text: paragraph.text,
+      segments: paragraph.segments,
+    })),
   });
+
+  return {
+    ...candidate,
+    paragraphs: candidate.paragraphs.map((paragraph, index) => ({
+      ...paragraph,
+      id: `paragraph-${index + 1}`,
+    })),
+  };
 }

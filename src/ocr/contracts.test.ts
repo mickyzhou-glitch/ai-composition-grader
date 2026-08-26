@@ -9,6 +9,7 @@ import {
   ocrParagraphSchema,
   ocrParagraphSegmentSchema,
   reviewAnnotationAnchorSchema,
+  type OcrCheckpoint,
   type OcrCheckpointV2,
   type OcrPage,
 } from "./contracts";
@@ -94,10 +95,25 @@ describe("OCR contracts", () => {
     expect(ocrCheckpointSchema.parse(checkpointV2())).toEqual(checkpointV2());
   });
 
-  it("identifies only valid version 2 checkpoints", () => {
-    expect(isOcrCheckpointV2(checkpointV2())).toBe(true);
-    expect(isOcrCheckpointV2(checkpointV1())).toBe(false);
-    expect(isOcrCheckpointV2({ version: 2 })).toBe(false);
+  it("identifies parsed version 2 checkpoints by their version only", () => {
+    const parsedV2 = ocrCheckpointSchema.parse(checkpointV2());
+    let pagesReadCount = 0;
+    const checkpointWithObservablePages: OcrCheckpoint = {
+      ...parsedV2,
+      get pages() {
+        pagesReadCount += 1;
+        return parsedV2.pages;
+      },
+    };
+
+    expect(isOcrCheckpointV2(checkpointWithObservablePages)).toBe(true);
+    expect(pagesReadCount).toBe(0);
+    expect(isOcrCheckpointV2(ocrCheckpointSchema.parse(checkpointV1()))).toBe(false);
+
+    if (false) {
+      // @ts-expect-error The guard accepts only checkpoints parsed at the schema boundary.
+      isOcrCheckpointV2({ version: 2 });
+    }
   });
 
   it("requires version 2 pages to use continuous zero-based indexes", () => {
@@ -151,6 +167,33 @@ describe("OCR contracts", () => {
 
     expect(value).toMatchObject({ version: 2, ocrRevision: 0, editedAt: null });
     expect(value.paragraphs.map(({ id }) => id)).toEqual(["paragraph-1", "paragraph-2"]);
+  });
+
+  it("validates invalid candidates without reading model IDs", () => {
+    let modelIdReadCount = 0;
+    const invalidParagraph = {
+      get id(): unknown {
+        modelIdReadCount += 1;
+        return "paragraph-1";
+      },
+      paragraphIndex: 1,
+      text: "索引无效的段落。",
+      segments: [{
+        pageIndex: 0,
+        text: "索引无效的段落。",
+        x: 0.1,
+        y: 0.2,
+        width: 0.5,
+        height: 0.08,
+      }],
+    };
+
+    expect(() => buildV2({
+      sourceRevision: 4,
+      pages: [page(0, "索引无效的段落。")],
+      paragraphs: [invalidParagraph],
+    })).toThrow(/continuous/i);
+    expect(modelIdReadCount).toBe(0);
   });
 
   it("allows teacher-edited text while preserving source pages and segments", () => {
