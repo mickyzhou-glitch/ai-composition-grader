@@ -238,7 +238,19 @@ const ocrCheckpointV2CandidateSchema = z.object({
 export const ocrCheckpointV2Schema = z.object({
   ...ocrCheckpointV2BaseShape,
   paragraphs: z.array(ocrParagraphSchema).min(1),
-}).strict().superRefine(validateOcrCheckpointV2BusinessRules);
+}).strict()
+  .superRefine(validateOcrCheckpointV2BusinessRules)
+  .superRefine((checkpoint, context) => {
+    checkpoint.paragraphs.forEach((paragraph, paragraphIndex) => {
+      if (paragraph.id !== `paragraph-${paragraphIndex + 1}`) {
+        context.addIssue({
+          code: "custom",
+          path: ["paragraphs", paragraphIndex, "id"],
+          message: "OCR paragraphs must use unique stable IDs matching their array order",
+        });
+      }
+    });
+  });
 
 export const ocrCheckpointSchema = z.union([
   ocrCheckpointV2Schema,

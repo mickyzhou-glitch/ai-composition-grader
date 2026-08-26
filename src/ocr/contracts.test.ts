@@ -169,6 +169,30 @@ describe("OCR contracts", () => {
     expect(value.paragraphs.map(({ id }) => id)).toEqual(["paragraph-1", "paragraph-2"]);
   });
 
+  it("rejects a well-formed paragraph ID that does not match its order", () => {
+    const value = checkpointV2();
+    value.paragraphs.push({
+      id: "paragraph-3",
+      paragraphIndex: 1,
+      text: "第二段。",
+      segments: [{ pageIndex: 0, text: "第二段。", x: 0.1, y: 0.5, width: 0.4, height: 0.08 }],
+    });
+
+    expect(() => parseV2(value)).toThrow(/stable id/i);
+  });
+
+  it("rejects duplicate well-formed paragraph IDs", () => {
+    const value = checkpointV2();
+    value.paragraphs.push({
+      id: "paragraph-1",
+      paragraphIndex: 1,
+      text: "第二段。",
+      segments: [{ pageIndex: 0, text: "第二段。", x: 0.1, y: 0.5, width: 0.4, height: 0.08 }],
+    });
+
+    expect(() => parseV2(value)).toThrow(/stable id/i);
+  });
+
   it("validates invalid candidates without reading model IDs", () => {
     let modelIdReadCount = 0;
     const invalidParagraph = {
