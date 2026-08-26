@@ -2,6 +2,9 @@ import { z } from "zod";
 
 import { annotationCategorySchema } from "../domain/contracts";
 
+const NORMALIZED_COORDINATE_TOLERANCE = 1e-6;
+const ENGLISH_OR_NUMBER_CHARACTER_PATTERN = /^[A-Za-z0-9]$/u;
+
 export const ocrBlockSchema = z.object({
   text: z.string().trim().min(1),
   x: z.number().min(0).max(1),
@@ -64,6 +67,16 @@ export const ocrParagraphSchema = z.object({
   segments: z.array(ocrParagraphSegmentSchema).min(1),
 }).strict();
 
+function axisOverlapAmount(
+  firstStart: number,
+  firstLength: number,
+  secondStart: number,
+  secondLength: number,
+): number {
+  return Math.min(firstStart + firstLength, secondStart + secondLength)
+    - Math.max(firstStart, secondStart);
+}
+
 function isAfterInReadingOrder(
   previous: OcrParagraphSegment,
   current: OcrParagraphSegment,
@@ -71,22 +84,40 @@ function isAfterInReadingOrder(
   if (current.pageIndex !== previous.pageIndex) {
     return current.pageIndex > previous.pageIndex;
   }
-  if (current.y !== previous.y) return current.y > previous.y;
-  return current.x > previous.x;
+  const verticalOverlap = axisOverlapAmount(
+    previous.y,
+    previous.height,
+    current.y,
+    current.height,
+  );
+  if (verticalOverlap > NORMALIZED_COORDINATE_TOLERANCE) {
+    return current.x - previous.x > NORMALIZED_COORDINATE_TOLERANCE;
+  }
+  return current.y - previous.y > NORMALIZED_COORDINATE_TOLERANCE;
 }
 
 function regionsOverlap(
   first: OcrParagraphSegment,
   second: OcrParagraphSegment,
 ): boolean {
-  return first.x < second.x + second.width
-    && second.x < first.x + first.width
-    && first.y < second.y + second.height
-    && second.y < first.y + first.height;
+  const horizontalOverlap = axisOverlapAmount(first.x, first.width, second.x, second.width);
+  const verticalOverlap = axisOverlapAmount(first.y, first.height, second.y, second.height);
+  return horizontalOverlap > NORMALIZED_COORDINATE_TOLERANCE
+    && verticalOverlap > NORMALIZED_COORDINATE_TOLERANCE;
 }
 
-function normalizeWhitespace(value: string): string {
-  return value.replace(/\s+/gu, "");
+function isEnglishOrNumberCharacter(value: string | undefined): boolean {
+  return value !== undefined && ENGLISH_OR_NUMBER_CHARACTER_PATTERN.test(value);
+}
+
+function normalizeParagraphWhitespace(value: string): string {
+  return value.trim().replace(/\s+/gu, (whitespace, offset, source) => {
+    const previous = source[offset - 1];
+    const next = source[offset + whitespace.length];
+    return isEnglishOrNumberCharacter(previous) && isEnglishOrNumberCharacter(next)
+      ? " "
+      : "";
+  });
 }
 
 export const ocrCheckpointV2Schema = z.object({
@@ -138,8 +169,8 @@ export const ocrCheckpointV2Schema = z.object({
 
     if (
       checkpoint.editedAt === null
-      && normalizeWhitespace(paragraph.text)
-        !== normalizeWhitespace(paragraph.segments.map(({ text }) => text).join(""))
+      && normalizeParagraphWhitespace(paragraph.text)
+        !== normalizeParagraphWhitespace(paragraph.segments.map(({ text }) => text).join(""))
     ) {
       context.addIssue({
         code: "custom",

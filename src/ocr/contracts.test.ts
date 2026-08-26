@@ -211,7 +211,19 @@ describe("OCR contracts", () => {
     expect(() => parseV2(value)).toThrow(/existing page/i);
   });
 
-  it("rejects paragraph segments in decreasing page or vertical reading order", () => {
+  it("rejects paragraph segments in decreasing page order", () => {
+    const value = checkpointV2();
+    value.pages = [page(0, "第一页"), page(1, "第二页")];
+    value.paragraphs[0].text = "第二页第一页";
+    value.paragraphs[0].segments = [
+      { pageIndex: 1, text: "第二页", x: 0.1, y: 0.2, width: 0.3, height: 0.08 },
+      { pageIndex: 0, text: "第一页", x: 0.1, y: 0.6, width: 0.3, height: 0.08 },
+    ];
+
+    expect(() => parseV2(value)).toThrow(/reading order/i);
+  });
+
+  it("rejects paragraph segments in decreasing vertical order on one page", () => {
     const value = checkpointV2();
     value.paragraphs[0].text = "后面前面";
     value.paragraphs[0].segments = [
@@ -222,12 +234,23 @@ describe("OCR contracts", () => {
     expect(() => parseV2(value)).toThrow(/reading order/i);
   });
 
-  it("uses increasing x as the deterministic order for segments sharing one y", () => {
+  it("accepts left-to-right segments on one line despite slight y jitter", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "左边右边";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "左边", x: 0.1, y: 0.203, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "右边", x: 0.4, y: 0.2, width: 0.2, height: 0.08 },
+    ];
+
+    expect(parseV2(value)).toEqual(value);
+  });
+
+  it("rejects right-to-left segments on one line despite slight y jitter", () => {
     const value = checkpointV2();
     value.paragraphs[0].text = "右左";
     value.paragraphs[0].segments = [
       { pageIndex: 0, text: "右", x: 0.6, y: 0.2, width: 0.2, height: 0.08 },
-      { pageIndex: 0, text: "左", x: 0.1, y: 0.2, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "左", x: 0.1, y: 0.203, width: 0.2, height: 0.08 },
     ];
 
     expect(() => parseV2(value)).toThrow(/reading order/i);
@@ -245,21 +268,58 @@ describe("OCR contracts", () => {
     expect(() => parseV2(value)).toThrow(/overlap/i);
   });
 
-  it("allows regions from different paragraphs to touch at an edge", () => {
+  it("allows decimal regions from different paragraphs to touch at an edge", () => {
     const value = checkpointV2();
+    value.paragraphs[0].segments[0].width = 0.2;
     value.paragraphs.push({
       id: "paragraph-2",
       paragraphIndex: 1,
       text: "相接的第二段。",
-      segments: [{ pageIndex: 0, text: "相接的第二段。", x: 0.6, y: 0.2, width: 0.3, height: 0.08 }],
+      segments: [{ pageIndex: 0, text: "相接的第二段。", x: 0.3, y: 0.2, width: 0.3, height: 0.08 }],
     });
 
     expect(parseV2(value)).toEqual(value);
   });
 
+  it("rejects a real overlap slightly larger than the coordinate tolerance", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].segments[0].width = 0.2;
+    value.paragraphs.push({
+      id: "paragraph-2",
+      paragraphIndex: 1,
+      text: "轻微重叠的第二段。",
+      segments: [{
+        pageIndex: 0,
+        text: "轻微重叠的第二段。",
+        x: 0.299_998,
+        y: 0.2,
+        width: 0.3,
+        height: 0.08,
+      }],
+    });
+
+    expect(() => parseV2(value)).toThrow(/overlap/i);
+  });
+
   it("rejects initial paragraph text that differs from its ordered segment text", () => {
     const value = checkpointV2();
     value.paragraphs[0].text = "不一致的初始文字。";
+
+    expect(() => parseV2(value)).toThrow(/segment text/i);
+  });
+
+  it("accepts layout line breaks while preserving English and numeric word boundaries", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "我用 AI assistant 批改 2 essays。";
+    value.paragraphs[0].segments[0].text = "我用 AI\nassistant\n批改 2\nessays。";
+
+    expect(parseV2(value)).toEqual(value);
+  });
+
+  it("rejects mixed Chinese text when English or numeric word boundaries disappear", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "我用 AI assistant 批改 2 essays。";
+    value.paragraphs[0].segments[0].text = "我用 AIassistant 批改 2essays。";
 
     expect(() => parseV2(value)).toThrow(/segment text/i);
   });
