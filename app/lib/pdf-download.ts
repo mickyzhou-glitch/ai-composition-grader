@@ -1,3 +1,9 @@
+import {
+  isLegacyEvaluationReport,
+  type LegacyEvaluationReport,
+  type SampleParagraph,
+} from "@/src/domain/contracts";
+
 import { apiFetch } from "./api";
 import type { ReviewView } from "./types";
 
@@ -14,7 +20,7 @@ type CanvasPage = {
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
 };
-type PdfSample = NonNullable<ReviewView["report"]>["sampleParagraphs"][number];
+type PdfSample = SampleParagraph;
 
 function safeFilenamePart(value: string) {
   return value
@@ -89,7 +95,7 @@ function samplesForImage<T>(samples: T[], imageIndex: number, imageCount: number
   return samples.filter((_, index) => Math.floor((index * imageCount) / samples.length) === imageIndex);
 }
 
-async function loadExportKaiti(report: NonNullable<ReviewView["report"]>) {
+async function loadExportKaiti(report: LegacyEvaluationReport) {
   const text = [
     "范文",
     ...report.sampleParagraphs.flatMap(({ title, text: sampleText }) => [title, sampleText]),
@@ -167,10 +173,13 @@ function drawSampleColumn(
   }
 }
 
-async function drawFeedbackPage(review: ReviewView, imageIndex: number) {
-  const report = review.report;
+async function drawFeedbackPage(
+  review: ReviewView,
+  report: LegacyEvaluationReport,
+  imageIndex: number,
+) {
   const imageMeta = review.images[imageIndex];
-  if (!report || !imageMeta) throw new Error("批改内容不完整，暂不能导出 PDF");
+  if (!imageMeta) throw new Error("批改内容不完整，暂不能导出 PDF");
   const image = await loadReviewImage(review.id, imageMeta.id);
   const { canvas, context } = createCanvasPage();
   paintPageBackground(context);
@@ -215,7 +224,11 @@ async function createReviewPdf(review: ReviewView) {
   if (!review.report || review.images.length === 0) {
     throw new Error("批改尚未完成，暂不能导出 PDF");
   }
-  await loadExportKaiti(review.report);
+  if (!isLegacyEvaluationReport(review.report)) {
+    throw new Error("逐段批改报告暂不支持旧版 PDF 导出");
+  }
+  const report = review.report;
+  await loadExportKaiti(report);
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({
     orientation: "landscape",
@@ -226,7 +239,7 @@ async function createReviewPdf(review: ReviewView) {
   pdf.setProperties({ title: review.config.title, subject: "作文批改报告", author: "臧老师" });
   const pages: HTMLCanvasElement[] = [];
   for (let index = 0; index < review.images.length; index += 1) {
-    pages.push(await drawFeedbackPage(review, index));
+    pages.push(await drawFeedbackPage(review, report, index));
   }
   pages.forEach((canvas, index) => {
     if (index > 0) pdf.addPage("a4", "landscape");

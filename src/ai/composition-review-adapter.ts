@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   evaluationReportSchema,
+  isLegacyEvaluationReport,
   type AssignmentConfig,
   type EvaluationReport,
 } from "../domain/contracts";
@@ -200,6 +201,7 @@ export class CompositionReviewAdapter {
     } catch (initialError) {
       if (validationCode(initialError) === "sample_paragraphs") {
         const original = resultSchema.parse(parseJsonResponse(content));
+        if (!isLegacyEvaluationReport(original.report)) throw initialError;
         let currentSampleParagraphs = original.report.sampleParagraphs;
         let currentValidationError: unknown = initialError;
         let finalRepairError: unknown = initialError;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  isLegacyEvaluationReport,
   MAX_REVIEW_IMAGES,
   type AiReviewEnvelope,
   type AssignmentConfig,
@@ -215,6 +216,9 @@ export class ReviewService {
   ): Promise<{ text: string }> {
     const review = this.get(ownerId, id);
     if (!review.report) throw new ReviewServiceError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+    if (!isLegacyEvaluationReport(review.report)) {
+      throw new ReviewServiceError("FILE_NOT_FOUND", "逐段批改报告不包含示范段落", 404);
+    }
     if (!Number.isInteger(index) || index < 0 || index >= review.report.sampleParagraphs.length) {
       throw new ReviewServiceError("FILE_NOT_FOUND", "示范段落不存在", 404);
     }
@@ -253,6 +257,9 @@ export class ReviewService {
   ): Promise<{ sampleParagraphs: Array<{ title: string; text: string; suggestion: string }> }> {
     const review = this.get(ownerId, id);
     if (!review.report) throw new ReviewServiceError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+    if (!isLegacyEvaluationReport(review.report)) {
+      throw new ReviewServiceError("FILE_NOT_FOUND", "逐段批改报告不包含示范段落", 404);
+    }
     if (!this.aiReviewer.rewriteAllSamples) {
       throw new Error("当前 AI 服务不支持整篇示范文重写");
     }

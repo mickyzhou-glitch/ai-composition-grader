@@ -2,12 +2,17 @@
 
 import { useState } from "react";
 
-import { gradeFromLegacyTotal, type CompositionGrade, type Diagnostics, type EvaluationReport } from "@/src/domain/contracts";
+import {
+  gradeFromLegacyTotal,
+  type CompositionGrade,
+  type Diagnostics,
+  type LegacyEvaluationReport,
+} from "@/src/domain/contracts";
 import { ScoreCard } from "./ScoreCard";
 
 interface ReportEditorProps {
-  report: EvaluationReport;
-  onChange: (report: EvaluationReport) => void;
+  report: LegacyEvaluationReport;
+  onChange: (report: LegacyEvaluationReport) => void;
   onRewriteFeedback?: (section: FeedbackSection) => Promise<void>;
   rewritingFeedbackSection?: FeedbackSection | null;
   onRewriteSample?: (index: number, instruction?: string) => Promise<void>;
@@ -60,18 +65,18 @@ export function ReportEditor({
   const [rewriteInstructions, setRewriteInstructions] = useState<string[]>([]);
   const [rewriteAllInstruction, setRewriteAllInstruction] = useState("");
   const sampleStructureMatches = report.sampleParagraphs.length === expectedSampleParagraphCount;
-  function update<K extends keyof EvaluationReport>(key: K, value: EvaluationReport[K]) {
+  function update<K extends keyof LegacyEvaluationReport>(key: K, value: LegacyEvaluationReport[K]) {
     onChange({ ...report, [key]: value });
   }
 
-  function updateSample(index: number, change: Partial<EvaluationReport["sampleParagraphs"][number]>) {
+  function updateSample(index: number, change: Partial<LegacyEvaluationReport["sampleParagraphs"][number]>) {
     const sampleParagraphs = report.sampleParagraphs.map((sample, sampleIndex) =>
       sampleIndex === index ? { ...sample, ...change } : sample,
     );
     update("sampleParagraphs", sampleParagraphs);
   }
 
-  function updateThemeFit(themeFit: EvaluationReport["themeFit"]) {
+  function updateThemeFit(themeFit: LegacyEvaluationReport["themeFit"]) {
     onChange({ ...report, themeFit, grade: themeFit === "off_topic" ? "C" : grade, diagnostics });
   }
 
@@ -104,7 +109,7 @@ export function ReportEditor({
   return (
     <div className="report-editor">
       <section className="report-section report-theme" aria-labelledby="theme-report-heading">
-        <div className="report-section-heading"><div><p className="eyebrow">审题诊断</p><h2 id="theme-report-heading">主题判断</h2></div><select aria-label="主题判断" value={report.themeFit} onChange={(event) => updateThemeFit(event.target.value as EvaluationReport["themeFit"])}><option value="fits">切合题意</option><option value="partial">部分切题</option><option value="off_topic">偏离题意</option></select></div>
+        <div className="report-section-heading"><div><p className="eyebrow">审题诊断</p><h2 id="theme-report-heading">主题判断</h2></div><select aria-label="主题判断" value={report.themeFit} onChange={(event) => updateThemeFit(event.target.value as LegacyEvaluationReport["themeFit"])}><option value="fits">切合题意</option><option value="partial">部分切题</option><option value="off_topic">偏离题意</option></select></div>
         <label>判断依据<textarea aria-label="主题判断依据" value={report.themeReason} onChange={(event) => update("themeReason", event.target.value)} /></label>
       </section>
 

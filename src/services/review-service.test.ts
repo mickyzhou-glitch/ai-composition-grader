@@ -8,7 +8,11 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
+import type {
+  AiReviewEnvelope,
+  AssignmentConfig,
+  ParagraphEvaluationReport,
+} from "../domain/contracts";
 import { initializeSchema } from "../db/init";
 import { ReviewRepository, type ReviewImageInput } from "../db/review-repository";
 import * as schema from "../db/schema";
@@ -474,6 +478,50 @@ describe("ReviewService analysis CAS", () => {
     });
     expect(cleanup).toHaveBeenCalledWith(OWNER_ID, "review-1", ["old.pdf"]);
     await cleanup.mock.results[0]?.value;
+  });
+
+  it("逐段报告不会进入旧示范段落重写入口", async () => {
+    const paragraphReport: ParagraphEvaluationReport = {
+      version: 2 as const,
+      themeFit: "fits" as const,
+      themeReason: "切题。",
+      personalizedComment: "选材真实。",
+      painPoints: [],
+      commonIssues: [],
+      revisionSuggestions: [],
+      grade: "A-" as const,
+      diagnostics: readyEnvelope.report.diagnostics!,
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        suggestions: [{ problem: "保留", advice: "保留原句", example: "我为自己喝彩。" }],
+        revisedText: "我为自己喝彩。",
+      }],
+      parentFeedbacks: [],
+    };
+    const rewriteSample = vi.fn();
+    const rewriteAllSamples = vi.fn();
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteSample,
+      rewriteAllSamples,
+    } as never);
+    const current = repository.getById(OWNER_ID, "review-1")!;
+    vi.spyOn(repository, "getById").mockReturnValue({
+      ...current,
+      status: "ready_for_review",
+      report: paragraphReport,
+    });
+
+    await expect(service.rewriteSample(OWNER_ID, "review-1", 0)).rejects.toMatchObject({
+      code: "FILE_NOT_FOUND",
+      message: "逐段批改报告不包含示范段落",
+    });
+    await expect(service.rewriteAllSamples(OWNER_ID, "review-1")).rejects.toMatchObject({
+      code: "FILE_NOT_FOUND",
+      message: "逐段批改报告不包含示范段落",
+    });
+    expect(rewriteSample).not.toHaveBeenCalled();
+    expect(rewriteAllSamples).not.toHaveBeenCalled();
   });
 
   it("教师审核在作文锁内保存并清理旧 PDF，随后移出待审核队列", async () => {

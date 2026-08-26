@@ -7,9 +7,12 @@ import {
   evaluationReportSchema,
   expectedSampleParagraphCount,
   isParagraphEvaluationReport,
+  isLegacyEvaluationReport,
   paragraphEvaluationReportSchema,
   privacyUploadConsentSchema,
   scoreLevelSchema,
+  type EvaluationReport,
+  type ParagraphEvaluationReport,
 } from "./contracts";
 import { deriveLevel, validateReport } from "./report-validation";
 
@@ -145,8 +148,13 @@ describe("evaluationReportSchema", () => {
       ...paragraphReport,
       sampleParagraphs: [],
     })).toThrow();
+    const typedParagraph: ParagraphEvaluationReport = paragraphEvaluationReportSchema.parse(paragraphReport);
+    const typedEvaluation: EvaluationReport = typedParagraph;
+    expect(typedEvaluation).toEqual(paragraphReport);
     expect(isParagraphEvaluationReport(paragraphReport)).toBe(true);
     expect(isParagraphEvaluationReport(validReport)).toBe(false);
+    expect(isLegacyEvaluationReport(typedEvaluation)).toBe(false);
+    expect(isLegacyEvaluationReport(validReport)).toBe(true);
   });
 
   it("接受并保留固定顺序的三份家长反馈", () => {
@@ -266,19 +274,21 @@ describe("evaluationReportSchema", () => {
   });
 
   it("允许自定义模板包含1至10段", () => {
-    expect(
-      createEvaluationReportSchema("custom").parse({
-        ...validReport,
-        sampleParagraphs: [{ title: "示例", text: "简短示例", suggestion: "补充细节。" }],
-      }).sampleParagraphs,
-    ).toHaveLength(1);
+    const oneParagraph = createEvaluationReportSchema("custom").parse({
+      ...validReport,
+      sampleParagraphs: [{ title: "示例", text: "简短示例", suggestion: "补充细节。" }],
+    });
+    expect(isLegacyEvaluationReport(oneParagraph)).toBe(true);
+    if (!isLegacyEvaluationReport(oneParagraph)) throw new Error("expected legacy report");
+    expect(oneParagraph.sampleParagraphs).toHaveLength(1);
 
-    expect(
-      createEvaluationReportSchema("custom").parse({
-        ...validReport,
-        sampleParagraphs: Array.from({ length: 10 }, () => ({ title: "示例", text: "示例", suggestion: "建议" })),
-      }).sampleParagraphs,
-    ).toHaveLength(10);
+    const tenParagraphs = createEvaluationReportSchema("custom").parse({
+      ...validReport,
+      sampleParagraphs: Array.from({ length: 10 }, () => ({ title: "示例", text: "示例", suggestion: "建议" })),
+    });
+    expect(isLegacyEvaluationReport(tenParagraphs)).toBe(true);
+    if (!isLegacyEvaluationReport(tenParagraphs)) throw new Error("expected legacy report");
+    expect(tenParagraphs.sampleParagraphs).toHaveLength(10);
   });
 });
 

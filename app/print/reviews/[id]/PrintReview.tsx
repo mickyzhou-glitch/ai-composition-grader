@@ -1,4 +1,5 @@
 import type { ReviewView } from "@/app/lib/types";
+import { isLegacyEvaluationReport } from "@/src/domain/contracts";
 
 import styles from "./print.module.css";
 
@@ -9,7 +10,11 @@ function sampleParagraphsForPage<T>(paragraphs: T[], pageIndex: number, pageCoun
 type PrintableReview = Pick<ReviewView, "images" | "report">;
 
 export function PrintReview({ review, imageSources }: { review: PrintableReview; imageSources: string[] }) {
-  if (!review.report || review.images.length === 0) {
+  if (
+    !review.report
+    || !isLegacyEvaluationReport(review.report)
+    || review.images.length === 0
+  ) {
     throw new TypeError("print review requires report and images");
   }
 

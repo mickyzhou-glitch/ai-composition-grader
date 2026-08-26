@@ -2,7 +2,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import {
+  isLegacyEvaluationReport,
+  type AssignmentConfig,
+  type LegacyEvaluationReport,
+} from "../domain/contracts";
 import { formatRevisionTeacherGuidance } from "../reanalysis/contracts";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "./openai-review-adapter";
 import { CompositionReviewAdapter } from "./composition-review-adapter";
@@ -28,7 +32,7 @@ function sampleParagraphs(count: number) {
   }));
 }
 
-const report: EvaluationReport = {
+const report: LegacyEvaluationReport = {
   themeFit: "fits",
   themeReason: "围绕真实经历展开。",
   personalizedComment: "选材真实贴近日常生活\n关键动作描写比较具体",
@@ -334,6 +338,8 @@ describe("CompositionReviewAdapter", () => {
       studentName: "小艾",
     });
 
+    expect(isLegacyEvaluationReport(result.report)).toBe(true);
+    if (!isLegacyEvaluationReport(result.report)) throw new Error("expected legacy report");
     expect(result.report.sampleParagraphs).toHaveLength(5);
   });
 
@@ -350,6 +356,8 @@ describe("CompositionReviewAdapter", () => {
       studentName: "小艾",
     });
 
+    expect(isLegacyEvaluationReport(result.report)).toBe(true);
+    if (!isLegacyEvaluationReport(result.report)) throw new Error("expected legacy report");
     expect(result.report.sampleParagraphs).toHaveLength(3);
 
     const request = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };

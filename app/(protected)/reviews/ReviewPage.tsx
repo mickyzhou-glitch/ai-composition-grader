@@ -6,10 +6,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   evaluationReportSchema,
   expectedSampleParagraphCount,
+  isLegacyEvaluationReport,
   MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
   type Annotation,
   type EvaluationReport,
+  type LegacyEvaluationReport,
+  type ParagraphEvaluationReport,
+  type ParentFeedback,
 } from "@/src/domain/contracts";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -83,6 +87,20 @@ function reportValidationMessage(report: EvaluationReport): string | null {
   if (result.success) return null;
   return validationPathMessage(result.error.issues[0]?.path ?? [])
     ?? "复核内容有未填写或格式不正确的项目，请检查后再保存";
+}
+
+function paragraphParentFeedbacks(
+  feedbacks: ParentFeedback[],
+): ParagraphEvaluationReport["parentFeedbacks"] | null {
+  if (feedbacks.length === 0) return [];
+  const [warm, professional, concise] = feedbacks;
+  if (
+    feedbacks.length !== 3
+    || warm?.style !== "warm"
+    || professional?.style !== "professional"
+    || concise?.style !== "concise"
+  ) return null;
+  return [warm, professional, concise];
 }
 
 function saveErrorMessage(error: unknown): string {
@@ -353,7 +371,14 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   }
 
   async function rewriteSample(index: number, instruction?: string) {
-    if (!review || !report || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    if (
+      !review
+      || !report
+      || !isLegacyEvaluationReport(report)
+      || busy
+      || analysisJob?.status === "queued"
+      || analysisJob?.status === "running"
+    ) return;
     setBusy("rewrite-sample");
     setRewritingSampleIndex(index);
     setError("");
@@ -406,12 +431,19 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   }
 
   async function rewriteAllSamples(instruction?: string) {
-    if (!review || !report || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    if (
+      !review
+      || !report
+      || !isLegacyEvaluationReport(report)
+      || busy
+      || analysisJob?.status === "queued"
+      || analysisJob?.status === "running"
+    ) return;
     setBusy("rewrite-all-samples");
     setError("");
     setNotice("");
     try {
-      const result = await apiFetch<{ sampleParagraphs: EvaluationReport["sampleParagraphs"] }>(
+      const result = await apiFetch<{ sampleParagraphs: LegacyEvaluationReport["sampleParagraphs"] }>(
         `/api/reviews/${encodeURIComponent(review.id)}/sample-paragraphs/regenerate`,
         {
           method: "POST",
@@ -664,7 +696,14 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
               feedbacks={report.parentFeedbacks ?? []}
               savedFeedbacks={review.report?.parentFeedbacks ?? []}
               disabled={busy !== null || analysisActive}
-              onChange={(parentFeedbacks) => changeReport({ ...report, parentFeedbacks })}
+              onChange={(parentFeedbacks) => {
+                if (isLegacyEvaluationReport(report)) {
+                  changeReport({ ...report, parentFeedbacks });
+                  return;
+                }
+                const nextFeedbacks = paragraphParentFeedbacks(parentFeedbacks);
+                if (nextFeedbacks) changeReport({ ...report, parentFeedbacks: nextFeedbacks });
+              }}
               onCopySuccess={() => {
                 setError("");
                 setNotice("家长反馈已复制");
@@ -681,7 +720,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} expectedSampleParagraphCount={expectedSampleParagraphCount(review.config)} /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report && isLegacyEvaluationReport(report) ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} expectedSampleParagraphCount={expectedSampleParagraphCount(review.config)} /> : report ? <p className="muted">逐段批改报告暂不支持旧版复核界面</p> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
           </div>
         </section>

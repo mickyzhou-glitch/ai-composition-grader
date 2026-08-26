@@ -2,7 +2,11 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import {
+  isLegacyEvaluationReport,
+  type AssignmentConfig,
+  type LegacyEvaluationReport,
+} from "../domain/contracts";
 import { formatRevisionTeacherGuidance } from "../reanalysis/contracts";
 import {
   OpenAIReviewAdapter,
@@ -37,7 +41,7 @@ const config: AssignmentConfig = {
   templateType: "preset_self_applause",
 };
 
-const report: EvaluationReport = {
+const report: LegacyEvaluationReport = {
   themeFit: "fits",
   themeReason: "紧扣主题。",
   personalizedComment: [
@@ -188,6 +192,7 @@ describe("OpenAIReviewAdapter", () => {
 
     expect(result.readable).toBe(true);
     if (!result.readable) throw new Error("expected readable result");
+    if (!isLegacyEvaluationReport(result.report)) throw new Error("expected legacy report");
     expect(result.report.sampleParagraphs[0].suggestion).toBe("补充人物动作；写清心理变化");
     expect(harness.create).toHaveBeenCalledOnce();
   });
@@ -503,6 +508,7 @@ describe("OpenAIReviewAdapter", () => {
 
     expect(result.readable).toBe(true);
     if (!result.readable) throw new Error("expected readable result");
+    if (!isLegacyEvaluationReport(result.report)) throw new Error("expected legacy report");
     expect(result.report.sampleParagraphs).toHaveLength(3);
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("sampleParagraphs 必须恰好 3 段");
@@ -1168,7 +1174,7 @@ describe("OpenAIReviewAdapter", () => {
 
     expect(result.readable).toBe(true);
     if (!result.readable) throw new Error("expected readable result");
-    expect(result.report.parentFeedbacks?.[0].content).toBe("艾绮家长，我来反馈本次作文。");
+    expect(result.report.parentFeedbacks?.[0]?.content).toBe("艾绮家长，我来反馈本次作文。");
     expect(harness.create).toHaveBeenCalledOnce();
   });
 
@@ -1187,7 +1193,7 @@ describe("OpenAIReviewAdapter", () => {
 
     expect(result.readable).toBe(true);
     if (!result.readable) throw new Error("expected readable result");
-    expect(result.report.parentFeedbacks?.[0].content).toBe("家长您好，我来反馈本次作文。");
+    expect(result.report.parentFeedbacks?.[0]?.content).toBe("家长您好，我来反馈本次作文。");
     expect(harness.create).toHaveBeenCalledOnce();
   });
 

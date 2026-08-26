@@ -20,7 +20,7 @@ import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-ada
 import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter";
 import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
-import { assignmentConfigSchema } from "../src/domain/contracts";
+import { assignmentConfigSchema, isLegacyEvaluationReport } from "../src/domain/contracts";
 import { D1OcrCheckpointRepository, OcrCheckpointError } from "../src/cloudflare/d1-ocr-checkpoint";
 import { createWorkerAiSettingsSource } from "../src/cloudflare/ai-settings";
 import {
@@ -574,6 +574,7 @@ export default {
         const review = await new D1ReviewReader(env.DB).get(user.id, decodeURIComponent(sampleRewriteMatch[1])) as ReviewView | null;
         const index = Number(sampleRewriteMatch[2]);
         if (!review?.report) return apiError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+        if (!isLegacyEvaluationReport(review.report)) return apiError("UNSUPPORTED_REPORT_VERSION", "逐段批改报告不支持示范段落重写", 409);
         const body = await request.json() as { instruction?: unknown };
         const instruction = typeof body.instruction === "string" && body.instruction.trim() ? body.instruction.trim().slice(0, 1000) : undefined;
         return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).rewriteSample({ config: review.config, sampleParagraphs: review.report.sampleParagraphs, index, instruction }) });
@@ -592,6 +593,7 @@ export default {
       try {
         const review = await new D1ReviewReader(env.DB).get(user.id, decodeURIComponent(samplesRewriteMatch[1])) as ReviewView | null;
         if (!review?.report) return apiError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+        if (!isLegacyEvaluationReport(review.report)) return apiError("UNSUPPORTED_REPORT_VERSION", "逐段批改报告不支持示范段落重写", 409);
         const body = await request.json() as { instruction?: unknown };
         const instruction = typeof body.instruction === "string" && body.instruction.trim() ? body.instruction.trim().slice(0, 1000) : undefined;
         return Response.json({ ok: true, data: await new OpenAIReviewAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).rewriteAllSamples({ config: review.config, sampleParagraphs: review.report.sampleParagraphs, instruction }) });

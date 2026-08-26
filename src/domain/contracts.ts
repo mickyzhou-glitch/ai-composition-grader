@@ -243,25 +243,18 @@ export type LegacyEvaluationReport = Omit<
   parentFeedbacks?: ParentFeedback[];
 };
 
-/**
- * 任务 4 接入逐段报告前，旧界面和 AI adapter 仍会直接读取 sampleParagraphs。
- * 兼容字段只保留联合类型上的旧属性访问能力，不会向 v2 schema 注入该字段；
- * v2 对象仍由 strict schema 拒绝 sampleParagraphs。
- */
-type ParagraphEvaluationReportWithLegacyAccess = Omit<
-  ParagraphEvaluationReport,
-  "parentFeedbacks"
-> & {
-  parentFeedbacks: ParentFeedback[];
-  sampleParagraphs: SampleParagraph[];
-};
-
-export type EvaluationReport = LegacyEvaluationReport | ParagraphEvaluationReportWithLegacyAccess;
+export type EvaluationReport = LegacyEvaluationReport | ParagraphEvaluationReport;
 
 export function isParagraphEvaluationReport(
   report: unknown,
 ): report is ParagraphEvaluationReport {
   return paragraphEvaluationReportSchema.safeParse(report).success;
+}
+
+export function isLegacyEvaluationReport(
+  report: EvaluationReport,
+): report is LegacyEvaluationReport {
+  return "sampleParagraphs" in report;
 }
 
 /**
@@ -276,7 +269,7 @@ const parsedEvaluationReportSchema = z.union([
 export const evaluationReportSchema = parsedEvaluationReportSchema.transform(
   (report): EvaluationReport => {
     if ("version" in report || "grade" in report) {
-      return report as EvaluationReport;
+      return report;
     }
     return {
       ...report,
