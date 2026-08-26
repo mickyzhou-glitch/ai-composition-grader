@@ -256,6 +256,28 @@ describe("OCR contracts", () => {
     expect(() => parseV2(value)).toThrow(/reading order/i);
   });
 
+  it("accepts vertically ordered adjacent lines whose boxes overlap slightly", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "上行下行";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "上行", x: 0.6, y: 0.2, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "下行", x: 0.1, y: 0.279_5, width: 0.2, height: 0.08 },
+    ];
+
+    expect(parseV2(value)).toEqual(value);
+  });
+
+  it("rejects reversed adjacent lines whose boxes overlap slightly", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "下行上行";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "下行", x: 0.1, y: 0.279_5, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "上行", x: 0.6, y: 0.2, width: 0.2, height: 0.08 },
+    ];
+
+    expect(() => parseV2(value)).toThrow(/reading order/i);
+  });
+
   it("rejects overlapping regions from different paragraphs on one page", () => {
     const value = checkpointV2();
     value.paragraphs.push({
@@ -322,6 +344,51 @@ describe("OCR contracts", () => {
     value.paragraphs[0].segments[0].text = "我用 AIassistant 批改 2essays。";
 
     expect(() => parseV2(value)).toThrow(/segment text/i);
+  });
+
+  it("accepts an English word boundary across page segments", () => {
+    const value = checkpointV2();
+    value.pages = [page(0, "AI"), page(1, "assistant")];
+    value.paragraphs[0].text = "AI assistant";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "AI", x: 0.1, y: 0.86, width: 0.2, height: 0.08 },
+      { pageIndex: 1, text: "assistant", x: 0.1, y: 0.04, width: 0.4, height: 0.08 },
+    ];
+
+    expect(parseV2(value)).toEqual(value);
+  });
+
+  it("accepts a numeric word boundary across two segments", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "2026 08";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "2026", x: 0.1, y: 0.2, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "08", x: 0.4, y: 0.2, width: 0.2, height: 0.08 },
+    ];
+
+    expect(parseV2(value)).toEqual(value);
+  });
+
+  it("rejects a missing English boundary represented by two segments", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "AIassistant";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "AI", x: 0.1, y: 0.2, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "assistant", x: 0.4, y: 0.2, width: 0.4, height: 0.08 },
+    ];
+
+    expect(() => parseV2(value)).toThrow(/segment text/i);
+  });
+
+  it("keeps Chinese text continuous across two segments", () => {
+    const value = checkpointV2();
+    value.paragraphs[0].text = "第一段";
+    value.paragraphs[0].segments = [
+      { pageIndex: 0, text: "第一", x: 0.1, y: 0.2, width: 0.2, height: 0.08 },
+      { pageIndex: 0, text: "段", x: 0.4, y: 0.2, width: 0.2, height: 0.08 },
+    ];
+
+    expect(parseV2(value)).toEqual(value);
   });
 
   it("keeps all new version 2 schemas strict", () => {

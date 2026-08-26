@@ -3,6 +3,7 @@ import { z } from "zod";
 import { annotationCategorySchema } from "../domain/contracts";
 
 const NORMALIZED_COORDINATE_TOLERANCE = 1e-6;
+const SAME_LINE_MIN_VERTICAL_OVERLAP_RATIO = 0.5;
 const ENGLISH_OR_NUMBER_CHARACTER_PATTERN = /^[A-Za-z0-9]$/u;
 
 export const ocrBlockSchema = z.object({
@@ -77,6 +78,16 @@ function axisOverlapAmount(
     - Math.max(firstStart, secondStart);
 }
 
+function areSegmentsOnSameLine(
+  first: OcrParagraphSegment,
+  second: OcrParagraphSegment,
+): boolean {
+  const verticalOverlap = axisOverlapAmount(first.y, first.height, second.y, second.height);
+  if (verticalOverlap <= NORMALIZED_COORDINATE_TOLERANCE) return false;
+  return verticalOverlap / Math.min(first.height, second.height)
+    >= SAME_LINE_MIN_VERTICAL_OVERLAP_RATIO;
+}
+
 function isAfterInReadingOrder(
   previous: OcrParagraphSegment,
   current: OcrParagraphSegment,
@@ -84,13 +95,7 @@ function isAfterInReadingOrder(
   if (current.pageIndex !== previous.pageIndex) {
     return current.pageIndex > previous.pageIndex;
   }
-  const verticalOverlap = axisOverlapAmount(
-    previous.y,
-    previous.height,
-    current.y,
-    current.height,
-  );
-  if (verticalOverlap > NORMALIZED_COORDINATE_TOLERANCE) {
+  if (areSegmentsOnSameLine(previous, current)) {
     return current.x - previous.x > NORMALIZED_COORDINATE_TOLERANCE;
   }
   return current.y - previous.y > NORMALIZED_COORDINATE_TOLERANCE;
@@ -118,6 +123,20 @@ function normalizeParagraphWhitespace(value: string): string {
       ? " "
       : "";
   });
+}
+
+function combineParagraphSegmentText(segments: OcrParagraphSegment[]): string {
+  return segments.map((segment, index) => {
+    const previous = segments[index - 1];
+    if (!previous) return segment.text;
+    const previousCharacter = previous.text[previous.text.length - 1];
+    const nextCharacter = segment.text[0];
+    const separator = isEnglishOrNumberCharacter(previousCharacter)
+      && isEnglishOrNumberCharacter(nextCharacter)
+      ? " "
+      : "";
+    return `${separator}${segment.text}`;
+  }).join("");
 }
 
 export const ocrCheckpointV2Schema = z.object({
@@ -170,7 +189,7 @@ export const ocrCheckpointV2Schema = z.object({
     if (
       checkpoint.editedAt === null
       && normalizeParagraphWhitespace(paragraph.text)
-        !== normalizeParagraphWhitespace(paragraph.segments.map(({ text }) => text).join(""))
+        !== normalizeParagraphWhitespace(combineParagraphSegmentText(paragraph.segments))
     ) {
       context.addIssue({
         code: "custom",
