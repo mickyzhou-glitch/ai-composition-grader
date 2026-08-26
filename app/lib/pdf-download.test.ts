@@ -4,7 +4,7 @@ const pdfMock = vi.hoisted(() => ({
   constructorOptions: null as unknown,
   addPage: vi.fn(),
   addImage: vi.fn(),
-  output: vi.fn(() => new Blob(["pdf"], { type: "application/pdf" })),
+  output: vi.fn<(type: "blob") => Blob>(() => new Blob(["pdf"], { type: "application/pdf" })),
   setProperties: vi.fn(),
 }));
 
@@ -13,7 +13,7 @@ vi.mock("jspdf", () => ({
     constructor(options: unknown) { pdfMock.constructorOptions = options; }
     addPage(...args: unknown[]) { pdfMock.addPage(...args); }
     addImage(...args: unknown[]) { pdfMock.addImage(...args); }
-    output(...args: unknown[]) { return pdfMock.output(...args); }
+    output(type: "blob") { return pdfMock.output(type); }
     setProperties(...args: unknown[]) { pdfMock.setProperties(...args); }
   },
 }));

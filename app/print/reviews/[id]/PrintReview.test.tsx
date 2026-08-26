@@ -15,6 +15,7 @@ const review: ReviewRecord = {
   pdfPath: null,
   pdfRevision: null,
   exportedAt: null,
+  teacherReviewedAt: null,
   config: {
     title: "为自己鼓掌",
     grade: "上海五四学制六年级",

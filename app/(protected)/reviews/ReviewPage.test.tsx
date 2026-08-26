@@ -15,6 +15,7 @@ vi.mock("next/navigation", () => ({
 const pdfDownloads = vi.hoisted(() => ({
   single: vi.fn().mockResolvedValue("为自己鼓掌-张小明.pdf"),
 }));
+const browserWindow: Window = window;
 const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 vi.mock("../../lib/pdf-download", () => ({
@@ -748,10 +749,12 @@ describe("复核页", () => {
       message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
     };
     const retryTimers: Array<() => void> = [];
-    const setTimeout = window.setTimeout.bind(window);
-    vi.spyOn(window, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay === 1500) retryTimers.push(callback as () => void);
-      if (delay === 1500) return (retryTimers.length || 1) as never;
+    const setTimeout = browserWindow.setTimeout.bind(browserWindow);
+    vi.spyOn(browserWindow, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if (delay === 1500 && typeof callback === "function") {
+        retryTimers.push(() => callback(...args));
+        return retryTimers.length || 1;
+      }
       return setTimeout(callback, delay, ...args);
     });
     vi.spyOn(window, "clearTimeout").mockImplementation(() => undefined);
@@ -783,10 +786,12 @@ describe("复核页", () => {
       message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
     };
     const retryTimers: Array<() => void> = [];
-    const setTimeout = window.setTimeout.bind(window);
-    vi.spyOn(window, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay === 1500 || delay === 3000 || delay === 6000) retryTimers.push(callback as () => void);
-      if (delay === 1500 || delay === 3000 || delay === 6000) return (retryTimers.length || 1) as never;
+    const setTimeout = browserWindow.setTimeout.bind(browserWindow);
+    vi.spyOn(browserWindow, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if ((delay === 1500 || delay === 3000 || delay === 6000) && typeof callback === "function") {
+        retryTimers.push(() => callback(...args));
+        return retryTimers.length || 1;
+      }
       return setTimeout(callback, delay, ...args);
     });
     vi.spyOn(window, "clearTimeout").mockImplementation(() => undefined);
@@ -861,11 +866,11 @@ describe("复核页", () => {
       message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
     };
     const retryTimers: Array<{ callback: () => void; delay: number }> = [];
-    const setTimeout = window.setTimeout.bind(window);
-    vi.spyOn(window, "setTimeout").mockImplementation((callback, delay, ...args) => {
-      if (delay === 1500 || delay === 3000 || delay === 6000) {
-        retryTimers.push({ callback: callback as () => void, delay });
-        return (retryTimers.length || 1) as never;
+    const setTimeout = browserWindow.setTimeout.bind(browserWindow);
+    vi.spyOn(browserWindow, "setTimeout").mockImplementation((callback, delay, ...args) => {
+      if ((delay === 1500 || delay === 3000 || delay === 6000) && typeof callback === "function") {
+        retryTimers.push({ callback: () => callback(...args), delay });
+        return retryTimers.length || 1;
       }
       return setTimeout(callback, delay, ...args);
     });

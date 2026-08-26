@@ -4,7 +4,7 @@ import { createWorkerOpenAIClient } from "./worker-openai-client";
 
 describe("createWorkerOpenAIClient", () => {
   it("只发送 OpenAI 兼容网关所需的认证与 JSON 请求头", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "{}" } }],
     }), { headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -22,7 +22,7 @@ describe("createWorkerOpenAIClient", () => {
   });
 
   it("为 MiMo Chat Completions 同时带上官方 api-key 认证头", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "{}" } }],
     }), { headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -41,7 +41,7 @@ describe("createWorkerOpenAIClient", () => {
   });
 
   it("把客户端超时时间传给上游 fetch", async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "{}" } }],
     }), { headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -49,8 +49,8 @@ describe("createWorkerOpenAIClient", () => {
     const client = createWorkerOpenAIClient({ apiKey: "server-key", baseURL: "https://gateway.test/v1", timeout: 180_000, maxRetries: 1 });
     await client.chat.completions.create({ model: "content-model", messages: [] });
 
-    const init = fetchMock.mock.calls[0][1] as RequestInit;
-    expect(init.signal).toBeInstanceOf(AbortSignal);
+    const init = fetchMock.mock.calls[0][1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     vi.unstubAllGlobals();
   });
 });

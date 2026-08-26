@@ -220,7 +220,7 @@ describe("ReviewRepository", () => {
       annotations: [annotation],
     })).toThrow(expect.objectContaining({ code: "REVISION_CONFLICT" }));
 
-    expect(repository.requireById(OWNER_ID, "review-1")).toMatchObject({
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       studentName: "",
       revision: ready.revision,
       teacherReviewedAt: null,
@@ -254,7 +254,7 @@ describe("ReviewRepository", () => {
     expect(edited.teacherReviewedAt).toEqual(reviewed.teacherReviewedAt);
 
     repository.beginAnalysis(OWNER_ID, "review-1", "run-1", edited.revision);
-    expect(repository.requireById(OWNER_ID, "review-1").teacherReviewedAt).toBeNull();
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({ teacherReviewedAt: null });
 
     const analyzed = repository.saveAnalysis(OWNER_ID, "review-1", {
       revision: edited.revision,
@@ -267,11 +267,15 @@ describe("ReviewRepository", () => {
     expect(repository.updateConfig(OWNER_ID, "review-1", { ...config, title: "新题目" }).teacherReviewedAt).toBeNull();
 
     const readyAgain = repository.updateReport(OWNER_ID, "review-1", report);
-    repository.completeTeacherReview(OWNER_ID, "review-1", { expectedRevision: readyAgain.revision, report });
+    const reviewedForReplacement = repository.completeTeacherReview(
+      OWNER_ID,
+      "review-1",
+      { expectedRevision: readyAgain.revision, report },
+    );
     expect(repository.replaceImages(
       OWNER_ID,
       "review-1",
-      repository.requireById(OWNER_ID, "review-1").revision,
+      reviewedForReplacement.revision,
       [],
     ).teacherReviewedAt).toBeNull();
     expect(reviewedAgain.teacherReviewedAt).toBeInstanceOf(Date);

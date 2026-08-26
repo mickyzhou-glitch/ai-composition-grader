@@ -6,9 +6,12 @@ import type { OpenAIClientFactory, OpenAICompatibleClient } from "./openai-revie
 import { VisionOcrAdapter } from "./vision-ocr-adapter";
 
 function setup(response: unknown) {
-  const create = vi.fn(async () => ({
-    choices: [{ message: { content: JSON.stringify(response) } }],
-  }));
+  const create = vi.fn(async (input: unknown) => {
+    void input;
+    return {
+      choices: [{ message: { content: JSON.stringify(response) } }],
+    };
+  });
   const factory = vi.fn((options: Parameters<OpenAIClientFactory>[0]): OpenAICompatibleClient => {
     void options;
     return { chat: { completions: { create } } };

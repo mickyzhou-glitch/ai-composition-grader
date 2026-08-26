@@ -6,7 +6,8 @@ import type { OpenAIClientFactory, OpenAICompatibleClient } from "./openai-revie
 import { AssignmentGuidanceAdapter } from "./assignment-guidance-adapter";
 
 function setup(content: string | Error) {
-  const create = vi.fn(async () => {
+  const create = vi.fn(async (input: unknown) => {
+    void input;
     if (content instanceof Error) throw content;
     return { choices: [{ message: { content } }] };
   });
@@ -50,10 +51,10 @@ describe("AssignmentGuidanceAdapter", () => {
       timeout: 180_000,
       maxRetries: 1,
     }));
-    const request = harness.create.mock.calls[0][0] as { messages: Array<{ content: string }> };
-    expect(JSON.stringify(request.messages)).toContain("那一次，我没有放弃");
-    expect(JSON.stringify(request.messages)).toContain("上海五四学制六年级");
-    expect(JSON.stringify(request.messages)).toContain("600");
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("那一次，我没有放弃");
+    expect(serialized).toContain("上海五四学制六年级");
+    expect(serialized).toContain("600");
   });
 
   it("拒绝不完整的 AI 输出，避免覆盖教师已有内容", async () => {

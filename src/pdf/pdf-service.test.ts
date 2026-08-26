@@ -123,7 +123,6 @@ function harness(options: {
   };
   const service = new PdfService(repository, fileStore, browserFactory, {
     now: () => new Date("2026-08-25T04:05:00.000Z"),
-    timeZone: "Asia/Shanghai",
     timeoutMs: options.timeoutMs,
   });
   return { service, repository, fileStore, browserFactory, browser, page };
