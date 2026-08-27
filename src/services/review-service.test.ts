@@ -8,6 +8,7 @@ import Database from "better-sqlite3";
 import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type {
   AiReviewEnvelope,
   AssignmentConfig,
@@ -61,6 +62,24 @@ const readyEnvelope: AiReviewEnvelope = {
     })),
   },
   annotations: [],
+};
+
+const paragraphReport: ParagraphEvaluationReport = {
+  version: 2,
+  themeFit: "fits",
+  themeReason: "切题。",
+  personalizedComment: "选材真实。",
+  painPoints: [],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "A-",
+  diagnostics: readyEnvelope.report!.diagnostics!,
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "保留", advice: "保留原句", example: "我为自己喝彩。" }],
+    revisedText: "我为自己喝彩。",
+  }],
+  parentFeedbacks: [],
 };
 
 function deferred<T>() {
@@ -139,6 +158,44 @@ describe("ReviewService analysis CAS", () => {
     });
   }
 
+  function paragraphWorkerFor(
+    reviews: ReviewService,
+    jobs: AnalysisJobRepository,
+    recognize: () => Promise<VisionOcrResult>,
+  ): AnalysisWorker {
+    return new AnalysisWorker(jobs, {
+      prepare: (ownerId, reviewId, mode, claim, prebound) =>
+        prebound
+          ? reviews.prepareQueuedAnalysis(ownerId, reviewId, mode, claim)
+          : reviews.prepareAnalysis(ownerId, reviewId, mode, claim),
+      analyze: async () => { throw new Error("旧图片直批入口不应调用"); },
+      recognize,
+      saveOcr: (ownerId, reviewId, token, imageRevision, result) =>
+        reviews.savePreparedOcr(ownerId, reviewId, token, imageRevision, result),
+      analyzeText: async () => ({ report: paragraphReport, annotationAnchors: [] }),
+      save: (ownerId, reviewId, token, envelope, claim, expectedOcrRevision) =>
+        reviews.savePreparedAnalysisAndCompleteJob(
+          ownerId,
+          reviewId,
+          token,
+          envelope,
+          claim,
+          expectedOcrRevision,
+        ),
+      fail: (ownerId, reviewId, token, claim, errorCode) =>
+        reviews.failPreparedAnalysisAndFailJob(ownerId, reviewId, token, claim, errorCode),
+      finishUnprepared: (ownerId, reviewId, runId, claim, target, errorCode) =>
+        reviews.finishQueuedAnalysisBeforeToken(
+          ownerId,
+          reviewId,
+          runId,
+          claim,
+          target,
+          errorCode,
+        ),
+    });
+  }
+
   it("将已保存的学生姓名传给 AI 分析", async () => {
     const analyze = vi.fn(async () => readyEnvelope);
     const service = serviceFor(analyze);
@@ -169,6 +226,97 @@ describe("ReviewService analysis CAS", () => {
       status: "analyzing",
       analysisRunId: "queued-job-1",
     });
+  });
+
+  it("full 准备即使已有当前 OCR v2 也读取图片并不复用检查点", async () => {
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 2,
+      sourceRevision: 1,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "旧识别文字", readable: true, warnings: [], blocks: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "旧识别文字",
+        segments: [{ pageIndex: 0, text: "旧识别文字", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+      }],
+    }), "review-1");
+    const service = serviceFor(async () => readyEnvelope);
+
+    const prepared = await service.prepareAnalysis(
+      OWNER_ID,
+      "review-1",
+      "full",
+      "full-rerun",
+    );
+
+    expect(prepared.checkpoint).toBeNull();
+    expect(prepared.imageDataUrls).toEqual([
+      `data:image/jpeg;base64,${Buffer.from("ai").toString("base64")}`,
+    ]);
+  });
+
+  it("真实 Worker 与仓储链路完整重跑 OCR 并原子落库逐段报告", async () => {
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 2,
+      sourceRevision: 1,
+      ocrRevision: 4,
+      editedAt: "2026-08-26T00:00:00.000Z",
+      pages: [{ pageIndex: 0, text: "旧识别文字", readable: true, warnings: [], blocks: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "旧识别文字",
+        segments: [{ pageIndex: 0, text: "旧识别文字", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+      }],
+    }), "review-1");
+    const recognized = {
+      pages: [{
+        pageIndex: 0,
+        text: "我为自己喝彩。",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "我为自己喝彩。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+      }],
+      paragraphs: [{
+        paragraphIndex: 0,
+        text: "我为自己喝彩。",
+        segments: [{
+          pageIndex: 0,
+          text: "我为自己喝彩。",
+          x: 0.1,
+          y: 0.2,
+          width: 0.3,
+          height: 0.1,
+        }],
+      }],
+    };
+    const recognize = vi.fn(async () => recognized);
+    const reviews = serviceFor(async () => readyEnvelope);
+    const jobs = new AnalysisJobRepository(drizzle(sqlite, { schema }), {
+      createId: () => "paragraph-full-job",
+      leaseMs: 60_000,
+    });
+    new AnalysisJobService(jobs).enqueue(OWNER_ID, "review-1", undefined, "full");
+
+    await expect(paragraphWorkerFor(reviews, jobs, recognize).runOnce()).resolves.toEqual({
+      jobId: "paragraph-full-job",
+      outcome: "succeeded",
+    });
+
+    expect(recognize).toHaveBeenCalledWith([
+      `data:image/jpeg;base64,${Buffer.from("ai").toString("base64")}`,
+    ]);
+    expect(jobs.getById(OWNER_ID, "paragraph-full-job")).toMatchObject({ status: "succeeded" });
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "ready_for_review",
+      analysisRunId: null,
+      report: paragraphReport,
+      ocr: { version: 2, ocrRevision: 0, paragraphs: [{ text: "我为自己喝彩。" }] },
+    });
+    expect(sqlite.prepare("SELECT image_revision, report_ocr_revision FROM reviews WHERE id = ?")
+      .get("review-1")).toEqual({ image_revision: 1, report_ocr_revision: 0 });
   });
 
   it("普通 full job 通过生产 Worker 准备路径调用 AI 并成功", async () => {
@@ -487,23 +635,6 @@ describe("ReviewService analysis CAS", () => {
   });
 
   it("逐段报告不会进入旧示范段落重写入口", async () => {
-    const paragraphReport: ParagraphEvaluationReport = {
-      version: 2 as const,
-      themeFit: "fits" as const,
-      themeReason: "切题。",
-      personalizedComment: "选材真实。",
-      painPoints: [],
-      commonIssues: [],
-      revisionSuggestions: [],
-      grade: "A-" as const,
-      diagnostics: readyEnvelope.report.diagnostics!,
-      paragraphReviews: [{
-        paragraphId: "paragraph-1",
-        suggestions: [{ problem: "保留", advice: "保留原句", example: "我为自己喝彩。" }],
-        revisedText: "我为自己喝彩。",
-      }],
-      parentFeedbacks: [],
-    };
     const rewriteSample = vi.fn();
     const rewriteAllSamples = vi.fn();
     const service = new ReviewService(repository, fileStore, {

@@ -622,7 +622,7 @@ describe("AnalysisJobService", () => {
     ]);
   });
 
-  it("本机 Worker 先保存 OCR，再只把识别文字交给内容模型", async () => {
+  it("本机 Worker 的 full 任务即使已有 v2 也重新识别并保存", async () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext()!;
     const calls: string[] = [];
@@ -665,7 +665,7 @@ describe("AnalysisJobService", () => {
         config,
         imageRevision: 1,
         imageDataUrls: ["data:image/jpeg;base64,QQ=="],
-        checkpoint: null,
+        checkpoint,
       }),
       recognize: async () => {
         calls.push("vision");

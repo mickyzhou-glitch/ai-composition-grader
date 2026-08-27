@@ -64,7 +64,7 @@ export class CloudAnalysisPipeline {
     let checkpoint = await this.dependencies.readCheckpoint(job.ownerId, job.reviewId);
     if (checkpoint && checkpoint.sourceRevision !== job.imageRevision) checkpoint = null;
     const mode = analysisModeForCheckpoint(job.mode, checkpoint);
-    if (mode === "full" && checkpoint?.version !== 2) checkpoint = null;
+    if (mode === "full") checkpoint = null;
 
     if (!checkpoint) {
       await this.dependencies.updateStage(job.id, "reading_images");

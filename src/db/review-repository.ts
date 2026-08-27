@@ -1084,13 +1084,9 @@ export class ReviewRepository {
     claim: AnalysisJobCompletionClaim,
     expectedOcrRevision?: number,
   ): ReviewRecord {
-    const review = this.requireById(ownerId, id);
     const parsedAnnotations = input.annotations.map((annotation) =>
       annotationSchema.parse(annotation),
     );
-    const report = input.readable
-      ? validateReport(input.report, { config: review.config })
-      : null;
     const status = input.readable ? "ready_for_review" : "needs_better_images";
     const savedAnnotations = input.readable ? parsedAnnotations : [];
     const now = this.now();
@@ -1099,6 +1095,57 @@ export class ReviewRepository {
     }
 
     this.database.transaction((transaction) => {
+      const current = transaction.select({
+        config: reviews.config,
+        imageRevision: reviews.imageRevision,
+        ocrCheckpoint: reviews.ocrCheckpoint,
+      }).from(reviews).where(and(
+        eq(reviews.id, id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        eq(reviews.revision, token.revision),
+        eq(reviews.analysisRunId, token.runId),
+      )).get();
+      if (!current) {
+        const exists = transaction.select({ id: reviews.id }).from(reviews).where(and(
+          eq(reviews.id, id),
+          eq(reviews.ownerId, ownerId),
+          isNull(reviews.deletingAt),
+        )).get();
+        if (!exists) throw new ReviewNotFoundError(id);
+        throw new AnalysisConflictError(id);
+      }
+
+      let config: AssignmentConfig;
+      try {
+        config = assignmentConfigSchema.parse(current.config);
+      } catch {
+        throw new CorruptReviewDataError(id, "config");
+      }
+      let checkpoint: OcrCheckpoint | undefined;
+      if (expectedOcrRevision !== undefined && current.ocrCheckpoint !== null) {
+        const parsedCheckpoint = ocrCheckpointSchema.safeParse(current.ocrCheckpoint);
+        if (!parsedCheckpoint.success) {
+          throw new CorruptReviewDataError(id, "ocrCheckpoint");
+        }
+        checkpoint = parsedCheckpoint.data;
+      }
+      if (
+        expectedOcrRevision !== undefined
+        && (
+          checkpoint?.version !== 2
+          || checkpoint.sourceRevision !== current.imageRevision
+          || checkpoint.ocrRevision !== expectedOcrRevision
+        )
+      ) {
+        throw new AnalysisConflictError(id);
+      }
+      const report = input.readable
+        ? validateReport(input.report, {
+            config,
+            ocr: checkpoint,
+          })
+        : null;
       const reviewUpdate = transaction
         .update(reviews)
         .set({
@@ -1122,7 +1169,9 @@ export class ReviewRepository {
             isNull(reviews.deletingAt),
             eq(reviews.revision, token.revision),
             eq(reviews.analysisRunId, token.runId),
+            eq(reviews.imageRevision, current.imageRevision),
             ...(expectedOcrRevision === undefined ? [] : [
+              sql`json_extract(${reviews.ocrCheckpoint}, '$.sourceRevision') = ${current.imageRevision}`,
               sql`json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision') = ${expectedOcrRevision}`,
             ]),
           ),

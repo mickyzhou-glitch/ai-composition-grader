@@ -215,7 +215,7 @@ export class AnalysisWorker {
       let envelope: AiReviewEnvelope;
       if (dualModel) {
         const mode = analysisModeForCheckpoint(claim.mode, checkpoint);
-        if (mode === "full" && checkpoint?.version !== 2) checkpoint = null;
+        if (mode === "full") checkpoint = null;
         if (!checkpoint) {
           if (prepared.imageRevision === undefined) throw new TypeError("imageRevision is required");
           const recognized = await this.execution.recognize!(prepared.imageDataUrls);

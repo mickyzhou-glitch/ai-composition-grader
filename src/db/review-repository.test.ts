@@ -12,6 +12,7 @@ import type {
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import { initializeSchema } from "./init";
 import {
+  AnalysisConflictError,
   CorruptReviewDataError,
   ReviewRepository,
 } from "./review-repository";
@@ -600,13 +601,14 @@ describe("ReviewRepository", () => {
       OWNER_ID,
       "review-1",
       secondToken,
-      { readable: true, pageWarnings: [], report, annotations: [annotation] },
+      { readable: true, pageWarnings: [], report: paragraphReport, annotations: [annotation] },
       { id: "job-content", attempt: 1, leaseExpiresAt },
       checkpoint.ocrRevision,
     );
     expect(sqlite.prepare(
       "SELECT image_revision, report_ocr_revision FROM reviews WHERE id = ?",
     ).get("review-1")).toEqual({ image_revision: 1, report_ocr_revision: 0 });
+    expect(saved.report).toEqual(paragraphReport);
 
     repository.replaceImages(
       OWNER_ID,
@@ -621,6 +623,85 @@ describe("ReviewRepository", () => {
       ocr_checkpoint: null,
       report_ocr_revision: null,
     });
+  });
+
+  it.each([
+    ["OCR revision", () => {
+      repository.editParagraphTexts(
+        OWNER_ID,
+        "review-1",
+        0,
+        [{ paragraphId: "paragraph-1", text: "教师修正后的文字。" }],
+      );
+    }],
+    ["OCR source", () => {
+      const raw = sqlite.prepare("SELECT ocr_checkpoint FROM reviews WHERE id = ?")
+        .get("review-1") as { ocr_checkpoint: string };
+      const checkpoint = JSON.parse(raw.ocr_checkpoint) as { sourceRevision: number };
+      checkpoint.sourceRevision = 0;
+      sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?")
+        .run(JSON.stringify(checkpoint), "review-1");
+    }],
+  ])("原子保存逐段报告时拒绝过期的 %s", (_case, makeStale) => {
+    const image = {
+      position: 0,
+      originalName: "第一页.jpg",
+      mimeType: "image/jpeg",
+      originalPath: "images/page-1-original.jpg",
+      annotationPath: "images/page-1-annotation.jpg",
+      aiPath: "images/page-1-ai.jpg",
+      width: 1200,
+      height: 1600,
+      rotation: 0 as const,
+      crop: null,
+    };
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const withImage = repository.replaceImages(OWNER_ID, "review-1", 0, [image]);
+    const token = repository.beginAnalysis(
+      OWNER_ID,
+      "review-1",
+      "run-stale-ocr",
+      withImage.revision,
+    );
+    const checkpoint = repository.saveRecognizedOcr(
+      OWNER_ID,
+      "review-1",
+      token,
+      1,
+      recognizedOcr,
+    );
+    const leaseExpiresAt = new Date("2026-07-20T11:00:00.000Z");
+    sqlite.prepare(`
+      INSERT INTO analysis_jobs (
+        id, review_id, owner_id, mode, status, attempt, available_at,
+        lease_expires_at, progress_stage, created_at, started_at
+      ) VALUES (?, ?, ?, 'content_only', 'running', 1, ?, ?, 'saving_result', ?, ?)
+    `).run(
+      "job-stale-ocr",
+      "review-1",
+      OWNER_ID,
+      Date.parse("2026-07-20T10:00:00.000Z"),
+      leaseExpiresAt.valueOf(),
+      Date.parse("2026-07-20T10:00:00.000Z"),
+      Date.parse("2026-07-20T10:00:00.000Z"),
+    );
+    makeStale();
+
+    expect(() => repository.saveAnalysisAndCompleteJob(
+      OWNER_ID,
+      "review-1",
+      token,
+      { readable: true, pageWarnings: [], report: paragraphReport, annotations: [] },
+      { id: "job-stale-ocr", attempt: 1, leaseExpiresAt },
+      checkpoint.ocrRevision,
+    )).toThrow(AnalysisConflictError);
+    expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
+      status: "analyzing",
+      analysisRunId: "run-stale-ocr",
+      report: null,
+    });
+    expect(sqlite.prepare("SELECT status FROM analysis_jobs WHERE id = ?")
+      .get("job-stale-ocr")).toEqual({ status: "running" });
   });
 
   it("全量编辑 OCR 自然段只改文字和 OCR 版本", () => {

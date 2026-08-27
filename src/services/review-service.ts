@@ -416,7 +416,7 @@ export class ReviewService {
         const source = this.repository.getAnalysisSource(ownerId, id);
         let checkpoint = source.checkpoint;
         const effectiveMode = analysisModeForCheckpoint(mode, checkpoint);
-        if (effectiveMode === "full" && checkpoint?.version !== 2) checkpoint = null;
+        if (effectiveMode === "full") checkpoint = null;
         const imageDataUrls = checkpoint ? [] : await Promise.all(
           review.images.map(async (image) => {
             const filename = image.aiPath.replace(/^images\//, "");

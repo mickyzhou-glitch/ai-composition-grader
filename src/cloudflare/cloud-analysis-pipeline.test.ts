@@ -171,14 +171,15 @@ describe("CloudAnalysisPipeline", () => {
     expect(JSON.stringify(vi.mocked(deps.analyzeText).mock.calls[0])).not.toContain("data:image");
   });
 
-  it("当前 OCR v2 已存在时跳过视觉模型", async () => {
+  it("full 即使已有当前 OCR v2 也完整重跑视觉模型", async () => {
     const deps = dependencies({ readCheckpoint: vi.fn(async () => recognizedCheckpoint) });
 
     await new CloudAnalysisPipeline(deps).run(job);
 
-    expect(deps.recognize).not.toHaveBeenCalled();
-    expect(deps.saveRecognized).not.toHaveBeenCalled();
-    expect(deps.calls[0]).toBe("generating_review");
+    expect(deps.loadImageUrls).toHaveBeenCalledOnce();
+    expect(deps.recognize).toHaveBeenCalledOnce();
+    expect(deps.saveRecognized).toHaveBeenCalledOnce();
+    expect(deps.calls[0]).toBe("reading_images");
   });
 
   it("已有 OCR v1 的 full 任务重新跑视觉模型升级为 v2", async () => {
