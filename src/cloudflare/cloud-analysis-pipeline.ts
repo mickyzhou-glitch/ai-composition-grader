@@ -1,6 +1,7 @@
 import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { Annotation, AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import { validateReport } from "../domain/report-validation";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
 import type { OcrCheckpoint, OcrCheckpointV2 } from "../ocr/contracts";
@@ -98,9 +99,13 @@ export class CloudAnalysisPipeline {
     await this.dependencies.updateStage(job.id, "mapping_annotations");
     const annotations = mapAnnotationAnchors(checkpoint, result.annotationAnchors);
     await this.dependencies.updateStage(job.id, "validating_result");
+    const report = validateReport(result.report, {
+      config: job.config,
+      ocr: checkpoint,
+    });
     await this.dependencies.updateStage(job.id, "saving_result");
     await this.dependencies.saveResult(job, {
-      report: result.report,
+      report,
       annotations,
       ocrRevision: checkpoint.ocrRevision,
     });

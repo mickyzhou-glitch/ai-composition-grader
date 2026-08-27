@@ -41,9 +41,11 @@ export class D1ReviewWriter {
       report: evaluationReportSchema.optional(),
       annotations: z.array(annotationSchema).optional(),
     }).strict().refine((value) => value.studentName !== undefined || value.config !== undefined || value.report !== undefined || value.annotations !== undefined).parse(input);
-    const current = await this.database.prepare("SELECT student_name, config, report, status, revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ student_name: string; config: string; report: string | null; status: string; revision: number }>();
+    const current = await this.database.prepare("SELECT student_name, config, report, status, revision, analysis_run_id FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ student_name: string; config: string; report: string | null; status: string; revision: number; analysis_run_id: string | null }>();
     if (!current) return null;
-    if (current.revision !== parsed.expectedRevision) throw new RevisionConflictError();
+    if (current.revision !== parsed.expectedRevision || current.analysis_run_id !== null) {
+      throw new RevisionConflictError();
+    }
     const config = parsed.config ?? assignmentConfigSchema.parse(JSON.parse(current.config));
     const report = parsed.config
       ? null
@@ -61,6 +63,7 @@ export class D1ReviewWriter {
         teacher_reviewed_at = CASE WHEN ? THEN NULL ELSE teacher_reviewed_at END,
         pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
+        AND analysis_run_id IS NULL
     `).bind(parsed.studentName ?? current.student_name, JSON.stringify(config), report === null ? null : JSON.stringify(report), status, now, parsed.config !== undefined ? 1 : 0, parsed.config !== undefined ? 1 : 0, reviewId, ownerId, parsed.expectedRevision).run();
     if (updated.meta.changes === 0) throw new RevisionConflictError();
     if (annotations !== undefined) {

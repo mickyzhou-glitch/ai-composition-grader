@@ -70,6 +70,7 @@ describe("D1ReviewWriter", () => {
         bind: vi.fn(() => ({
           first: vi.fn().mockResolvedValue(query.startsWith("SELECT student_name") ? {
             student_name: "小明", config: JSON.stringify(config), report: null, status: "draft", revision: 4,
+            analysis_run_id: null,
           } : null),
           run,
         })),
@@ -85,6 +86,69 @@ describe("D1ReviewWriter", () => {
     expect(update).not.toContain("ocr_checkpoint");
   });
 
+  it("atomically rejects teacher edits while the review is being analyzed", async () => {
+    const run = vi.fn();
+    const batch = vi.fn();
+    const database = {
+      prepare: vi.fn((query: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(query.startsWith("SELECT student_name") ? {
+            student_name: "小明",
+            config: JSON.stringify(config),
+            report: JSON.stringify(report),
+            status: "analyzing",
+            revision: 4,
+            analysis_run_id: "job-running",
+          } : null),
+          run,
+        })),
+      })),
+      batch,
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).update("teacher-1", "review-1", {
+      expectedRevision: 4,
+      studentName: "小红",
+      report,
+      annotations: [],
+    })).rejects.toMatchObject({ name: "RevisionConflictError" });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
+  it("guards the teacher update itself against a concurrently started analysis", async () => {
+    const statements: Array<{ sql: string }> = [];
+    const run = vi.fn().mockResolvedValue({ meta: { changes: 0 } });
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const statement = {
+          sql,
+          bind() { return statement; },
+          first: vi.fn().mockResolvedValue(sql.startsWith("SELECT student_name") ? {
+            student_name: "小明",
+            config: JSON.stringify(config),
+            report: null,
+            status: "draft",
+            revision: 4,
+            analysis_run_id: null,
+          } : null),
+          run,
+        };
+        statements.push(statement);
+        return statement;
+      }),
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).update("teacher-1", "review-1", {
+      expectedRevision: 4,
+      studentName: "小红",
+    })).rejects.toMatchObject({ name: "RevisionConflictError" });
+
+    const update = statements.find(({ sql }) => sql.includes("UPDATE reviews SET"));
+    expect(update?.sql).toContain("analysis_run_id IS NULL");
+  });
+
   it("allows teacher draft edits that no longer satisfy AI generation constraints", async () => {
     const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
     const database = {
@@ -92,6 +156,7 @@ describe("D1ReviewWriter", () => {
         bind: vi.fn(() => ({
           first: vi.fn().mockResolvedValue(query.startsWith("SELECT student_name") ? {
             student_name: "小明", config: JSON.stringify(config), report: null, status: "draft", revision: 4,
+            analysis_run_id: null,
           } : null),
           run,
         })),

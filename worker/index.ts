@@ -561,10 +561,16 @@ export default {
         if (result.newlyQueued) await env.ANALYSIS_QUEUE.send({ jobId: (result.job as { id: string }).id });
         return Response.json({ ok: true, data: result.job }, { status: 202, headers: { "cache-control": "no-store" } });
       } catch (error) {
-        const code = error instanceof Error ? error.message : "VALIDATION_ERROR";
+        const errorCode = typeof error === "object" && error !== null && "code" in error
+          ? String(error.code)
+          : null;
+        const messageCode = error instanceof Error ? error.message : null;
+        const code = errorCode ?? messageCode;
         if (code === "IMAGES_REQUIRED") return apiError(code, "请先上传 1 至 4 张作文图片", 422);
         if (code === "OCR_NOT_FOUND") return apiError(code, "识别原文不存在或已失效", 409);
-        return apiError(code, "请求参数无效", 400);
+        if (code === "OCR_V2_REQUIRED") return apiError(code, "当前识别原文需要重新识别", 409);
+        if (code === "ANALYSIS_CONFLICT") return apiError(code, "作文状态已更新，请重试", 409);
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400);
       }
     }
     const analyzeStatusMatch = /^\/api\/reviews\/([^/]+)\/analyze\/status$/u.exec(url.pathname);

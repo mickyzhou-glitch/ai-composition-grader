@@ -17,6 +17,16 @@ interface JobRow {
   finished_at: number | null;
 }
 
+export class D1AnalysisEnqueueConflictError extends Error {
+  readonly code = "ANALYSIS_CONFLICT";
+  readonly status = 409;
+
+  constructor() {
+    super("ANALYSIS_CONFLICT");
+    this.name = "D1AnalysisEnqueueConflictError";
+  }
+}
+
 function view(row: JobRow) {
   if (!statuses.has(row.status) || !stages.has(row.progress_stage)) throw new TypeError("Invalid analysis job");
   const failedMessage = row.error_code === "AI_SETTINGS_INCOMPLETE"
@@ -52,6 +62,7 @@ export class D1AnalysisJobs {
     const mode = options.mode;
     const review = await this.database.prepare(`
       SELECT reviews.id, reviews.revision, reviews.image_revision, reviews.ocr_checkpoint,
+        reviews.status, reviews.teacher_reviewed_at,
         COUNT(review_images.id) AS image_count
       FROM reviews LEFT JOIN review_images ON review_images.review_id = reviews.id
       WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.deleting_at IS NULL GROUP BY reviews.id
@@ -60,9 +71,13 @@ export class D1AnalysisJobs {
       revision: number;
       image_revision: number;
       ocr_checkpoint: string | null;
+      status: string;
+      teacher_reviewed_at: number | null;
       image_count: number;
     }>();
     if (!review) return { job: null, newlyQueued: false };
+    const existing = await this.active(ownerId, reviewId);
+    if (existing) return { job: existing, newlyQueued: false };
     if (review.image_count < 1 || review.image_count > 4) throw new Error("IMAGES_REQUIRED");
     if (mode === "content_only") {
       const parsed = parseOcr(review.ocr_checkpoint);
@@ -74,19 +89,81 @@ export class D1AnalysisJobs {
       const checkpoint = parsed;
       analysisModeForCheckpoint(mode, checkpoint);
     }
-    const existing = await this.latest(ownerId, reviewId);
-    if (existing && (existing as { status: string }).status === "queued") return { job: existing, newlyQueued: false };
     const id = crypto.randomUUID();
     const now = Date.now();
-    await this.database.batch([
-      this.database.prepare(`
-        INSERT INTO analysis_jobs (id, review_id, owner_id, mode, status, attempt, available_at, lease_expires_at, progress_stage, error_code, message, teacher_guidance, created_at, started_at, finished_at)
-        VALUES (?, ?, ?, ?, 'queued', 0, ?, NULL, 'queued', NULL, NULL, ?, ?, NULL, NULL)
-      `).bind(id, reviewId, ownerId, mode, now, guidance, now),
-      this.database.prepare(`UPDATE reviews SET status = 'analyzing', analysis_run_id = ?, teacher_reviewed_at = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND revision = ?`).bind(id, now, reviewId, ownerId, review.revision),
-    ]);
+    let outcomes: D1Result<unknown>[];
+    try {
+      outcomes = await this.database.batch([
+        this.database.prepare(`
+          UPDATE reviews SET status = 'analyzing', analysis_run_id = ?,
+            teacher_reviewed_at = NULL, updated_at = ?
+          WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
+            AND analysis_run_id IS NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM analysis_jobs
+              WHERE review_id = ? AND status IN ('queued', 'running')
+            )
+        `).bind(id, now, reviewId, ownerId, review.revision, reviewId),
+        this.database.prepare(`
+          INSERT INTO analysis_jobs (
+            id, review_id, owner_id, mode, status, attempt, available_at,
+            lease_expires_at, progress_stage, error_code, message,
+            teacher_guidance, created_at, started_at, finished_at
+          )
+          SELECT ?, ?, ?, ?, 'queued', 0, ?, NULL, 'queued', NULL, NULL, ?, ?, NULL, NULL
+          WHERE EXISTS (
+            SELECT 1 FROM reviews
+            WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+              AND revision = ? AND analysis_run_id = ? AND status = 'analyzing'
+          )
+        `).bind(
+          id, reviewId, ownerId, mode, now, guidance, now,
+          reviewId, ownerId, review.revision, id,
+        ),
+      ]);
+    } catch (error) {
+      const raced = await this.active(ownerId, reviewId);
+      if (raced) return { job: raced, newlyQueued: false };
+      throw error;
+    }
+    if (
+      (outcomes[0]?.meta.changes ?? 0) !== 1
+      || (outcomes[1]?.meta.changes ?? 0) !== 1
+    ) {
+      if (
+        (outcomes[0]?.meta.changes ?? 0) === 1
+        && (outcomes[1]?.meta.changes ?? 0) !== 1
+      ) {
+        await this.database.prepare(`
+          UPDATE reviews SET status = ?, analysis_run_id = NULL,
+            teacher_reviewed_at = ?, updated_at = ?
+          WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND revision = ?
+        `).bind(
+          review.status,
+          review.teacher_reviewed_at,
+          Date.now(),
+          reviewId,
+          ownerId,
+          id,
+          review.revision,
+        ).run();
+      }
+      const raced = await this.active(ownerId, reviewId);
+      if (raced) return { job: raced, newlyQueued: false };
+      throw new D1AnalysisEnqueueConflictError();
+    }
     const job = await this.byId(ownerId, id);
     return { job, newlyQueued: true };
+  }
+
+  private async active(ownerId: string, reviewId: string): Promise<unknown | null> {
+    const row = await this.database.prepare(`
+      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, finished_at
+      FROM analysis_jobs
+      WHERE owner_id = ? AND review_id = ? AND status IN ('queued', 'running')
+      ORDER BY created_at DESC, id DESC LIMIT 1
+    `).bind(ownerId, reviewId).first<JobRow>();
+    return row ? view(row) : null;
   }
 
   async latest(ownerId: string, reviewId: string): Promise<unknown | null> {

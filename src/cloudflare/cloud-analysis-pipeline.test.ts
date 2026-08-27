@@ -202,6 +202,24 @@ describe("CloudAnalysisPipeline", () => {
     expect(deps.saveResult).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["schema", { ...report, themeReason: "" }],
+    ["paragraph coverage", { ...report, paragraphReviews: [] }],
+  ])("持久化前拒绝无效的 %s report", async (_case, invalidReport) => {
+    const deps = dependencies({
+      analyzeText: vi.fn(async () => ({
+        report: invalidReport,
+        annotationAnchors: [],
+      })) as never,
+    });
+
+    await expect(new CloudAnalysisPipeline(deps).run(job)).rejects.toThrow();
+
+    expect(deps.updateStage).toHaveBeenCalledWith(job.id, "validating_result");
+    expect(deps.updateStage).not.toHaveBeenCalledWith(job.id, "saving_result");
+    expect(deps.saveResult).not.toHaveBeenCalled();
+  });
+
   it("OCR 包含不可读页面时不调用内容模型并保存重拍状态", async () => {
     const unreadable = {
       ...recognizedCheckpoint,

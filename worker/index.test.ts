@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import worker, { savePipelineResult, saveUnreadableResult } from "./index";
+import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { D1Reanalysis, D1ReanalysisBatchError } from "../src/cloudflare/d1-reanalysis";
 
 function workerEnv(assetResponse: () => Response, database?: unknown) {
@@ -71,6 +72,113 @@ const teacherReviewedReport = {
 };
 
 describe("Cloudflare Worker", () => {
+  it("analyze 路由把 OCR_V2_REQUIRED 显式映射为 409", async () => {
+    const enqueue = vi.spyOn(D1AnalysisJobs.prototype, "enqueue").mockRejectedValue(
+      Object.assign(new Error("OCR_V2_REQUIRED"), {
+        code: "OCR_V2_REQUIRED",
+        status: 409,
+      }),
+    );
+    const response = await worker.fetch(new Request(
+      "https://grader.workers.dev/api/reviews/review-1/analyze",
+      {
+        method: "POST",
+        headers: {
+          cookie: "__Host-zuowen_session=session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ mode: "content_only" }),
+      },
+    ), Object.assign(
+      workerEnv(() => new Response("asset"), authenticatedDatabase()),
+      { ANALYSIS_QUEUE: queue() },
+    ) as never);
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toEqual({
+      ok: false,
+      error: { code: "OCR_V2_REQUIRED", message: "当前识别原文需要重新识别" },
+    });
+    enqueue.mockRestore();
+  });
+
+  it("analyze 路由把未知异常收敛为固定 VALIDATION_ERROR", async () => {
+    const enqueue = vi.spyOn(D1AnalysisJobs.prototype, "enqueue")
+      .mockRejectedValue(new Error("SECRET_INTERNAL_DATABASE_MESSAGE"));
+    const response = await worker.fetch(new Request(
+      "https://grader.workers.dev/api/reviews/review-1/analyze",
+      {
+        method: "POST",
+        headers: {
+          cookie: "__Host-zuowen_session=session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({}),
+      },
+    ), Object.assign(
+      workerEnv(() => new Response("asset"), authenticatedDatabase()),
+      { ANALYSIS_QUEUE: queue() },
+    ) as never);
+    const body = await response.text();
+
+    expect(response.status).toBe(400);
+    expect(body).toContain("VALIDATION_ERROR");
+    expect(body).not.toContain("SECRET_INTERNAL_DATABASE_MESSAGE");
+    enqueue.mockRestore();
+  });
+
+  it("作文分析中的教师 PATCH 返回 409 且不覆盖 Worker 所有权", async () => {
+    const run = vi.fn();
+    const batch = vi.fn();
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(
+            sql.includes("FROM sessions INNER JOIN users")
+              ? {
+                  id: "teacher-1",
+                  username: "teacher",
+                  role: "teacher",
+                  must_change_password: 0,
+                  expires_at: Date.now() + 60_000,
+                }
+              : sql.startsWith("SELECT student_name")
+                ? {
+                    student_name: "小明",
+                    config: JSON.stringify(reviewConfig),
+                    report: null,
+                    status: "analyzing",
+                    revision: 4,
+                    analysis_run_id: "job-running",
+                  }
+                : null,
+          ),
+          run,
+        })),
+      })),
+      batch,
+    };
+
+    const response = await worker.fetch(new Request(
+      "https://grader.workers.dev/api/reviews/review-1",
+      {
+        method: "PATCH",
+        headers: {
+          cookie: "__Host-zuowen_session=session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ expectedRevision: 4, studentName: "小红" }),
+      },
+    ), workerEnv(() => new Response("asset"), database));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "REVISION_CONFLICT" },
+    });
+    expect(run).not.toHaveBeenCalled();
+    expect(batch).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["GET", "/api/settings"],
     ["PUT", "/api/settings/content"],
@@ -401,9 +509,14 @@ describe("Cloudflare Worker", () => {
     expect(prepared[0].bindings).toEqual(expect.arrayContaining(["job-1", 4, 2]));
   });
 
-  it("报告版本条件未命中时拒绝把旧任务结果落库", async () => {
+  it("并发失去 analysis ownership 时拒绝把旧任务结果落库", async () => {
+    const prepared: Array<{ sql: string }> = [];
     const database = {
-      prepare: vi.fn((sql: string) => ({ sql, bind() { return this; } })),
+      prepare: vi.fn((sql: string) => {
+        const statement = { sql, bind() { return statement; } };
+        prepared.push(statement);
+        return statement;
+      }),
       batch: vi.fn(async (statements: unknown[]) =>
         (statements as unknown[]).map(() => ({ meta: { changes: 0 } }))),
     } as unknown as D1Database;
@@ -413,6 +526,9 @@ describe("Cloudflare Worker", () => {
       imageRevision: 4, config: {} as never,
     }, { report: {}, annotations: [], ocrRevision: 2 }))
       .rejects.toMatchObject({ code: "ANALYSIS_CONFLICT" });
+    expect(prepared[0]?.sql).toContain("analysis_run_id = ?");
+    expect(prepared[0]?.sql).toContain("image_revision = ?");
+    expect(prepared[0]?.sql).toContain("ocrRevision");
   });
 
   it("不可读结果先保存重拍状态，最后才结束任务", async () => {
@@ -433,6 +549,7 @@ describe("Cloudflare Worker", () => {
     }, 2);
 
     expect(prepared[0].sql).toContain("status = 'needs_better_images'");
+    expect(prepared[0].sql).toContain("analysis_run_id = ?");
     expect(prepared[1].sql).toContain("status = 'succeeded'");
   });
 
