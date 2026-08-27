@@ -14,12 +14,13 @@ import {
 import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../../components/AppHeader";
 import { ErrorBanner } from "../../../components/ErrorBanner";
+import { ExportMenu } from "../../../components/ExportMenu";
 import { RevisionRequestDialog } from "../../../components/RevisionRequestDialog";
 import { ReportEditor } from "../../../components/ReportEditor";
 import { ReviewExportList } from "../../../components/ReviewExportList";
 import { apiFetch, errorMessage } from "../../../lib/api";
-import { downloadReviewPdfArchive } from "../../../lib/pdf-download";
-import { filterReviewsByStudentName, isReviewedPendingExport, reviewPrefetchWindow } from "../../../lib/review-queue";
+import { downloadReviewArchive, type ExportFormat } from "../../../lib/review-export";
+import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, reviewPrefetchWindow } from "../../../lib/review-queue";
 import type { PublicAnalysisJobView, RevisionRequestResult, ReviewView } from "../../../lib/types";
 
 export interface ReviewQueueItemView {
@@ -69,6 +70,14 @@ export function BatchReviewPage() {
   const revisionButtonRef = useRef<HTMLButtonElement>(null);
 
   const visibleQueue = useMemo(() => filterReviewsByStudentName(queue, search), [queue, search]);
+  const exportableReviewed = useMemo(
+    () => reviewed.filter((item) => exportEligibility(item).eligible),
+    [reviewed],
+  );
+  const selectedExportable = useMemo(
+    () => exportableReviewed.filter(({ id }) => selectedExportIds.has(id)),
+    [exportableReviewed, selectedExportIds],
+  );
   const sampleParagraphCountMismatch = Boolean(
     review?.report &&
     isLegacyEvaluationReport(review.report) &&
@@ -285,12 +294,12 @@ export function BatchReviewPage() {
     }
   }
 
-  async function exportReviewIds(ids: string[]) {
+  async function exportReviewIds(ids: string[], format: ExportFormat) {
     if (ids.length === 0) return;
     setExporting(true);
     setError("");
     try {
-      await downloadReviewPdfArchive(ids);
+      await downloadReviewArchive(ids, format);
       const latest = await apiFetch<ReviewView[]>("/api/reviews");
       setReviewed(latest.filter(isReviewedPendingExport));
       setSelectedExportIds(new Set());
@@ -301,12 +310,12 @@ export function BatchReviewPage() {
     }
   }
 
-  async function exportSelected() {
-    await exportReviewIds(reviewed.filter(({ id }) => selectedExportIds.has(id)).map(({ id }) => id));
+  async function exportSelected(format: ExportFormat) {
+    await exportReviewIds(selectedExportable.map(({ id }) => id), format);
   }
 
-  async function exportAllReviewed() {
-    await exportReviewIds(reviewed.map(({ id }) => id));
+  async function exportAllReviewed(format: ExportFormat) {
+    await exportReviewIds(exportableReviewed.map(({ id }) => id), format);
   }
 
   return <div className="app-shell batch-review-shell">
@@ -323,7 +332,7 @@ export function BatchReviewPage() {
       {error ? <ErrorBanner message={error} /> : null}
       {revisionNotice ? <div className="revision-job-notice" role="status">{revisionNotice}</div> : null}
       {view === "export" ? <section className="batch-export-view">
-        <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><div className="batch-export-action-buttons"><button type="button" className="button button--quiet" disabled={selectedExportIds.size === 0 || exporting} onClick={() => void exportSelected()}>{exporting ? "正在导出…" : "导出所选作文"}</button><button type="button" className="button button--primary" disabled={reviewed.length === 0 || exporting} onClick={() => void exportAllReviewed()}>{exporting ? "正在导出…" : `一键导出已复核（${reviewed.length}）`}</button></div></div>
+        <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><div className="batch-export-action-buttons"><div className="batch-export-command"><span>导出所选作文</span><ExportMenu ariaLabel="导出所选作文" disabled={selectedExportable.length === 0 || exporting} disabledReason={selectedExportIds.size > 0 && selectedExportable.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={exporting} onExport={exportSelected} /></div><div className="batch-export-command"><span>一键导出已复核（{exportableReviewed.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={exportableReviewed.length === 0 || exporting} busy={exporting} onExport={exportAllReviewed} /></div></div></div>
         <ReviewExportList reviews={reviewed} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setReview(target); setActiveId(id); setView("review"); } }} />
       </section> : <div className="batch-review-layout">
         <aside className="batch-queue" aria-label="待审核作文队列">

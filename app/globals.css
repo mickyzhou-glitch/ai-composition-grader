@@ -94,6 +94,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .button--quiet { border-color: var(--line); background: var(--ivory); color: var(--ink); }
 .button--danger-quiet { background: transparent; color: var(--danger); }
 .text-button { padding: 2px 4px; border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
+.export-menu { position: relative; display: inline-flex; max-width: 100%; flex-direction: column; align-items: stretch; }
+.export-menu-popover { position: absolute; top: calc(100% + 6px); right: 0; z-index: 30; display: grid; width: max-content; min-width: 168px; max-width: min(220px, calc(100vw - 24px)); padding: 5px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); box-shadow: 0 12px 30px rgb(22 27 25 / 16%); }
+.export-menu-popover button { min-height: 40px; padding: 8px 10px; border: 0; border-radius: 4px; background: transparent; color: var(--ink); cursor: pointer; font: inherit; font-weight: 700; text-align: left; }
+.export-menu-popover button:hover, .export-menu-popover button:focus-visible { background: var(--paper); color: var(--teal); outline: 2px solid transparent; }
+.export-menu-reason { display: block; max-width: 280px; margin-top: 5px; color: var(--danger); font-size: .76rem; font-weight: 700; line-height: 1.45; overflow-wrap: anywhere; }
 
 .page-container { width: min(1120px, calc(100% - 48px)); margin: 0 auto; padding: 56px 0 80px; }
 .narrow-page { width: min(700px, calc(100% - 48px)); margin: 0 auto; padding: 52px 0 80px; }
@@ -177,6 +182,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-export-view { width: min(1100px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 48px; }
 .batch-export-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
 .batch-export-action-buttons { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; }
+.batch-export-command, .history-export-command { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: .82rem; font-weight: 700; }
+.batch-export-command { justify-content: flex-end; }
 .review-export-list { display: grid; gap: 12px; }
 .review-export-item { padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); }
 .review-export-heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
@@ -504,7 +511,9 @@ textarea { min-height: 100px; resize: vertical; }
   .review-export-comments { grid-template-columns: 1fr; }
   .batch-export-actions { align-items: flex-start; flex-direction: column; }
   .batch-export-action-buttons { width: 100%; justify-content: stretch; }
-  .batch-export-action-buttons .button { flex: 1 1 220px; }
+  .batch-export-command { flex: 1 1 260px; justify-content: space-between; }
+  .batch-export-command .export-menu { flex: 0 1 180px; }
+  .batch-export-command .button { width: 100%; }
   .app-header { width: calc(100% - 32px); padding: 13px 0; align-items: flex-start; }
   .wordmark { font-size: .9rem; }
   .seal { width: 32px; height: 32px; }
@@ -585,10 +594,14 @@ textarea { min-height: 100px; resize: vertical; }
   .history-search, .history-tools .button { width: 100%; }
   .history-batch-actions { align-items: stretch; flex-direction: column; }
   .history-batch-actions .button { width: 100%; }
+  .history-export-command { width: 100%; justify-content: space-between; }
+  .history-export-command .export-menu { flex: 0 1 180px; }
   .history-card { padding: 18px; gap: 14px; }
   .history-meta { align-items: flex-start; flex-wrap: wrap; gap: 6px 9px; }
   .card-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .card-actions .button { width: 100%; }
+  .card-actions .export-menu, .review-actions .export-menu { width: 100%; }
+  .card-actions .export-menu-reason { max-width: none; }
   .card-actions .button--danger-quiet { grid-column: 1 / -1; }
   .paper-card, .flow-card { padding: 20px; }
   .auth-page { padding: 18px 12px; align-items: start; }
@@ -651,6 +664,9 @@ textarea { min-height: 100px; resize: vertical; }
   .seal { width: 29px; height: 29px; }
   .card-actions, .review-actions { grid-template-columns: 1fr; }
   .review-actions .analysis-guidance { grid-column: auto; }
+  .export-menu-popover { right: 0; left: 0; width: 100%; min-width: 0; max-width: 100%; }
+  .batch-export-command, .history-export-command { align-items: stretch; flex-direction: column; }
+  .batch-export-command .export-menu, .history-export-command .export-menu { flex-basis: auto; width: 100%; }
   .image-sort-card { padding: 11px; }
   .compact-actions { display: grid; grid-template-columns: 1fr 1fr; }
   .compact-actions button { width: 100%; }

@@ -15,9 +15,11 @@ import {
   type ParagraphEvaluationReport,
   type ParagraphReview,
 } from "@/src/domain/contracts";
+import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { ExportMenu } from "../../components/ExportMenu";
 import { ParentFeedbackEditor } from "../../components/ParentFeedbackEditor";
 import { OcrTextEditor } from "../../components/OcrTextEditor";
 import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
@@ -25,7 +27,11 @@ import { ReportEditor, type FeedbackSection } from "../../components/ReportEdito
 import { StatusBadge } from "../../components/StatusBadge";
 import { ApiError, apiFetch, errorMessage } from "../../lib/api";
 import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
-import { downloadReviewPdf } from "../../lib/pdf-download";
+import {
+  downloadLegacyCachedPdf,
+  downloadReview,
+  type ExportFormat,
+} from "../../lib/review-export";
 import { reviewDisplayStatus } from "../../lib/review-queue";
 import type { ReviewView } from "../../lib/types";
 
@@ -344,6 +350,14 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     && review?.ocr?.version === 2
     && !review.reportStale;
   const editableReport = editableLegacyReport || editableParagraphReport;
+  const exportReadiness = useMemo(() => {
+    if (!review || !report || isLegacyEvaluationReport(report)) return null;
+    return deliveryReadiness({
+      ...review,
+      report,
+      teacherReviewedAt: review.teacherReviewedAt ?? "pending-teacher-review",
+    });
+  }, [report, review]);
 
   function changeAnnotations(next: Annotation[]) {
     if (report && !isLegacyEvaluationReport(report)) return;
@@ -617,7 +631,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
   }
 
-  async function exportPdf() {
+  async function exportReview(format: ExportFormat) {
     if (!review || !report || busy) return;
     const validationMessage = reportValidationMessage(report);
     if (validationMessage) {
@@ -646,13 +660,28 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         applyReview(reviewed);
         setDirty(false);
       }
-      await downloadReviewPdf(review.id);
+      await downloadReview(review.id, format);
       await loadReview(false);
-      setNotice("PDF 已导出并开始下载。");
+      setNotice(`${format === "pdf" ? "PDF" : "Word"} 已导出并开始下载。`);
     } catch (caught) {
       setError(caught instanceof ApiError && caught.status === 409
         ? "内容发生冲突，请刷新后重新检查。"
         : saveErrorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function downloadLegacyPdf() {
+    if (!review || busy) return;
+    setBusy("export");
+    setError("");
+    setNotice("");
+    try {
+      const filename = await downloadLegacyCachedPdf(review);
+      setNotice(`${filename} 已开始下载。`);
+    } catch (caught) {
+      setError(errorMessage(caught));
     } finally {
       setBusy(null);
     }
@@ -706,18 +735,25 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           </div>
           <div className="review-actions">
             <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive || Boolean(report && !editableLegacyReport)} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
-            <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>重新分析</AsyncButton>
+            <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>{editableLegacyReport ? "完整重新分析" : "重新分析"}</AsyncButton>
             {editableParagraphReport ? <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成整篇批改</AsyncButton> : null}
             {review.status !== "needs_better_images" ? replacementControl() : null}
-            {report ? (
+            {report && isLegacyEvaluationReport(report) && review.hasPdf && review.pdfFilename?.trim() ? (
               <AsyncButton
                 className="button button--quiet"
                 busy={busy === "export"}
-                busyLabel="正在生成 PDF…"
-                disabled={busy !== null || analysisActive || Boolean(report && !editableLegacyReport)}
-                onClick={() => void exportPdf()}
-              >{review.hasPdf ? "下载 PDF" : "导出 PDF"}</AsyncButton>
+                busyLabel="正在下载…"
+                disabled={busy !== null || analysisActive}
+                onClick={() => void downloadLegacyPdf()}
+              >下载已生成的旧版 PDF</AsyncButton>
             ) : null}
+            {report && !isLegacyEvaluationReport(report) ? <ExportMenu
+              busy={busy === "export"}
+              busyLabel="正在生成…"
+              disabled={busy !== null || analysisActive || exportReadiness?.ready === false}
+              disabledReason={exportReadiness?.ready === false ? exportReadiness.message : undefined}
+              onExport={exportReview}
+            /> : null}
             {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!editableReport || !dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
           </div>
         </header>

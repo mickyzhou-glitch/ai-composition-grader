@@ -6,12 +6,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppHeader } from "../components/AppHeader";
 import { BatchReanalysisDialog } from "../components/BatchReanalysisDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
+import { ExportMenu } from "../components/ExportMenu";
 import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
-import { downloadReviewPdf, downloadReviewPdfArchive } from "../lib/pdf-download";
-import { filterReviewsByStudentName, isReviewedPendingExport, reviewDisplayStatus } from "../lib/review-queue";
+import { downloadLegacyCachedPdf, downloadReview, downloadReviewArchive, type ExportFormat } from "../lib/review-export";
+import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, reviewDisplayStatus } from "../lib/review-queue";
 import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, ReviewView } from "../lib/types";
-import { gradeFromLegacyTotal } from "@/src/domain/contracts";
+import { gradeFromLegacyTotal, isLegacyEvaluationReport } from "@/src/domain/contracts";
 import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
 
 function reviewDate(value: string) {
@@ -58,18 +59,22 @@ export default function Home() {
     return () => { active = false; };
   }, []);
 
-  const reviewedPendingExport = useMemo(
+  const reviewedPending = useMemo(
     () => reviews.filter(isReviewedPendingExport),
     [reviews],
+  );
+  const reviewedPendingExport = useMemo(
+    () => reviewedPending.filter((item) => exportEligibility(item).eligible),
+    [reviewedPending],
   );
   const stats = useMemo(() => ({
     draft: reviews.filter(({ status }) => status === "draft").length,
     review: reviews.filter(({ status, teacherReviewedAt }) =>
       !teacherReviewedAt && ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(status),
     ).length,
-    reviewed: reviewedPendingExport.length,
+    reviewed: reviewedPending.length,
     exported: reviews.filter(({ status }) => status === "exported").length,
-  }), [reviews, reviewedPendingExport.length]);
+  }), [reviews, reviewedPending.length]);
   const visibleReviews = useMemo(
     () => filterReviewsByStudentName(reviews, studentSearch),
     [reviews, studentSearch],
@@ -77,6 +82,9 @@ export default function Home() {
   const selectedVisibleCount = visibleReviews.filter(({ id }) => selectedReviewIds.has(id)).length;
   const hiddenSelectedCount = selectedReviewIds.size - selectedVisibleCount;
   const allVisibleSelected = visibleReviews.length > 0 && selectedVisibleCount === visibleReviews.length;
+  const selectedExportableReviews = reviews.filter(({ id }) => selectedReviewIds.has(id)).filter(
+    (item) => exportEligibility(item).eligible,
+  );
   const reanalysisBusy = reanalysisLoading || reanalysisSubmitting;
 
   async function remove(review: ReviewView) {
@@ -98,13 +106,26 @@ export default function Home() {
     }
   }
 
-  async function exportPdf(review: ReviewView) {
+  async function exportReview(review: ReviewView, format: ExportFormat) {
     if (exporting || batchExporting) return;
     setExporting(review.id);
     setError("");
     try {
-      await downloadReviewPdf(review.id);
+      await downloadReview(review.id, format);
       await load();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setExporting(null);
+    }
+  }
+
+  async function downloadLegacyPdf(review: ReviewView) {
+    if (exporting || batchExporting) return;
+    setExporting(review.id);
+    setError("");
+    try {
+      await downloadLegacyCachedPdf(review);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -133,14 +154,12 @@ export default function Home() {
     });
   }
 
-  async function exportSelectedPdfs() {
-    if (selectedReviewIds.size === 0 || batchExporting || exporting) return;
+  async function exportSelected(format: ExportFormat) {
+    if (selectedExportableReviews.length === 0 || batchExporting || exporting) return;
     setBatchExporting(true);
     setError("");
     try {
-      await downloadReviewPdfArchive(reviews
-        .filter(({ id }) => selectedReviewIds.has(id))
-        .map(({ id }) => id));
+      await downloadReviewArchive(selectedExportableReviews.map(({ id }) => id), format);
       await load();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -149,12 +168,12 @@ export default function Home() {
     }
   }
 
-  async function exportReviewedPdfs() {
+  async function exportReviewed(format: ExportFormat) {
     if (reviewedPendingExport.length === 0 || batchExporting || exporting || reanalysisBusy) return;
     setBatchExporting(true);
     setError("");
     try {
-      await downloadReviewPdfArchive(reviewedPendingExport.map(({ id }) => id));
+      await downloadReviewArchive(reviewedPendingExport.map(({ id }) => id), format);
       await load();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -251,16 +270,8 @@ export default function Home() {
               <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0 || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
               <span className="muted">已选择 {selectedReviewIds.size} 篇</span>
               {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
-              <button className="button button--primary" type="button" disabled={reviewedPendingExport.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void exportReviewedPdfs()}>
-                {batchExporting ? "正在打包导出…" : `一键导出已复核（${reviewedPendingExport.length}）`}
-              </button>
-              <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void exportSelectedPdfs()}>
-                {batchExporting
-                  ? "正在打包导出…"
-                  : selectedReviewIds.size > 1
-                    ? `导出所选 ${selectedReviewIds.size} 篇（ZIP）`
-                    : "导出所选 PDF"}
-              </button>
+              <div className="history-export-command"><span>一键导出已复核（{reviewedPendingExport.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={reviewedPendingExport.length === 0 || batchExporting || exporting !== null || reanalysisBusy} busy={batchExporting} busyLabel="正在打包…" onExport={exportReviewed} /></div>
+              <div className="history-export-command"><span>导出所选（{selectedExportableReviews.length}）</span><ExportMenu ariaLabel="导出所选记录" disabled={selectedExportableReviews.length === 0 || batchExporting || exporting !== null || reanalysisBusy} disabledReason={selectedReviewIds.size > 0 && selectedExportableReviews.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={batchExporting} busyLabel="正在打包…" onExport={exportSelected} /></div>
               <button className="button button--primary" type="button" disabled={selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
                 {reanalysisLoading ? "正在预览…" : "按最新框架重新分析"}
               </button>
@@ -294,15 +305,8 @@ export default function Home() {
                 </div>
                 <div className="card-actions">
                   <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>进入复核</Link>
-                  <button
-                    className="button button--quiet"
-                    type="button"
-                    aria-busy={exporting === review.id}
-                    disabled={exporting !== null || batchExporting}
-                    onClick={() => void exportPdf(review)}
-                  >
-                    {exporting === review.id ? "正在生成 PDF…" : "下载 PDF"}
-                  </button>
+                  {review.report && isLegacyEvaluationReport(review.report) ? review.hasPdf && review.pdfFilename?.trim() ? <button className="button button--quiet" type="button" disabled={exporting !== null || batchExporting} onClick={() => void downloadLegacyPdf(review)}>{exporting === review.id ? "正在下载…" : "下载已生成的旧版 PDF"}</button> : <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>完整重新分析</Link> : (() => { const eligibility = exportEligibility(review); return <ExportMenu ariaLabel={`导出《${review.config.title}》`} disabled={!eligibility.eligible || exporting !== null || batchExporting} disabledReason={!eligibility.eligible ? eligibility.reason : undefined} busy={exporting === review.id} onExport={(format) => exportReview(review, format)} />; })()}
+                  {review.report && isLegacyEvaluationReport(review.report) ? <span className="export-menu-reason">旧版示范段落报告需要完整重新分析后才能导出新格式</span> : null}
                   <button className="button button--danger-quiet" type="button" disabled={deleting === review.id || batchExporting || reanalysisBusy} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
                     {deleting === review.id ? "删除中…" : "删除"}
                   </button>

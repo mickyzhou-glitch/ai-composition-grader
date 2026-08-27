@@ -2,12 +2,12 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const pdfDownloads = vi.hoisted(() => ({
+const reviewExports = vi.hoisted(() => ({
   batch: vi.fn().mockResolvedValue("作文批改批量导出.zip"),
 }));
 
-vi.mock("../../../lib/pdf-download", () => ({
-  downloadReviewPdfArchive: pdfDownloads.batch,
+vi.mock("../../../lib/review-export", () => ({
+  downloadReviewArchive: reviewExports.batch,
 }));
 
 vi.mock("../../../components/ParagraphCropPreview", () => ({
@@ -459,8 +459,8 @@ describe("BatchReviewPage", () => {
 
   it("重新进入页面时从历史接口恢复已复核待导出清单", async () => {
     const queue = [queueItem("review-2", "李安然", 2)];
-    const reviewed = { ...detail("review-1", "张小明", 1), teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
-    const pending = detail("review-2", "李安然", 2);
+    const reviewed = { ...detail("review-1", "张小明", 1, paragraphReport), teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+    const pending = detail("review-2", "李安然", 2, paragraphReport);
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
@@ -479,8 +479,8 @@ describe("BatchReviewPage", () => {
 
   it("一键导出已复核成功后重新读取历史并移除已导出记录", async () => {
     const queue = [queueItem("review-2", "李安然", 2)];
-    const reviewed = { ...detail("review-1", "张小明", 1), teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
-    const pending = detail("review-2", "李安然", 2);
+    const reviewed = { ...detail("review-1", "张小明", 1, paragraphReport), teacherReviewedAt: "2026-08-22T06:00:00.000Z" };
+    const pending = detail("review-2", "李安然", 2, paragraphReport);
     let exported = false;
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
@@ -489,7 +489,7 @@ describe("BatchReviewPage", () => {
       if (url === "/api/reviews/review-2") return Response.json({ ok: true, data: pending });
       throw new Error(`Unexpected request: ${url}`);
     });
-    pdfDownloads.batch.mockImplementationOnce(async () => {
+    reviewExports.batch.mockImplementationOnce(async () => {
       exported = true;
       return "作文批改批量导出.zip";
     });
@@ -497,11 +497,39 @@ describe("BatchReviewPage", () => {
     render(<BatchReviewPage />);
 
     await user.click(await screen.findByRole("button", { name: "已复核待导出清单 (1)" }));
-    await user.click(screen.getByRole("button", { name: "一键导出已复核（1）" }));
+    await user.click(screen.getByRole("button", { name: "导出全部已复核" }));
+    await user.click(screen.getByRole("menuitem", { name: "Word (.docx)" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "已复核待导出清单 (0)" })).toBeVisible());
     expect(screen.getByText("还没有已复核待导出作文")).toBeVisible();
-    expect(pdfDownloads.batch).toHaveBeenCalledWith(["review-1"]);
+    expect(reviewExports.batch).toHaveBeenCalledWith(["review-1"], "docx");
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/reviews").length).toBe(2);
+  });
+
+  it("批量导出失败时保留全部选择", async () => {
+    const queue = [queueItem("review-2", "李安然", 2)];
+    const reviewed = {
+      ...detail("review-1", "张小明", 1, paragraphReport),
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [reviewed] });
+      if (url === "/api/reviews/review-2") return Response.json({ ok: true, data: detail("review-2", "李安然", 2, paragraphReport) });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    reviewExports.batch.mockRejectedValueOnce(new Error("导出失败"));
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "已复核待导出清单 (1)" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择张小明的作文导出" }));
+    await user.click(screen.getByRole("button", { name: "导出所选作文" }));
+    await user.click(screen.getByRole("menuitem", { name: "PDF" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("导出失败");
+    expect(screen.getByRole("checkbox", { name: "选择张小明的作文导出" })).toBeChecked();
+    expect(reviewExports.batch).toHaveBeenCalledWith(["review-1"], "pdf");
   });
 });
