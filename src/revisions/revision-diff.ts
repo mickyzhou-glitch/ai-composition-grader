@@ -21,7 +21,9 @@ type MoveCandidate = {
 };
 
 const segmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
-const isNeutral = (value: string) => /^[\p{P}\p{Z}\s]+$/u.test(value);
+const isNeutral = (value: string) => (
+  /^(?:[\p{P}\p{Z}\s](?:[\uFE00-\uFE0F\u{E0100}-\u{E01EF}])*)+$/u.test(value)
+);
 
 function graphemes(value: string): string[] {
   return Array.from(segmenter.segment(value), ({ segment }) => segment);
@@ -174,13 +176,21 @@ export function buildRevisionRuns(source: string, revised: string): RevisionRun[
 
   const boundaries = revisedNeutralBoundaries(revised);
   const runs: RevisionRun[] = [];
+  const consumedBoundaries = new Set<number>();
   let revisedIndex = 0;
   const appendBoundary = () => {
+    if (consumedBoundaries.has(revisedIndex)) {
+      return;
+    }
+    consumedBoundaries.add(revisedIndex);
     appendRun(runs, "punctuation", boundaries[revisedIndex]?.join("") ?? "");
   };
 
   for (const change of changes) {
     if (change.kind === "deleted") {
+      if (revisedIndex < revisedWords.length) {
+        appendBoundary();
+      }
       change.values.forEach((value, index) => {
         if (!change.moved[index]) {
           appendRun(runs, "deleted", value);

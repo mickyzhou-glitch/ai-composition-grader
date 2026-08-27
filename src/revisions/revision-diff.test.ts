@@ -73,6 +73,42 @@ describe("buildRevisionRuns", () => {
     ]);
   });
 
+  it.each([
+    { separator: "，", label: "逗号" },
+    { separator: " ", label: "空格" },
+  ])("将$label中性边界放在同一锚点的删除和新增之前", ({ separator }) => {
+    expect(buildRevisionRuns(`甲${separator}乙`, `甲${separator}丙`)).toEqual([
+      { kind: "unchanged", text: "甲" },
+      { kind: "punctuation", text: separator },
+      { kind: "deleted", text: "乙" },
+      { kind: "inserted", text: "丙" },
+    ]);
+  });
+
+  it.each([
+    { separator: "\n", label: "LF" },
+    { separator: "\r\n", label: "CRLF" },
+  ])("将 $label 换行边界放在同一锚点的删除和新增之前", ({ separator }) => {
+    expect(buildRevisionRuns(
+      `第一行${separator}旧第二行`,
+      `第一行${separator}新第二行`,
+    )).toEqual([
+      { kind: "unchanged", text: "第一行" },
+      { kind: "punctuation", text: separator },
+      { kind: "deleted", text: "旧" },
+      { kind: "inserted", text: "新" },
+      { kind: "unchanged", text: "第二行" },
+    ]);
+  });
+
+  it("纯尾部删除仍在修改稿尾标点之前", () => {
+    expect(buildRevisionRuns("你好旧！", "你好！")).toEqual([
+      { kind: "unchanged", text: "你好" },
+      { kind: "deleted", text: "旧" },
+      { kind: "punctuation", text: "！" },
+    ]);
+  });
+
   it("只保留修改稿的 CRLF 和换行并以黑色输出", () => {
     expect(buildRevisionRuns("第一行\r\n第二行", "第一行\n新第二行")).toEqual([
       { kind: "unchanged", text: "第一行" },
@@ -104,6 +140,13 @@ describe("buildRevisionRuns", () => {
       { kind: "unchanged", text: "Caf" },
       { kind: "deleted", text: "e\u0301" },
       { kind: "inserted", text: "é" },
+    ]);
+  });
+
+  it.each(["‼️", "⁉️", "，️"])("将带变体选择符的标点 %s 视为中性", (sourcePunctuation) => {
+    expect(buildRevisionRuns(`你好${sourcePunctuation}`, "你好！")).toEqual([
+      { kind: "unchanged", text: "你好" },
+      { kind: "punctuation", text: "！" },
     ]);
   });
 });
