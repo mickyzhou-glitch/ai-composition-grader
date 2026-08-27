@@ -1,9 +1,10 @@
 import {
   isLegacyEvaluationReport,
-  paragraphEvaluationReportSchema,
 } from "../domain/contracts";
-import { validateReport } from "../domain/report-validation";
-import { ocrCheckpointSchema } from "../ocr/contracts";
+import {
+  ReportValidationError,
+  validateParagraphReportForIds,
+} from "../domain/report-validation";
 
 export type DeliveryReadinessCode =
   | "REPORT_MISSING"
@@ -120,32 +121,23 @@ export function deliveryReadiness(input: DeliveryReadinessInput): DeliveryReadin
     return failure("REPORT_STALE", "批改报告基于旧版识别原文，请重新生成批改");
   }
 
-  const reportResult = paragraphEvaluationReportSchema.safeParse(input.report);
-  if (!reportResult.success) {
-    return failure("REPORT_INVALID", "逐段批改报告字段不完整");
-  }
   const paragraphs = publicParagraphs(input.ocr);
   if (!paragraphs || paragraphs.length === 0) {
     return failure("CROP_MISSING", "识别结果没有可用于导出的自然段裁图");
   }
-
-  const checkpointResult = ocrCheckpointSchema.safeParse(input.ocr);
-  if (checkpointResult.success && checkpointResult.data.version === 2) {
-    try {
-      validateReport(reportResult.data, { ocr: checkpointResult.data });
-    } catch {
-      return failure("PARAGRAPH_COVERAGE_MISMATCH", "逐段批改没有完整覆盖当前识别自然段");
-    }
-  } else {
-    const expectedIds = paragraphs.map(({ id }) => id);
-    const actualIds = reportResult.data.paragraphReviews.map(({ paragraphId }) => paragraphId);
+  try {
+    validateParagraphReportForIds(input.report, paragraphs.map(({ id }) => id));
+  } catch (error) {
     if (
-      new Set(actualIds).size !== actualIds.length
-      || actualIds.length !== expectedIds.length
-      || actualIds.some((id, index) => id !== expectedIds[index])
+      error instanceof ReportValidationError
+      && error.code === "PARAGRAPH_COVERAGE_MISMATCH"
     ) {
-      return failure("PARAGRAPH_COVERAGE_MISMATCH", "逐段批改没有完整覆盖当前识别自然段");
+      return failure(
+        "PARAGRAPH_COVERAGE_MISMATCH",
+        "逐段批改没有完整覆盖当前识别自然段",
+      );
     }
+    return failure("REPORT_INVALID", "逐段批改报告字段或语义不符合要求");
   }
 
   const imagePages = new Set(input.images.map(({ position }) => position));

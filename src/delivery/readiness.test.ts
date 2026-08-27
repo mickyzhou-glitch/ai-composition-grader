@@ -54,6 +54,19 @@ const completeReview = {
   hasPdf: false,
 };
 
+const privateOcrV2 = {
+  ...ocrV2,
+  sourceRevision: 3,
+  pages: ocrV2.pages.map((page) => ({
+    ...page,
+    blocks: [{ text: page.text, x: 0.1, y: 0.2, width: 0.5, height: 0.3 }],
+  })),
+  paragraphs: ocrV2.paragraphs.map((paragraph) => ({
+    ...paragraph,
+    segments: paragraph.segments.map((segment) => ({ ...segment, text: paragraph.text })),
+  })),
+};
+
 describe("deliveryReadiness", () => {
   it("accepts only a complete reviewed paragraph delivery", () => {
     expect(deliveryReadiness(completeReview)).toEqual({ ready: true });
@@ -109,6 +122,26 @@ describe("deliveryReadiness", () => {
         paragraphReviews: [{ ...paragraphReport.paragraphReviews[0], revisedText: "  " }],
       },
     })).toMatchObject({ ready: false, code: "REPORT_INVALID" });
+  });
+
+  it.each([
+    ["公共 OCR", ocrV2],
+    ["私有 OCR", privateOcrV2],
+  ])("对%s复用同一套逐段报告语义和覆盖校验", (_kind, ocr) => {
+    expect(deliveryReadiness({ ...completeReview, ocr })).toEqual({ ready: true });
+    expect(deliveryReadiness({
+      ...completeReview,
+      ocr,
+      report: { ...paragraphReport, themeFit: "off_topic", grade: "A" },
+    })).toMatchObject({ ready: false, code: "REPORT_INVALID" });
+    expect(deliveryReadiness({
+      ...completeReview,
+      ocr,
+      report: {
+        ...paragraphReport,
+        paragraphReviews: [{ ...paragraphReport.paragraphReviews[0], paragraphId: "paragraph-2" }],
+      },
+    })).toMatchObject({ ready: false, code: "PARAGRAPH_COVERAGE_MISMATCH" });
   });
 
   it("rejects missing, invalid, and unmapped crop regions", () => {

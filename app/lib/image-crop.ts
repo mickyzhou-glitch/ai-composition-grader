@@ -38,6 +38,9 @@ export interface CropDependencies {
   createCanvas?: (width: number, height: number) => CanvasLike;
 }
 
+export const MAX_CROP_SOURCE_PIXELS = 24_000_000;
+export const MAX_CROP_OUTPUT_PIXELS = 16_000_000;
+
 function validDimension(value: number): boolean {
   return Number.isInteger(value) && value > 0;
 }
@@ -78,10 +81,9 @@ export function paddedCropRect(
 }
 
 function browserCanvas(width: number, height: number): CanvasLike {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
+  void width;
+  void height;
+  return document.createElement("canvas");
 }
 
 export async function cropImageRegion(
@@ -90,31 +92,50 @@ export async function cropImageRegion(
   dependencies: CropDependencies = {},
 ): Promise<CroppedPng> {
   const rect = paddedCropRect(bitmap, region);
+  if (bitmap.width > MAX_CROP_SOURCE_PIXELS / bitmap.height) {
+    throw new RangeError("source bitmap exceeds crop pixel limit");
+  }
+  if (rect.width > MAX_CROP_OUTPUT_PIXELS / rect.height) {
+    throw new RangeError("output crop exceeds pixel limit");
+  }
   const canvas = (dependencies.createCanvas ?? browserCanvas)(rect.width, rect.height);
-  canvas.width = rect.width;
-  canvas.height = rect.height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas 2D context unavailable");
-  context.drawImage(
-    bitmap,
-    rect.left,
-    rect.top,
-    rect.width,
-    rect.height,
-    0,
-    0,
-    rect.width,
-    rect.height,
-  );
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((value) => {
-      if (value) resolve(value);
-      else reject(new Error("PNG crop encoding failed"));
-    }, "image/png");
-  });
-  return {
-    bytes: new Uint8Array(await blob.arrayBuffer()),
-    width: rect.width,
-    height: rect.height,
-  };
+  try {
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Canvas 2D context unavailable");
+    context.drawImage(
+      bitmap,
+      rect.left,
+      rect.top,
+      rect.width,
+      rect.height,
+      0,
+      0,
+      rect.width,
+      rect.height,
+    );
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((value) => {
+        if (value) resolve(value);
+        else reject(new Error("PNG crop encoding failed"));
+      }, "image/png");
+    });
+    return {
+      bytes: new Uint8Array(await blob.arrayBuffer()),
+      width: rect.width,
+      height: rect.height,
+    };
+  } finally {
+    try {
+      canvas.width = 0;
+    } catch {
+      // Continue releasing the other backing-store dimension.
+    }
+    try {
+      canvas.height = 0;
+    } catch {
+      // Cleanup failures must not hide the crop result or its original error.
+    }
+  }
 }
