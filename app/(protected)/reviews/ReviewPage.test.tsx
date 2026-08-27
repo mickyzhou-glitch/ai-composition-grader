@@ -358,6 +358,7 @@ describe("复核页", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
+      mode: "full",
       teacherGuidance: "请重点看结尾是否扣题",
     });
   });
@@ -665,14 +666,31 @@ describe("复核页", () => {
   });
 
   it("旧报告没有缓存时不显示导出菜单并明确要求完整重新分析", async () => {
-    vi.spyOn(globalThis, "fetch")
+    const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => json(review))
-      .mockImplementationOnce(() => json({ job: null }));
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({
+        id: "job-full",
+        reviewId: "review-1",
+        status: "queued",
+        progressStage: "queued",
+        message: null,
+        createdAt: "2026-08-28T08:00:00.000Z",
+        finishedAt: null,
+      }));
+    const user = userEvent.setup();
     render(<ReviewPage />);
 
     expect(await screen.findByRole("button", { name: "完整重新分析" })).toBeVisible();
+    expect(screen.getByText("旧版示范段落报告需要完整重新分析后才能导出新格式")).toBeVisible();
     expect(screen.queryByRole("button", { name: "导出" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "下载已生成的旧版 PDF" })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "完整重新分析" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1/analyze");
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toEqual({ mode: "full" });
   });
 
   it("缺少裁图的新报告显示具体禁用原因", async () => {

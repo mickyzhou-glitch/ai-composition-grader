@@ -572,7 +572,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          ...(mode === "content_only" ? { mode } : {}),
+          mode,
           ...(teacherGuidance.trim() ? { teacherGuidance: teacherGuidance.trim() } : {}),
         }),
       });
@@ -746,6 +746,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
                 disabled={busy !== null || analysisActive}
                 onClick={() => void downloadLegacyPdf()}
               >下载已生成的旧版 PDF</AsyncButton>
+            ) : null}
+            {report && isLegacyEvaluationReport(report) ? (
+              <span className="export-menu-reason">旧版示范段落报告需要完整重新分析后才能导出新格式</span>
             ) : null}
             {report && !isLegacyEvaluationReport(report) ? <ExportMenu
               busy={busy === "export"}

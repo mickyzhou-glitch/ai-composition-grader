@@ -70,7 +70,56 @@ async function mockUser(page: Page, role: "admin" | "teacher") {
   }));
 }
 
+async function mockLegacyReview(page: Page, hasPdf: boolean) {
+  let analyzeBody: unknown;
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const pathname = new URL(request.url()).pathname;
+    if (pathname === "/api/auth/me") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: json({ id: "teacher-1", username: "teacher", role: "teacher", mustChangePassword: false }),
+      });
+      return;
+    }
+    if (pathname === "/api/reviews/review-dual-model") {
+      await route.fulfill({
+        contentType: "application/json",
+        body: json({
+          ...review,
+          hasPdf,
+          pdfFilename: hasPdf ? "旧版批改.pdf" : null,
+        }),
+      });
+      return;
+    }
+    if (pathname === "/api/reviews/review-dual-model/analyze/status") {
+      await route.fulfill({ contentType: "application/json", body: json({ job: null }) });
+      return;
+    }
+    if (pathname === "/api/reviews/review-dual-model/analyze") {
+      analyzeBody = request.postDataJSON();
+      await route.fulfill({
+        contentType: "application/json",
+        body: json({
+          id: "job-full",
+          reviewId: "review-dual-model",
+          status: "queued",
+          progressStage: "queued",
+          message: null,
+          createdAt: "2026-08-28T08:00:00.000Z",
+          finishedAt: null,
+        }),
+      });
+      return;
+    }
+    await route.abort("failed");
+  });
+  return { analyzeBody: () => analyzeBody };
+}
+
 const batchReport = {
+  version: 2 as const,
   themeFit: "fits",
   themeReason: "围绕一次真实经历展开，符合题意。",
   personalizedComment: "选材贴近生活，关键动作清楚。",
@@ -84,8 +133,54 @@ const batchReport = {
     structure: { finding: "转折与结果衔接略快。", action: "补充决定改变做法的原因。" },
     language: { finding: "语言通顺。", action: "精简重复句。" },
   },
-  sampleParagraphs: [{ title: "示范段", text: "我停下脚步，重新想了想。", suggestion: "补充动作和原因。" }],
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "动作细节略少。", advice: "补写一次停顿动作。", example: "我停下脚步，重新想了想。" }],
+    revisedText: "我停下脚步，重新想了想，再作出选择。",
+  }],
   parentFeedbacks,
+};
+
+const paragraphReview = {
+  ...review,
+  report: {
+    ...structuredClone(batchReport),
+    paragraphReviews: [
+      {
+        paragraphId: "paragraph-1",
+        suggestions: [{ problem: "动作略快。", advice: "补充起跑前的动作。", example: "我深吸一口气，站上起跑线。" }],
+        revisedText: "那一天，我第一次勇敢地站上起跑线。",
+      },
+      {
+        paragraphId: "paragraph-2",
+        suggestions: [{ problem: "保留", advice: "保留原文", example: "感悟自然。" }],
+        revisedText: "我终于完成比赛，也学会为自己鼓掌。",
+      },
+    ],
+  },
+  ocr: {
+    version: 2 as const,
+    ocrRevision: 1,
+    editedAt: null as string | null,
+    pages: [
+      { pageIndex: 0, text: "那一天，我第一次站上起跑线。", readable: true, warnings: [] },
+      { pageIndex: 1, text: "我终于完成比赛，也学会为自己鼓掌。", readable: true, warnings: ["页脚字迹较浅，请复核"] },
+    ],
+    paragraphs: [
+      {
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "那一天，我第一次站上起跑线。",
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.12, width: 0.8, height: 0.18 }],
+      },
+      {
+        id: "paragraph-2",
+        paragraphIndex: 1,
+        text: "我终于完成比赛，也学会为自己鼓掌。",
+        segments: [{ pageIndex: 1, x: 0.1, y: 0.12, width: 0.8, height: 0.18 }],
+      },
+    ],
+  },
 };
 
 function batchReview(id: string, studentName: string, revision: number) {
@@ -118,9 +213,16 @@ function batchReview(id: string, studentName: string, revision: number) {
     annotations: [],
     report: structuredClone(batchReport),
     ocr: {
+      version: 2 as const,
       ocrRevision: 1,
       editedAt: null,
       pages: [{ pageIndex: 0, text: `${studentName}的作文识别原文。`, readable: true, warnings: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: `${studentName}的作文识别原文。`,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.12, width: 0.8, height: 0.18 }],
+      }],
     },
     reportStale: false,
     hasPdf: false,
@@ -259,6 +361,27 @@ test("renders the teacher workbench", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "批改历史" })).toBeVisible();
 });
 
+test("旧报告只提供同 revision 缓存 PDF，不伪装为新格式导出", async ({ page }) => {
+  await mockLegacyReview(page, true);
+  await page.goto("/reviews?id=review-dual-model");
+
+  await expect(page.getByText("旧版示范段落报告需要完整重新分析后才能导出新格式")).toBeVisible();
+  await expect(page.getByRole("button", { name: "完整重新分析" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载已生成的旧版 PDF" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "导出" })).toHaveCount(0);
+});
+
+test("无缓存旧报告完整重新分析时显式提交 full 模式", async ({ page }) => {
+  const legacy = await mockLegacyReview(page, false);
+  await page.goto("/reviews?id=review-dual-model");
+
+  await expect(page.getByText("旧版示范段落报告需要完整重新分析后才能导出新格式")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载已生成的旧版 PDF" })).toHaveCount(0);
+  await page.getByRole("button", { name: "完整重新分析" }).click();
+
+  await expect.poll(legacy.analyzeBody).toEqual({ mode: "full" });
+});
+
 for (const viewport of [
   { name: "桌面端", width: 1440, height: 1000 },
   { name: "390px 移动端", width: 390, height: 844 },
@@ -361,7 +484,7 @@ for (const viewport of [
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockUser(page, "teacher");
 
-    let currentReview = structuredClone(review);
+    let currentReview = structuredClone(paragraphReview);
     let ocrPatchBody: unknown;
     let analyzeBody: unknown;
     await page.route("**/api/**", async (route) => {
@@ -380,10 +503,18 @@ for (const viewport of [
       }
       if (url.pathname === "/api/reviews/review-dual-model/ocr") {
         ocrPatchBody = request.postDataJSON();
-        const body = ocrPatchBody as { pages: Array<{ pageIndex: number; text: string }> };
+        const body = ocrPatchBody as { paragraphs: Array<{ paragraphId: string; text: string }> };
         currentReview = {
           ...currentReview,
-          ocr: { ...currentReview.ocr, ocrRevision: 2, editedAt: "2026-08-13T10:00:00.000Z", pages: currentReview.ocr.pages.map((page, index) => ({ ...page, text: body.pages[index]?.text ?? page.text })) },
+          ocr: {
+            ...currentReview.ocr,
+            ocrRevision: 2,
+            editedAt: "2026-08-13T10:00:00.000Z",
+            paragraphs: currentReview.ocr.paragraphs.map((paragraph, index) => ({
+              ...paragraph,
+              text: body.paragraphs[index]?.text ?? paragraph.text,
+            })),
+          },
           reportStale: true,
         };
         await route.fulfill({ contentType: "application/json", body: json(currentReview) });
@@ -427,8 +558,8 @@ for (const viewport of [
 
     await ocrTab.click();
     await expect(ocrTab).toHaveAttribute("aria-selected", "true");
-    const firstPage = page.getByLabel("第 1 页识别原文");
-    const secondPage = page.getByLabel("第 2 页识别原文");
+    const firstPage = page.getByLabel("第 1 段识别原文");
+    const secondPage = page.getByLabel("第 2 段识别原文");
     await expect(firstPage).toBeVisible();
     await expect(secondPage).toBeVisible();
     await firstPage.fill("那一天，我第一次勇敢地站上起跑线。");
@@ -437,9 +568,9 @@ for (const viewport of [
     await expect(page.getByText("批改报告基于旧版识别原文", { exact: true })).toBeVisible();
     expect(ocrPatchBody).toEqual({
       expectedOcrRevision: 1,
-      pages: [
-        { pageIndex: 0, text: "那一天，我第一次勇敢地站上起跑线。" },
-        { pageIndex: 1, text: "我终于完成比赛，也学会为自己鼓掌。" },
+      paragraphs: [
+        { paragraphId: "paragraph-1", text: "那一天，我第一次勇敢地站上起跑线。" },
+        { paragraphId: "paragraph-2", text: "我终于完成比赛，也学会为自己鼓掌。" },
       ],
     });
 

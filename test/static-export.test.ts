@@ -13,7 +13,7 @@ describe("static export configuration", () => {
   it("does not add dynamic Next.js route handlers", () => {
     const appRoot = path.resolve("app");
     const files = readdirSync(appRoot, { recursive: true, withFileTypes: true })
-      .filter((entry) => entry.isFile() && /^route\.(?:ts|tsx|js|jsx)$/u.test(entry.name));
+      .filter((entry) => entry.isFile() && /^route\.(?:[cm]?[jt]sx?)$/u.test(entry.name));
 
     expect(files).toEqual([]);
   });
