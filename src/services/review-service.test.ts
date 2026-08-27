@@ -135,6 +135,43 @@ describe("ReviewService analysis CAS", () => {
     } as never);
   }
 
+  function makeParagraphDeliveryExportable() {
+    const checkpoint = {
+      version: 2,
+      sourceRevision: 1,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{
+        pageIndex: 0,
+        text: "我为自己喝彩。",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "我为自己喝彩。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+      }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "我为自己喝彩。",
+        segments: [{
+          pageIndex: 0, text: "我为自己喝彩。",
+          x: 0.1, y: 0.2, width: 0.3, height: 0.1,
+        }],
+      }],
+    };
+    sqlite.prepare(`
+      UPDATE reviews SET report = ?, ocr_checkpoint = ?, report_ocr_revision = 0,
+        teacher_reviewed_at = ?, status = 'ready_for_review'
+      WHERE id = ? AND owner_id = ?
+    `).run(
+      JSON.stringify(paragraphReport),
+      JSON.stringify(checkpoint),
+      Date.parse("2026-08-27T09:00:00.000Z"),
+      "review-1",
+      OWNER_ID,
+    );
+    return repository.getById(OWNER_ID, "review-1")!;
+  }
+
   function workerFor(reviews: ReviewService, jobs: AnalysisJobRepository): AnalysisWorker {
     return new AnalysisWorker(jobs, {
       prepare: (ownerId, reviewId, mode, claim, prebound) =>
@@ -613,7 +650,8 @@ describe("ReviewService analysis CAS", () => {
 
   it("教师修改内容时将旧 PDF 加入 best-effort 清理队列", async () => {
     const service = serviceFor(async () => readyEnvelope);
-    const ready = repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    const ready = makeParagraphDeliveryExportable();
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old.pdf",
       pdfPath: "pdf/old.pdf",
@@ -663,12 +701,15 @@ describe("ReviewService analysis CAS", () => {
 
   it("教师审核在作文锁内保存并清理旧 PDF，随后移出待审核队列", async () => {
     const service = serviceFor(async () => readyEnvelope);
-    const ready = repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);
+    const ready = makeParagraphDeliveryExportable();
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old-review.pdf",
       pdfPath: "pdf/old-review.pdf",
       exportedAt: new Date("2026-07-21T06:00:00.000Z"),
     });
+    sqlite.prepare("UPDATE reviews SET teacher_reviewed_at = NULL WHERE id = ? AND owner_id = ?")
+      .run("review-1", OWNER_ID);
     const cleanup = vi.spyOn(fileStore, "queuePdfCleanup");
 
     expect(service.listTeacherReviewQueue(OWNER_ID).map(({ id }) => id)).toEqual(["review-1"]);
@@ -701,7 +742,9 @@ describe("ReviewService analysis CAS", () => {
       expectedRevision: ready.revision,
       report: readyEnvelope.report,
     });
-    const exported = repository.markExported(OWNER_ID, "review-1", reviewed.revision, {
+    void reviewed;
+    const paragraphReady = makeParagraphDeliveryExportable();
+    const exported = repository.markExported(OWNER_ID, "review-1", paragraphReady.revision, {
       pdfFilename: "作文批改-为自己喝彩-未填写.pdf",
       pdfPath: "pdf/作文批改-为自己喝彩-未填写.pdf",
       exportedAt: new Date("2026-08-25T04:00:00.000Z"),

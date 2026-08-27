@@ -5,6 +5,7 @@ import {
   normalizedCropSchema,
   reviewStatusSchema,
 } from "../domain/contracts";
+import { deliveryReadiness } from "../delivery/readiness";
 import { ocrCheckpointSchema } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 
@@ -101,25 +102,60 @@ export class D1ReviewReader {
     if (entries.length === 0) return false;
     const requestedPairs = entries.map(() => "(id = ? AND revision = ?)").join(" OR ");
     const { results = [] } = await this.database.prepare(`
-      SELECT id, revision
+      SELECT id, revision, report, image_revision, ocr_checkpoint, report_ocr_revision, teacher_reviewed_at
       FROM reviews
       WHERE owner_id = ?
         AND deleting_at IS NULL
-        AND teacher_reviewed_at IS NOT NULL
-        AND report IS NOT NULL
-        AND status IN ('ready_for_review', 'exported')
-        AND (
-          ocr_checkpoint IS NULL
-          OR report_ocr_revision = json_extract(ocr_checkpoint, '$.ocrRevision')
-        )
         AND (${requestedPairs})
     `).bind(ownerId, ...entries.flatMap(({ id, revision }) => [id, revision])).all<{
       id: string;
       revision: number;
+      report: string | null;
+      image_revision: number;
+      ocr_checkpoint: string | null;
+      report_ocr_revision: number | null;
+      teacher_reviewed_at: number | null;
     }>();
-    const eligible = new Set(results.map(({ id, revision }) => `${id}:${revision}`));
-    return entries.length === eligible.size
-      && entries.every(({ id, revision }) => eligible.has(`${id}:${revision}`));
+    const found = new Set(results.map(({ id, revision }) => `${id}:${revision}`));
+    if (
+      entries.length !== found.size
+      || !entries.every(({ id, revision }) => found.has(`${id}:${revision}`))
+    ) return false;
+    try {
+      const readiness = await Promise.all(results.map(async (review) => {
+        const report = review.report === null ? null : JSON.parse(review.report);
+        const parsedCheckpoint = review.ocr_checkpoint === null
+          ? null
+          : ocrCheckpointSchema.parse(JSON.parse(review.ocr_checkpoint));
+        const checkpoint = parsedCheckpoint?.sourceRevision === review.image_revision
+          ? parsedCheckpoint
+          : null;
+        const { results: images = [] } = await this.database.prepare(`
+          SELECT position, width, height FROM review_images
+          WHERE review_id = ? AND EXISTS (
+            SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+          ) ORDER BY position, id
+        `).bind(review.id, review.id, ownerId).all<{
+          position: number;
+          width: number;
+          height: number;
+        }>();
+        return deliveryReadiness({
+          report,
+          teacherReviewedAt: date(review.teacher_reviewed_at),
+          reportStale: report !== null && (
+            checkpoint === null
+            || review.report_ocr_revision !== checkpoint.ocrRevision
+          ),
+          reportOcrRevision: review.report_ocr_revision,
+          ocr: checkpoint,
+          images,
+        }).ready;
+      }));
+      return readiness.every(Boolean);
+    } catch {
+      return false;
+    }
   }
 
   async get(ownerId: string, reviewId: string): Promise<unknown | null> {
@@ -186,7 +222,10 @@ export class D1ReviewReader {
       : ocrCheckpointSchema.parse(JSON.parse(review.ocr_checkpoint));
     const currentCheckpoint = checkpoint?.sourceRevision === review.image_revision ? checkpoint : null;
     const ocr = currentCheckpoint ? D1OcrCheckpointRepository.publicView(currentCheckpoint) : null;
-    const reportStale = report !== null && currentCheckpoint !== null && review.report_ocr_revision !== currentCheckpoint.ocrRevision;
+    const reportStale = report !== null && (
+      currentCheckpoint === null
+      || review.report_ocr_revision !== currentCheckpoint.ocrRevision
+    );
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
     return {
       id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, config, report,

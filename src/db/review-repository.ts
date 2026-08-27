@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
+import { deliveryReadiness } from "../delivery/readiness";
 import {
   annotationSchema,
   assignmentConfigSchema,
@@ -549,28 +550,63 @@ export class ReviewRepository {
     entries: Array<{ id: string; revision: number }>,
   ): boolean {
     if (entries.length === 0) return false;
-    const eligible = this.database
-      .select({ id: reviews.id, revision: reviews.revision })
+    const candidates = this.database
+      .select({
+        id: reviews.id,
+        revision: reviews.revision,
+        report: reviews.report,
+        imageRevision: reviews.imageRevision,
+        ocrCheckpoint: reviews.ocrCheckpoint,
+        reportOcrRevision: reviews.reportOcrRevision,
+        teacherReviewedAt: reviews.teacherReviewedAt,
+      })
       .from(reviews)
       .where(and(
         eq(reviews.ownerId, ownerId),
         isNull(reviews.deletingAt),
-        isNotNull(reviews.teacherReviewedAt),
-        isNotNull(reviews.report),
-        inArray(reviews.status, ["ready_for_review", "exported"]),
-        or(
-          isNull(reviews.ocrCheckpoint),
-          sql`${reviews.reportOcrRevision} = json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision')`,
-        ),
         or(...entries.map(({ id, revision }) => and(
           eq(reviews.id, id),
           eq(reviews.revision, revision),
         ))),
       ))
       .all();
-    const keys = new Set(eligible.map(({ id, revision }) => `${id}:${revision}`));
-    return keys.size === entries.length
-      && entries.every(({ id, revision }) => keys.has(`${id}:${revision}`));
+    const keys = new Set(candidates.map(({ id, revision }) => `${id}:${revision}`));
+    if (
+      keys.size !== entries.length
+      || !entries.every(({ id, revision }) => keys.has(`${id}:${revision}`))
+    ) {
+      return false;
+    }
+    return candidates.every((candidate) => {
+      const checkpointResult = ocrCheckpointSchema.safeParse(candidate.ocrCheckpoint);
+      const checkpoint = checkpointResult.success
+        && checkpointResult.data.sourceRevision === candidate.imageRevision
+        ? checkpointResult.data
+        : null;
+      const images = this.database.select({
+        position: reviewImages.position,
+        width: reviewImages.width,
+        height: reviewImages.height,
+      }).from(reviewImages).innerJoin(
+        reviews,
+        eq(reviews.id, reviewImages.reviewId),
+      ).where(and(
+        eq(reviewImages.reviewId, candidate.id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+      )).all();
+      return deliveryReadiness({
+        report: candidate.report,
+        teacherReviewedAt: candidate.teacherReviewedAt,
+        reportStale: candidate.report !== null && (
+          checkpoint === null
+          || candidate.reportOcrRevision !== checkpoint.ocrRevision
+        ),
+        reportOcrRevision: candidate.reportOcrRevision,
+        ocr: checkpoint,
+        images,
+      }).ready;
+    });
   }
 
   updateReport(
@@ -1350,6 +1386,12 @@ export class ReviewRepository {
     input: ExportedPdfInput,
   ): ReviewRecord {
     const pdf = validatePdfMetadata(input);
+    if (!this.checkTeacherReviewedForExport(ownerId, [{ id, revision: expectedRevision }])) {
+      const current = this.getById(ownerId, id);
+      if (!current) throw new ReviewNotFoundError(id);
+      if (current.revision !== expectedRevision) throw new RevisionConflictError(id);
+      throw new TypeError("review is not ready for paragraph delivery export");
+    }
     const nextRevision = expectedRevision + 1;
     const result = this.database
       .update(reviews)
@@ -1362,7 +1404,16 @@ export class ReviewRepository {
         exportedAt: pdf.exportedAt,
         updatedAt: pdf.exportedAt,
       })
-      .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt), eq(reviews.revision, expectedRevision)))
+      .where(and(
+        eq(reviews.id, id),
+        eq(reviews.ownerId, ownerId),
+        isNull(reviews.deletingAt),
+        eq(reviews.revision, expectedRevision),
+        isNotNull(reviews.teacherReviewedAt),
+        isNotNull(reviews.report),
+        sql`json_extract(${reviews.ocrCheckpoint}, '$.version') = 2`,
+        sql`${reviews.reportOcrRevision} = json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision')`,
+      ))
       .run();
     if (result.changes === 0) {
       if (!this.getById(ownerId, id)) throw new ReviewNotFoundError(id);

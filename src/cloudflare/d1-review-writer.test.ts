@@ -34,6 +34,41 @@ const invalidReport = {
   sampleParagraphs: [{ title: "示范", text: "示范正文", suggestion: "补充动作" }],
 };
 
+const paragraphReport = {
+  version: 2,
+  themeFit: "fits",
+  themeReason: "切题",
+  personalizedComment: "真实",
+  painPoints: [], commonIssues: [], revisionSuggestions: [], grade: "A",
+  diagnostics: {
+    authenticityAndRelevance: { finding: "真实", action: "保留" },
+    materialAndDetails: { finding: "具体", action: "保留" },
+    structure: { finding: "完整", action: "保留" },
+    language: { finding: "通顺", action: "保留" },
+  },
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "保留", advice: "保留", example: "自然" }],
+    revisedText: "原文。",
+  }],
+  parentFeedbacks: [],
+};
+
+const checkpoint = {
+  version: 2,
+  sourceRevision: 3,
+  ocrRevision: 1,
+  editedAt: null,
+  pages: [{
+    pageIndex: 0, text: "原文。", readable: true, warnings: [],
+    blocks: [{ text: "原文。", x: 0.1, y: 0.2, width: 0.5, height: 0.2 }],
+  }],
+  paragraphs: [{
+    id: "paragraph-1", paragraphIndex: 0, text: "原文。",
+    segments: [{ pageIndex: 0, text: "原文。", x: 0.1, y: 0.2, width: 0.5, height: 0.2 }],
+  }],
+};
+
 describe("D1ReviewWriter", () => {
   it("creates a draft and saves a custom assignment in one D1 batch", async () => {
     const batch = vi.fn().mockResolvedValue([]);
@@ -173,14 +208,47 @@ describe("D1ReviewWriter", () => {
   it("marks a completed review as exported only for its owner", async () => {
     const run = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
     const database = {
-      prepare: vi.fn().mockReturnValue({ bind: vi.fn().mockReturnValue({ run }) }),
+      prepare: vi.fn((query: string) => ({ bind: vi.fn(() => ({
+        first: vi.fn().mockResolvedValue(query.includes("SELECT revision") ? {
+          revision: 7,
+          report: JSON.stringify(paragraphReport),
+          image_revision: 3,
+          ocr_checkpoint: JSON.stringify(checkpoint),
+          report_ocr_revision: 1,
+          teacher_reviewed_at: Date.parse("2026-08-27T09:00:00.000Z"),
+        } : null),
+        all: vi.fn().mockResolvedValue({ results: [{ position: 0, width: 1000, height: 1500 }] }),
+        run,
+      })) })),
     } as unknown as D1Database;
 
     await expect(new D1ReviewWriter(database).markExported("teacher-1", "review-1")).resolves.toBe(true);
 
     expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("status = 'exported'"));
     expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("owner_id"));
-    expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("teacher_reviewed_at IS NOT NULL"));
+    expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("revision = ?"));
+  });
+
+  it("does not mark a legacy report exported as a new paragraph delivery", async () => {
+    const run = vi.fn();
+    const database = {
+      prepare: vi.fn((query: string) => ({ bind: vi.fn(() => ({
+        first: vi.fn().mockResolvedValue(query.includes("SELECT revision") ? {
+          revision: 7,
+          report: JSON.stringify(report),
+          image_revision: 3,
+          ocr_checkpoint: JSON.stringify(checkpoint),
+          report_ocr_revision: 1,
+          teacher_reviewed_at: Date.parse("2026-08-27T09:00:00.000Z"),
+        } : null),
+        all: vi.fn().mockResolvedValue({ results: [{ position: 0, width: 1000, height: 1500 }] }),
+        run,
+      })) })),
+    } as unknown as D1Database;
+
+    await expect(new D1ReviewWriter(database).markExported("teacher-1", "review-1"))
+      .resolves.toBe(false);
+    expect(run).not.toHaveBeenCalled();
   });
 
   it("atomically saves teacher edits and the reviewed timestamp with revision guards", async () => {

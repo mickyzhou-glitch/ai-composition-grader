@@ -28,10 +28,43 @@ describe("review queue helpers", () => {
     expect(reviewPrefetchWindow(["a", "b"], "missing")).toEqual([]);
   });
 
-  it("requires a report and teacher review timestamp for export", () => {
-    expect(exportEligibility({ report: {}, teacherReviewedAt: "2026-08-22T06:00:00.000Z" })).toEqual({ eligible: true });
-    expect(exportEligibility({ report: {}, teacherReviewedAt: null })).toMatchObject({ eligible: false });
-    expect(exportEligibility({ report: null, teacherReviewedAt: "2026-08-22T06:00:00.000Z" })).toMatchObject({ eligible: false });
+  it("uses the shared paragraph-delivery gate for export", () => {
+    const paragraphReview = {
+      report: {
+        version: 2 as const,
+        themeFit: "fits" as const, themeReason: "切题", personalizedComment: "真实",
+        painPoints: [], commonIssues: [], revisionSuggestions: [], grade: "A" as const,
+        diagnostics: {
+          authenticityAndRelevance: { finding: "真实", action: "保留" },
+          materialAndDetails: { finding: "具体", action: "保留" },
+          structure: { finding: "完整", action: "保留" },
+          language: { finding: "通顺", action: "保留" },
+        },
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          suggestions: [{ problem: "保留", advice: "保留", example: "自然" }],
+          revisedText: "原文。",
+        }],
+        parentFeedbacks: [] as [],
+      },
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+      reportStale: false,
+      ocr: {
+        version: 2 as const, ocrRevision: 0, editedAt: null,
+        pages: [{ pageIndex: 0, text: "原文。", readable: true, warnings: [] }],
+        paragraphs: [{
+          id: "paragraph-1", paragraphIndex: 0, text: "原文。",
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.2 }],
+        }],
+      },
+      images: [{
+        id: 1, position: 0, originalName: "a.jpg", mimeType: "image/jpeg",
+        width: 1000, height: 1500, rotation: 0 as const, crop: null,
+      }],
+    };
+    expect(exportEligibility(paragraphReview)).toEqual({ eligible: true });
+    expect(exportEligibility({ ...paragraphReview, teacherReviewedAt: null })).toMatchObject({ eligible: false });
+    expect(exportEligibility({ ...paragraphReview, report: null })).toMatchObject({ eligible: false });
   });
 
   it("只把已复核且未导出的记录归入已复核状态", () => {

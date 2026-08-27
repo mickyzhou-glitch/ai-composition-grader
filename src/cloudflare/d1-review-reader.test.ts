@@ -199,7 +199,27 @@ describe("D1ReviewReader", () => {
       { id: "ready-1", revision: 3 },
       { id: "not-reviewed", revision: 2 },
     ])).resolves.toBe(false);
-    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("teacher_reviewed_at IS NOT NULL"));
-    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("report_ocr_revision"));
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("owner_id = ?"));
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining("ocr_checkpoint"));
+  });
+
+  it("parses report and OCR and requires every requested entry to pass the shared gate", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        all: vi.fn().mockResolvedValue(query.includes("FROM review_images")
+          ? { results: [{ position: 0, width: 1000, height: 1500 }] }
+          : { results: [{
+              id: "ready-1", revision: 3, report: paragraphReport,
+              image_revision: 3, ocr_checkpoint: checkpointV2, report_ocr_revision: 1,
+              teacher_reviewed_at: Date.parse("2026-08-27T09:00:00.000Z"),
+            }] }),
+      })),
+    }));
+
+    await expect(new D1ReviewReader({ prepare } as unknown as D1Database).checkExportable(
+      "teacher-1",
+      [{ id: "ready-1", revision: 3 }],
+    )).resolves.toBe(true);
+    expect(prepare).toHaveBeenCalledTimes(2);
   });
 });

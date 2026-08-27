@@ -1,7 +1,9 @@
 import { z } from "zod";
 
+import { deliveryReadiness } from "../delivery/readiness";
 import { annotationSchema, assignmentConfigSchema, evaluationReportSchema, studentNameSchema } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
+import { ocrCheckpointSchema } from "../ocr/contracts";
 
 export class D1ReviewWriter {
   constructor(private readonly database: D1Database) {}
@@ -157,12 +159,60 @@ export class D1ReviewWriter {
   }
 
   async markExported(ownerId: string, reviewId: string): Promise<boolean> {
+    const current = await this.database.prepare(`
+      SELECT revision, report, image_revision, ocr_checkpoint, report_ocr_revision, teacher_reviewed_at
+      FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+    `).bind(reviewId, ownerId).first<{
+      revision: number;
+      report: string | null;
+      image_revision: number;
+      ocr_checkpoint: string | null;
+      report_ocr_revision: number | null;
+      teacher_reviewed_at: number | null;
+    }>();
+    if (!current) return false;
+    try {
+      const report = current.report === null ? null : JSON.parse(current.report);
+      const parsedCheckpoint = current.ocr_checkpoint === null
+        ? null
+        : ocrCheckpointSchema.parse(JSON.parse(current.ocr_checkpoint));
+      const checkpoint = parsedCheckpoint?.sourceRevision === current.image_revision
+        ? parsedCheckpoint
+        : null;
+      const { results: images = [] } = await this.database.prepare(`
+        SELECT position, width, height FROM review_images
+        WHERE review_id = ? AND EXISTS (
+          SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+        ) ORDER BY position, id
+      `).bind(reviewId, reviewId, ownerId).all<{
+        position: number;
+        width: number;
+        height: number;
+      }>();
+      const readiness = deliveryReadiness({
+        report,
+        teacherReviewedAt: current.teacher_reviewed_at === null
+          ? null
+          : new Date(current.teacher_reviewed_at),
+        reportStale: report !== null && (
+          checkpoint === null
+          || current.report_ocr_revision !== checkpoint.ocrRevision
+        ),
+        reportOcrRevision: current.report_ocr_revision,
+        ocr: checkpoint,
+        images,
+      });
+      if (!readiness.ready) return false;
+    } catch {
+      return false;
+    }
     const updated = await this.database.prepare(`
       UPDATE reviews SET status = 'exported', updated_at = ?
-      WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND report IS NOT NULL
-        AND teacher_reviewed_at IS NOT NULL
-        AND status IN ('ready_for_review', 'exported')
-    `).bind(Date.now(), reviewId, ownerId).run();
+      WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
+        AND teacher_reviewed_at IS NOT NULL AND report IS NOT NULL
+        AND json_extract(ocr_checkpoint, '$.version') = 2
+        AND report_ocr_revision = json_extract(ocr_checkpoint, '$.ocrRevision')
+    `).bind(Date.now(), reviewId, ownerId, current.revision).run();
     return updated.meta.changes > 0;
   }
 

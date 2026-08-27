@@ -567,6 +567,47 @@ describe("review route handlers", () => {
       ok: true,
       data: { id: "review-1", revision: 2, teacherReviewedAt: expect.any(String) },
     });
+    const checkpoint = {
+      version: 2, sourceRevision: 0, ocrRevision: 0, editedAt: null,
+      pages: [{
+        pageIndex: 0, text: "原文。", readable: true, warnings: [],
+        blocks: [{ text: "原文。", x: 0.1, y: 0.2, width: 0.5, height: 0.2 }],
+      }],
+      paragraphs: [{
+        id: "paragraph-1", paragraphIndex: 0, text: "原文。",
+        segments: [{ pageIndex: 0, text: "原文。", x: 0.1, y: 0.2, width: 0.5, height: 0.2 }],
+      }],
+    };
+    const paragraphReport = {
+      version: 2,
+      themeFit: report.themeFit,
+      themeReason: report.themeReason,
+      personalizedComment: report.personalizedComment,
+      painPoints: report.painPoints,
+      commonIssues: report.commonIssues,
+      revisionSuggestions: report.revisionSuggestions,
+      grade: report.grade,
+      diagnostics: report.diagnostics,
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        suggestions: [{ problem: "保留", advice: "保留", example: "自然。" }],
+        revisedText: "原文。",
+      }],
+      parentFeedbacks: [],
+    };
+    sqlite.prepare(`
+      INSERT INTO review_images (
+        review_id, page_index, path, position, original_name, mime_type,
+        original_path, annotation_path, ai_path, width, height, rotation, crop, created_at
+      ) VALUES (?, 0, ?, 0, ?, 'image/jpeg', ?, ?, ?, 1000, 1500, 0, NULL, ?)
+    `).run(
+      "review-1", "images/page-ai.jpg", "page.jpg", "images/page-original.jpg",
+      "images/page-annotation.jpg", "images/page-ai.jpg", Date.now(),
+    );
+    sqlite.prepare(`
+      UPDATE reviews SET report = ?, ocr_checkpoint = ?, report_ocr_revision = 0
+      WHERE id = ? AND owner_id = ?
+    `).run(JSON.stringify(paragraphReport), JSON.stringify(checkpoint), "review-1", OWNER_ID);
     const eligible = await exportCheck.POST(jsonRequest("http://localhost/api/reviews/export-check", "POST", {
       reviews: [{ id: "review-1", revision: 2 }],
     }));

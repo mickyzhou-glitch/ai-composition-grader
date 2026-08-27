@@ -10,6 +10,7 @@ import type {
   EvaluationReport,
 } from "../domain/contracts";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
+import { createOcrCheckpointV2 } from "../ocr/contracts";
 import { initializeSchema } from "./init";
 import {
   AnalysisConflictError,
@@ -135,6 +136,44 @@ describe("ReviewRepository", () => {
     });
   });
 
+  function makeParagraphDeliveryExportable(id: string) {
+    let current = repository.getById(OWNER_ID, id)!;
+    if (current.images.length === 0) {
+      current = repository.replaceImages(OWNER_ID, id, current.revision, [{
+        position: 0,
+        originalName: "第一页.jpg",
+        mimeType: "image/jpeg",
+        originalPath: "images/page-1-original.jpg",
+        annotationPath: "images/page-1-annotation.jpg",
+        aiPath: "images/page-1-ai.jpg",
+        width: 1200,
+        height: 1600,
+        rotation: 0,
+        crop: null,
+      }]);
+    }
+    const imageRevision = (sqlite.prepare("SELECT image_revision FROM reviews WHERE id = ?")
+      .get(id) as { image_revision: number }).image_revision;
+    const checkpoint = createOcrCheckpointV2({
+      sourceRevision: imageRevision,
+      pages: recognizedOcr.pages,
+      paragraphs: recognizedOcr.paragraphs,
+    });
+    sqlite.prepare(`
+      UPDATE reviews SET report = ?, ocr_checkpoint = ?, report_ocr_revision = ?,
+        teacher_reviewed_at = ?, status = 'ready_for_review'
+      WHERE id = ? AND owner_id = ?
+    `).run(
+      JSON.stringify(paragraphReport),
+      JSON.stringify(checkpoint),
+      checkpoint.ocrRevision,
+      Date.parse("2026-08-27T09:00:00.000Z"),
+      id,
+      OWNER_ID,
+    );
+    return repository.getById(OWNER_ID, id)!;
+  }
+
   afterEach(() => sqlite.close());
 
   it("创建并按 id 读取强类型配置和图片", () => {
@@ -254,6 +293,27 @@ describe("ReviewRepository", () => {
     });
     expect(saved.teacherReviewedAt).toBeInstanceOf(Date);
     expect(repository.listTeacherReviewQueue(OWNER_ID)).toEqual([]);
+  });
+
+  it("导出预检逐条复用逐段门禁并拒绝旧报告或不完整批次", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = makeParagraphDeliveryExportable("review-1");
+
+    expect(repository.checkTeacherReviewedForExport(OWNER_ID, [{
+      id: "review-1",
+      revision: ready.revision,
+    }])).toBe(true);
+    expect(repository.checkTeacherReviewedForExport(OWNER_ID, [
+      { id: "review-1", revision: ready.revision },
+      { id: "missing", revision: 0 },
+    ])).toBe(false);
+
+    sqlite.prepare("UPDATE reviews SET report = ? WHERE id = ? AND owner_id = ?")
+      .run(JSON.stringify(report), "review-1", OWNER_ID);
+    expect(repository.checkTeacherReviewedForExport(OWNER_ID, [{
+      id: "review-1",
+      revision: ready.revision,
+    }])).toBe(false);
   });
 
   it("教师审核版本冲突时不保存修改也不标记审核", () => {
@@ -806,7 +866,7 @@ describe("ReviewRepository", () => {
 
   it("导出 PDF 原子绑定内容 revision 并将状态置为 exported", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
-    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const ready = makeParagraphDeliveryExportable("review-1");
 
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "作文批改-为自己喝彩-20260721-1405.pdf",
@@ -826,7 +886,7 @@ describe("ReviewRepository", () => {
 
   it("报告或批注改动会递增 revision、清理 PDF 元数据并回到待复核", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
-    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const ready = makeParagraphDeliveryExportable("review-1");
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old.pdf",
       pdfPath: "pdf/old.pdf",
@@ -866,7 +926,7 @@ describe("ReviewRepository", () => {
 
   it("配置或图片改动清理 PDF 元数据并回到 draft", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
-    const ready = repository.updateReport(OWNER_ID, "review-1", report);
+    const ready = makeParagraphDeliveryExportable("review-1");
     const exported = repository.markExported(OWNER_ID, "review-1", ready.revision, {
       pdfFilename: "old.pdf",
       pdfPath: "pdf/old.pdf",
@@ -887,10 +947,11 @@ describe("ReviewRepository", () => {
     });
 
     repository.updateReport(OWNER_ID, "review-1", report);
+    const secondReady = makeParagraphDeliveryExportable("review-1");
     const secondExport = repository.markExported(
       OWNER_ID,
       "review-1",
-      repository.getById(OWNER_ID, "review-1")!.revision,
+      secondReady.revision,
       {
         pdfFilename: "second.pdf",
         pdfPath: "pdf/second.pdf",

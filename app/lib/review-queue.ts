@@ -1,4 +1,5 @@
 import type { ReviewStatus } from "@/src/domain/contracts";
+import { deliveryReadiness } from "@/src/delivery/readiness";
 import type { ReviewView } from "./types";
 
 export type ReviewDisplayStatus = ReviewStatus | "reviewed";
@@ -33,11 +34,11 @@ export function reviewDisplayStatus(review: ReviewLifecycleFields): ReviewDispla
   return isReviewedPendingExport(review) ? "reviewed" : review.status;
 }
 
-export function exportEligibility(review: {
-  report: unknown | null;
-  teacherReviewedAt: string | null;
-}): { eligible: true } | { eligible: false; reason: string } {
-  if (!review.report) return { eligible: false, reason: "批改报告尚未完成" };
-  if (!review.teacherReviewedAt) return { eligible: false, reason: "尚未经过老师审核" };
-  return { eligible: true };
+export function exportEligibility(
+  review: Pick<ReviewView, "report" | "teacherReviewedAt" | "reportStale" | "ocr" | "images">,
+): { eligible: true } | { eligible: false; reason: string } {
+  const readiness = deliveryReadiness(review);
+  return readiness.ready
+    ? { eligible: true }
+    : { eligible: false, reason: readiness.message };
 }
