@@ -12,8 +12,6 @@ import {
   type Annotation,
   type EvaluationReport,
   type LegacyEvaluationReport,
-  type ParagraphEvaluationReport,
-  type ParentFeedback,
 } from "@/src/domain/contracts";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -87,20 +85,6 @@ function reportValidationMessage(report: EvaluationReport): string | null {
   if (result.success) return null;
   return validationPathMessage(result.error.issues[0]?.path ?? [])
     ?? "复核内容有未填写或格式不正确的项目，请检查后再保存";
-}
-
-function paragraphParentFeedbacks(
-  feedbacks: ParentFeedback[],
-): ParagraphEvaluationReport["parentFeedbacks"] | null {
-  if (feedbacks.length === 0) return [];
-  const [warm, professional, concise] = feedbacks;
-  if (
-    feedbacks.length !== 3
-    || warm?.style !== "warm"
-    || professional?.style !== "professional"
-    || concise?.style !== "concise"
-  ) return null;
-  return [warm, professional, concise];
 }
 
 function saveErrorMessage(error: unknown): string {
@@ -345,8 +329,10 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     () => review?.images.find(({ position }) => position === activePage) ?? review?.images[activePage],
     [activePage, review?.images],
   );
+  const editableLegacyReport = report !== null && isLegacyEvaluationReport(report);
 
   function changeAnnotations(next: Annotation[]) {
+    if (report && !isLegacyEvaluationReport(report)) return;
     if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     invalidateLoad();
     setAnnotations(next);
@@ -363,6 +349,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   }
 
   function changeStudentName(next: string) {
+    if (report && !isLegacyEvaluationReport(report)) return;
     if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     invalidateLoad();
     setStudentName(next);
@@ -408,7 +395,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   }
 
   async function rewriteFeedback(section: FeedbackSection) {
-    if (!review || !report || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    if (!review || !report || !isLegacyEvaluationReport(report) || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     setBusy("rewrite-feedback");
     setRewritingFeedbackSection(section);
     setError("");
@@ -462,6 +449,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
 
   async function save() {
     if (!report || !review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    if (!isLegacyEvaluationReport(report)) {
+      setError("逐段批改报告请使用逐段复核界面，旧版复核页暂不支持保存。");
+      setNotice("");
+      return;
+    }
     const validationMessage = reportValidationMessage(report);
     if (validationMessage) {
       setError(validationMessage);
@@ -647,14 +639,14 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
                 maxLength={50}
                 placeholder="请输入学生姓名"
                 value={studentName}
-                disabled={busy !== null || analysisActive}
+                disabled={busy !== null || analysisActive || !editableLegacyReport}
                 onChange={(event) => changeStudentName(event.target.value)}
               />
             </label>
             <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
           </div>
           <div className="review-actions">
-            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
+            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive || Boolean(report && !editableLegacyReport)} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>重新分析</AsyncButton>
             {review.status !== "needs_better_images" ? replacementControl() : null}
             {report ? (
@@ -662,11 +654,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
                 className="button button--quiet"
                 busy={busy === "export"}
                 busyLabel="正在生成 PDF…"
-                disabled={busy !== null || analysisActive}
+                disabled={busy !== null || analysisActive || Boolean(report && !editableLegacyReport)}
                 onClick={() => void exportPdf()}
               >{review.hasPdf ? "下载 PDF" : "导出 PDF"}</AsyncButton>
             ) : null}
-            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
+            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!editableLegacyReport || !dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
           </div>
         </header>
         {error ? <ErrorBanner
@@ -695,14 +687,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             <ParentFeedbackEditor
               feedbacks={report.parentFeedbacks ?? []}
               savedFeedbacks={review.report?.parentFeedbacks ?? []}
-              disabled={busy !== null || analysisActive}
+              disabled={busy !== null || analysisActive || !editableLegacyReport}
               onChange={(parentFeedbacks) => {
-                if (isLegacyEvaluationReport(report)) {
+                if (editableLegacyReport && isLegacyEvaluationReport(report)) {
                   changeReport({ ...report, parentFeedbacks });
-                  return;
                 }
-                const nextFeedbacks = paragraphParentFeedbacks(parentFeedbacks);
-                if (nextFeedbacks) changeReport({ ...report, parentFeedbacks: nextFeedbacks });
               }}
               onCopySuccess={() => {
                 setError("");
@@ -717,7 +706,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           <div className="review-grid" role="region" aria-label="作文复核工作区">
           <div className="photo-pane">
             {review.images.length > 1 ? <div className="page-tabs" role="tablist" aria-label="作文页码">{review.images.map((image, index) => <button role="tab" aria-selected={activePage === index} key={image.id} onClick={() => setActivePage(index)}>第 {index + 1} 页</button>)}</div> : null}
-            {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
+            {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} disabled={!editableLegacyReport} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
             {report && isLegacyEvaluationReport(report) ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} expectedSampleParagraphCount={expectedSampleParagraphCount(review.config)} /> : report ? <p className="muted">逐段批改报告暂不支持旧版复核界面</p> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}

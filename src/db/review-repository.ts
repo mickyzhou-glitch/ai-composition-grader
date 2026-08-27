@@ -5,6 +5,7 @@ import { ZodError } from "zod";
 import {
   annotationSchema,
   assignmentConfigSchema,
+  evaluationReportSchema,
   reviewStatusSchema,
   studentNameSchema,
   type Annotation,
@@ -385,9 +386,13 @@ export class ReviewRepository {
     }
     if (storedReport !== null) {
       try {
-        report = validateReport(storedReport, {
-          templateType: config.templateType,
-        });
+        const parsedReport = evaluationReportSchema.parse(storedReport);
+        // Coverage against the current OCR checkpoint is enforced on write.
+        // A detail read may legitimately happen before that checkpoint is
+        // hydrated, so keep a structurally valid v2 report readable here.
+        report = "version" in parsedReport
+          ? parsedReport
+          : validateReport(parsedReport, { templateType: config.templateType });
       } catch {
         throw new CorruptReviewDataError(id, "report");
       }

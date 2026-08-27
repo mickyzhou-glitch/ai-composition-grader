@@ -32,10 +32,11 @@ interface PhotoAnnotationEditorProps {
   imageUrl: string;
   pageIndex: number;
   annotations: Annotation[];
+  disabled?: boolean;
   onChange: (annotations: Annotation[]) => void;
 }
 
-export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChange }: PhotoAnnotationEditorProps) {
+export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, disabled = false, onChange }: PhotoAnnotationEditorProps) {
   const draggingPointerId = useRef<number | null>(null);
   const pageAnnotations = annotations
     .map((annotation, index) => ({ annotation, index }))
@@ -43,6 +44,7 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
     .sort((left, right) => left.annotation.y - right.annotation.y);
 
   function replace(index: number, change: Partial<Annotation>) {
+    if (disabled) return;
     onChange(annotations.map((annotation, current) => current === index ? { ...annotation, ...change } : annotation));
   }
 
@@ -58,11 +60,13 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
   }
 
   function add(event: MouseEvent<HTMLDivElement>) {
+    if (disabled) return;
     if ((event.target as Element).closest("button")) return;
     addAt(normalizedPoint(event, event.currentTarget.getBoundingClientRect()));
   }
 
   function addByKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (disabled) return;
     if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) {
       return;
     }
@@ -71,11 +75,13 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
   }
 
   function startDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (disabled) return;
     draggingPointerId.current = event.pointerId;
     event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
   function drag(event: ReactPointerEvent<HTMLButtonElement>, index: number) {
+    if (disabled) return;
     if (draggingPointerId.current !== event.pointerId) return;
     const canvas = event.currentTarget.closest(".annotation-canvas") as HTMLElement | null;
     if (canvas) replace(index, normalizedPoint(event, canvas.getBoundingClientRect()));
@@ -86,6 +92,7 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
   }
 
   function nudge(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (disabled) return;
     const shifts: Record<string, Partial<Pick<Annotation, "x" | "y">>> = {
       ArrowLeft: { x: -0.01 },
       ArrowRight: { x: 0.01 },
@@ -104,7 +111,7 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
 
   return (
     <div className="annotation-workspace">
-      <div className="annotation-canvas" aria-label={`第 ${pageIndex + 1} 页作文批注画布`} tabIndex={0} onClick={add} onKeyDown={addByKeyboard}>
+      <div className="annotation-canvas" aria-label={`第 ${pageIndex + 1} 页作文批注画布`} aria-disabled={disabled} tabIndex={disabled ? -1 : 0} onClick={add} onKeyDown={addByKeyboard}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt={`第 ${pageIndex + 1} 页作文`} />
         <svg className="annotation-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -119,6 +126,7 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
             className={`annotation-marker ${annotation.isHighlight ? "annotation-marker--highlight" : ""}`}
             style={{ left: `${annotation.x * 100}%`, top: `${annotation.y * 100}%` }}
             aria-label={`拖动批注 ${markerIndex + 1}`}
+            disabled={disabled}
             onPointerDown={startDrag}
             onPointerMove={(event) => drag(event, index)}
             onPointerUp={stopDrag}
@@ -135,13 +143,13 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, onChan
           <article className={`annotation-card ${annotation.isHighlight ? "annotation-card--highlight" : ""}`} key={`${index}-card`}>
             <div className="annotation-card-heading"><span className="annotation-number">{cardIndex + 1}</span><b>{annotation.isHighlight ? "亮点摘录" : "红批"}</b><small>纵向 {Math.round(annotation.y * 100)}%</small></div>
             <div className="annotation-fields">
-              <label>类别<select aria-label={`批注类别 ${cardIndex + 1}`} value={annotation.category} onChange={(event) => replace(index, { category: event.target.value as Annotation["category"] })}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-              <label>原文锚点<input aria-label={`原文锚点 ${cardIndex + 1}`} value={annotation.anchorText} onChange={(event) => replace(index, { anchorText: event.target.value })} /></label>
-              <label className="wide">批注内容<textarea aria-label={`批注内容 ${cardIndex + 1}`} value={annotation.comment} onChange={(event) => replace(index, { comment: event.target.value })} /></label>
+              <label>类别<select aria-label={`批注类别 ${cardIndex + 1}`} disabled={disabled} value={annotation.category} onChange={(event) => replace(index, { category: event.target.value as Annotation["category"] })}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label>原文锚点<input aria-label={`原文锚点 ${cardIndex + 1}`} disabled={disabled} value={annotation.anchorText} onChange={(event) => replace(index, { anchorText: event.target.value })} /></label>
+              <label className="wide">批注内容<textarea aria-label={`批注内容 ${cardIndex + 1}`} disabled={disabled} value={annotation.comment} onChange={(event) => replace(index, { comment: event.target.value })} /></label>
             </div>
             <div className="annotation-card-actions">
-              <label className="highlight-toggle"><input aria-label={`标记为亮点 ${cardIndex + 1}`} type="checkbox" checked={annotation.isHighlight} onChange={(event) => replace(index, { isHighlight: event.target.checked, category: event.target.checked ? "highlight" : annotation.category === "highlight" ? "expression" : annotation.category })} />设为亮点</label>
-              <button type="button" className="text-button danger-text" aria-label={`删除批注 ${cardIndex + 1}`} onClick={() => onChange(annotations.filter((_, current) => current !== index))}>删除</button>
+              <label className="highlight-toggle"><input aria-label={`标记为亮点 ${cardIndex + 1}`} disabled={disabled} type="checkbox" checked={annotation.isHighlight} onChange={(event) => replace(index, { isHighlight: event.target.checked, category: event.target.checked ? "highlight" : annotation.category === "highlight" ? "expression" : annotation.category })} />设为亮点</label>
+              <button type="button" className="text-button danger-text" disabled={disabled} aria-label={`删除批注 ${cardIndex + 1}`} onClick={() => onChange(annotations.filter((_, current) => current !== index))}>删除</button>
             </div>
           </article>
         ))}

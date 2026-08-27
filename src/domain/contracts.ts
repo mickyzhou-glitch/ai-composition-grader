@@ -252,9 +252,9 @@ export function isParagraphEvaluationReport(
 }
 
 export function isLegacyEvaluationReport(
-  report: EvaluationReport,
+  report: unknown,
 ): report is LegacyEvaluationReport {
-  return "sampleParagraphs" in report;
+  return typeof report === "object" && report !== null && "sampleParagraphs" in report;
 }
 
 /**
