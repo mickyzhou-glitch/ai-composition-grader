@@ -975,7 +975,7 @@ describe("review route handlers", () => {
     expect(analysisJobService.enqueue).not.toHaveBeenCalled();
   });
 
-  it("content_only 在没有当前 OCR 时同步返回冲突且不创建任务", async () => {
+  it("content_only 在没有 OCR v2 时同步返回升级冲突且不创建任务", async () => {
     repository.create(OWNER_ID, {
       id: "review-1",
       config,
@@ -1008,7 +1008,7 @@ describe("review route handlers", () => {
     ), { params: Promise.resolve({ id: "review-1" }) });
 
     expect(response.status).toBe(409);
-    expect(await json(response)).toMatchObject({ error: { code: "OCR_NOT_FOUND" } });
+    expect(await json(response)).toMatchObject({ error: { code: "OCR_V2_REQUIRED" } });
     expect(jobs.findLatestByReview(OWNER_ID, "review-1")).toBeNull();
   });
 });

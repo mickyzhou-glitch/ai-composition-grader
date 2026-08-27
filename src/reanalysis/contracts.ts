@@ -71,7 +71,7 @@ export type ReanalysisSkipCode = keyof typeof REANALYSIS_SKIP_REASONS;
 export interface PublicAnalysisJobView {
   id: string;
   reviewId: string;
-  mode: "content_only";
+  mode: "full" | "content_only";
   status: "queued" | "running" | "succeeded" | "failed" | "canceled";
   progressStage:
     | "queued"

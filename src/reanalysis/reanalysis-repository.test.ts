@@ -49,6 +49,26 @@ const checkpoint = {
   }],
 };
 
+const paragraphCheckpoint = {
+  version: 2 as const,
+  sourceRevision: 2,
+  ocrRevision: 5,
+  editedAt: null,
+  pages: [{
+    pageIndex: 0,
+    text: "作文原文",
+    readable: true,
+    warnings: [],
+    blocks: [{ text: "作文原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+  }],
+  paragraphs: [{
+    id: "paragraph-1",
+    paragraphIndex: 0,
+    text: "作文原文",
+    segments: [{ pageIndex: 0, text: "作文原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+  }],
+};
+
 const report = {
   themeFit: "fits" as const,
   themeReason: "紧扣主题。",
@@ -68,6 +88,24 @@ const report = {
     text: "我为自己鼓掌。",
     suggestion: "补充细节。",
   })),
+  parentFeedbacks: [],
+};
+
+const paragraphReport = {
+  version: 2 as const,
+  themeFit: "fits" as const,
+  themeReason: "紧扣主题。",
+  personalizedComment: "细节真实。",
+  painPoints: ["结尾略快。"],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "A-" as const,
+  diagnostics: report.diagnostics,
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "保留", advice: "保留原句。", example: "作文原文" }],
+    revisedText: "作文原文",
+  }],
   parentFeedbacks: [],
 };
 
@@ -226,7 +264,7 @@ describe("ReanalysisRepository requestRevision", () => {
     };
   }
 
-  it("在同一事务中入队 content_only 任务并重置审核与 PDF 状态", () => {
+  it("旧报告与 OCR v1 在同一事务中入队 full 升级任务", () => {
     opened.sqlite.prepare("UPDATE reviews SET report = ? WHERE id = 'review-1'")
       .run(JSON.stringify(report));
     opened.sqlite.prepare(`
@@ -242,7 +280,7 @@ describe("ReanalysisRepository requestRevision", () => {
       job: {
         id: "reanalysis-job-1",
         reviewId: "review-1",
-        mode: "content_only",
+        mode: "full",
         status: "queued",
         progressStage: "queued",
         message: null,
@@ -288,13 +326,24 @@ describe("ReanalysisRepository requestRevision", () => {
       SELECT mode, status, teacher_guidance AS teacherGuidance
       FROM analysis_jobs WHERE id = ?
     `).get(result.job.id)).toEqual({
-      mode: "content_only",
+      mode: "full",
       status: "queued",
       teacherGuidance: formatRevisionTeacherGuidance(
         revisionInput().reason,
         revisionInput().changeRequest,
       ),
     });
+  });
+
+  it("逐段报告与当前 OCR v2 退回时仍排 content_only", () => {
+    opened.sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ?, report = ? WHERE id = ?")
+      .run(JSON.stringify(paragraphCheckpoint), JSON.stringify(paragraphReport), "review-1");
+
+    const result = service.requestRevision(OWNER, "review-1", revisionInput());
+
+    expect(result.job).toMatchObject({ mode: "content_only", status: "queued" });
+    expect(opened.sqlite.prepare("SELECT mode FROM analysis_jobs WHERE id = ?")
+      .get(result.job.id)).toEqual({ mode: "content_only" });
   });
 
   it("PDF cleanup marker 被 CAS 确认前任务不可领取，确认后才进入分析", () => {
@@ -385,7 +434,7 @@ describe("ReanalysisRepository requestRevision", () => {
     expect(prepare).toHaveBeenCalledWith(
       OWNER,
       "review-1",
-      "content_only",
+      "full",
       expect.objectContaining({ id: queued.job.id, attempt: 1 }),
       true,
     );
@@ -657,6 +706,8 @@ describe("ReanalysisRepository requestRevision", () => {
       new ReviewFileStore(path.join(temporaryDirectory, "users")),
       { analyze },
     );
+    await new ReviewFileStore(path.join(temporaryDirectory, "users"))
+      .writeFile(OWNER, "review-1", "images", "ai.jpg", "image");
     const worker = new AnalysisWorker(jobs, {
       prepare: (ownerId, reviewId, mode, claim, prebound) => {
         expect(prebound).toBe(true);
@@ -723,6 +774,8 @@ describe("ReanalysisRepository requestRevision", () => {
       new ReviewFileStore(path.join(temporaryDirectory, "users")),
       { analyze: async () => { throw new Error("AI must not run during prepare"); } },
     );
+    await new ReviewFileStore(path.join(temporaryDirectory, "users"))
+      .writeFile(OWNER, "review-1", "images", "ai.jpg", "image");
     const before = opened.sqlite.prepare(
       "SELECT status, revision, analysis_run_id AS analysisRunId, updated_at AS updatedAt FROM reviews WHERE id = ?",
     ).get("review-1");
@@ -730,7 +783,7 @@ describe("ReanalysisRepository requestRevision", () => {
     await expect(reviewService.prepareQueuedAnalysis(
       OWNER,
       "review-1",
-      "content_only",
+      "full",
       firstClaim,
     )).rejects.toMatchObject({ code: "JOB_CLAIM_LOST" });
     expect(opened.sqlite.prepare(
@@ -740,7 +793,7 @@ describe("ReanalysisRepository requestRevision", () => {
     await expect(reviewService.prepareQueuedAnalysis(
       OWNER,
       "review-1",
-      "content_only",
+      "full",
       secondClaim,
     )).resolves.toMatchObject({
       token: { runId: queued.job.id, revision: 3 },
@@ -1142,7 +1195,7 @@ describe("ReanalysisRepository requestRevision", () => {
       SELECT mode, status, message, teacher_guidance AS teacherGuidance
       FROM analysis_jobs WHERE id = 'reanalysis-job-1'
     `).get() as { mode: string; status: string; message: string | null; teacherGuidance: string | null };
-    expect(job).toMatchObject({ mode: "content_only", status: "queued", teacherGuidance: null });
+    expect(job).toMatchObject({ mode: "full", status: "queued", teacherGuidance: null });
     expect(parseAnalysisJobMetadata(job.message)).toEqual({
       kind: "reanalysis",
       prebound: true,

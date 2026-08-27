@@ -2,6 +2,7 @@ import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
 import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { AnalysisToken } from "../db/review-repository";
+import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
 import type { OcrCheckpoint, OcrCheckpointV2 } from "../ocr/contracts";
 import { ReviewPreparationError } from "../services/review-service";
@@ -67,7 +68,7 @@ export interface AnalysisExecutionService {
   ): Promise<OcrCheckpointV2>;
   analyzeText?(input: {
     config: AssignmentConfig;
-    pages: Array<{ pageIndex: number; text: string }>;
+    paragraphs: Array<{ id: string; text: string }>;
     teacherGuidance?: string;
     studentName?: string;
   }): Promise<CompositionReviewResult>;
@@ -118,6 +119,7 @@ function safeErrorCode(error: unknown): string {
       if (code === "AI_REQUEST_FAILED") return code;
       if (code === "IMAGES_REQUIRED") return code;
       if (code === "OCR_NOT_FOUND") return code;
+      if (code === "OCR_V2_REQUIRED") return code;
       if (code === "JOB_CLAIM_LOST") return code;
       if (code === "ANALYSIS_CONFLICT" || code === "REVISION_CONFLICT") return code;
       if (code === "REVIEW_NOT_FOUND" || code === "NOT_FOUND") return "REVIEW_UNAVAILABLE";
@@ -212,10 +214,9 @@ export class AnalysisWorker {
       let checkpoint = prepared.checkpoint ?? null;
       let envelope: AiReviewEnvelope;
       if (dualModel) {
+        const mode = analysisModeForCheckpoint(claim.mode, checkpoint);
+        if (mode === "full" && checkpoint?.version !== 2) checkpoint = null;
         if (!checkpoint) {
-          if (claim.mode === "content_only") {
-            throw Object.assign(new Error("OCR_NOT_FOUND"), { code: "OCR_NOT_FOUND" });
-          }
           if (prepared.imageRevision === undefined) throw new TypeError("imageRevision is required");
           const recognized = await this.execution.recognize!(prepared.imageDataUrls);
           this.assertClaimCurrent(claimLost, claim.id);
@@ -230,6 +231,9 @@ export class AnalysisWorker {
         } else {
           claim = this.jobs.updateProgress(claim, "saving_ocr");
         }
+        if (checkpoint.version !== 2) {
+          throw new TypeError("Full OCR analysis must produce an OCR v2 checkpoint");
+        }
         if (checkpoint.pages.some((page) => !page.readable)) {
           envelope = {
             readable: false,
@@ -240,7 +244,7 @@ export class AnalysisWorker {
           claim = this.jobs.updateProgress(claim, "generating_review");
           const result = await this.execution.analyzeText!({
             config: prepared.config,
-            pages: checkpoint.pages.map(({ pageIndex, text }) => ({ pageIndex, text })),
+            paragraphs: checkpoint.paragraphs.map(({ id, text }) => ({ id, text })),
             teacherGuidance: claim.teacherGuidance ?? undefined,
             studentName: prepared.studentName,
           });
@@ -248,7 +252,7 @@ export class AnalysisWorker {
             readable: true,
             pageWarnings: checkpoint.pages.flatMap(({ warnings }) => warnings),
             report: result.report,
-            annotations: mapAnnotationAnchors(checkpoint, result.annotationAnchors as never),
+            annotations: mapAnnotationAnchors(checkpoint, result.annotationAnchors),
           };
         }
       } else {

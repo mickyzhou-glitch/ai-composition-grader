@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
+import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema } from "../ocr/contracts";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import {
@@ -245,9 +246,14 @@ export class AnalysisJobRepository {
 
       if (mode === "content_only") {
         const checkpoint = ocrCheckpointSchema.safeParse(review.ocrCheckpoint);
-        if (!checkpoint.success || checkpoint.data.sourceRevision !== review.imageRevision) {
+        if (!checkpoint.success) {
+          analysisModeForCheckpoint(mode, null);
+          throw new TypeError("unreachable");
+        }
+        if (checkpoint.data.sourceRevision !== review.imageRevision) {
           throw new AnalysisJobOcrNotFoundError(reviewId);
         }
+        analysisModeForCheckpoint(mode, checkpoint.data);
       }
 
       const existing = this.findActive(transaction, ownerId, reviewId);

@@ -13,7 +13,7 @@ function toPublicJobView(job: AnalysisJobRecord): PublicAnalysisJobView {
   return {
     id: job.id,
     reviewId: job.reviewId,
-    mode: "content_only",
+    mode: job.mode,
     status: job.status,
     progressStage: job.progressStage,
     message: null,

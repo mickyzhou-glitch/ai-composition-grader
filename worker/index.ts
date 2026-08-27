@@ -668,7 +668,7 @@ export default {
           recognize: (imageUrls) => vision.recognize({ imageUrls }),
           saveRecognized: (ownerId, reviewId, sourceRevision, result) =>
             ocr.saveRecognized(ownerId, reviewId, sourceRevision, result),
-          analyzeText: (input) => content.analyzeText(input as never) as never,
+          analyzeText: (input) => content.analyzeText(input),
           updateStage: async (jobId, stage) => {
             const result = await env.DB.prepare(
               "UPDATE analysis_jobs SET progress_stage = ? WHERE id = ? AND status = 'running'",
@@ -689,7 +689,7 @@ export default {
           : error instanceof AiAdapterError
             ? `${error.code}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
           : error instanceof CloudAnalysisConflictError ? error.code
-          : error instanceof Error && ["AI_SETTINGS_INCOMPLETE", "OCR_NOT_FOUND"].includes(error.message) ? error.message : "AI_REQUEST_FAILED";
+          : error instanceof Error && ["AI_SETTINGS_INCOMPLETE", "OCR_NOT_FOUND", "OCR_V2_REQUIRED"].includes(error.message) ? error.message : "AI_REQUEST_FAILED";
         const now = Date.now();
         await env.DB.batch([
           env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),

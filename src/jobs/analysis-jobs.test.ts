@@ -5,6 +5,7 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { initializeSchema } from "../db/init";
+import type { ParagraphEvaluationReport } from "../domain/contracts";
 import {
   AnalysisJobCompletionClaimLostError,
   ReviewRepository,
@@ -66,6 +67,29 @@ const readyEnvelope = {
     })),
   },
   annotations: [],
+};
+
+const paragraphReport: ParagraphEvaluationReport = {
+  version: 2 as const,
+  themeFit: "fits" as const,
+  themeReason: "切题。",
+  personalizedComment: "细节真实。",
+  painPoints: ["结尾略快。"],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "A-" as const,
+  diagnostics: {
+    authenticityAndRelevance: { finding: "真实。", action: "保留。" },
+    materialAndDetails: { finding: "细节具体。", action: "补写心理。" },
+    structure: { finding: "完整。", action: "强化结尾。" },
+    language: { finding: "自然。", action: "精简长句。" },
+  },
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "保留", advice: "保留点题。", example: "我为自己鼓掌。" }],
+    revisedText: "我为自己鼓掌。",
+  }],
+  parentFeedbacks: [],
 };
 
 function addTeacher(sqlite: Database.Database, id: string): void {
@@ -154,11 +178,17 @@ describe("AnalysisJobService", () => {
     sqlite.prepare(`
       UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?
     `).run(JSON.stringify({
-      version: 1,
+      version: 2,
       sourceRevision: 0,
       ocrRevision: 1,
       editedAt: null,
       pages: [{ pageIndex: 0, text: "作文原文", readable: true, warnings: [], blocks: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "作文原文",
+        segments: [{ pageIndex: 0, text: "作文原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+      }],
     }), "review-a");
     service.enqueue(ownerA, "review-a", undefined, "content_only");
 
@@ -168,7 +198,6 @@ describe("AnalysisJobService", () => {
   });
 
   it.each([
-    ["没有 OCR", null],
     ["OCR 已落后于图片版本", JSON.stringify({
       version: 1,
       sourceRevision: 0,
@@ -185,6 +214,27 @@ describe("AnalysisJobService", () => {
       expect.objectContaining({ code: "OCR_NOT_FOUND", status: 409 }),
     );
     expect(repository.findLatestByReview(ownerA, "review-a")).toBeNull();
+  });
+
+  it("content_only 缺少 OCR 时返回 OCR_V2_REQUIRED", () => {
+    expect(() => service.enqueue(ownerA, "review-a", undefined, "content_only")).toThrow(
+      expect.objectContaining({ code: "OCR_V2_REQUIRED", status: 409 }),
+    );
+    expect(repository.findLatestByReview(ownerA, "review-a")).toBeNull();
+  });
+
+  it("content_only 在 OCR v1 当前时返回 OCR_V2_REQUIRED", () => {
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 1,
+      sourceRevision: 0,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "旧原文", readable: true, warnings: [], blocks: [] }],
+    }), "review-a");
+
+    expect(() => service.enqueue(ownerA, "review-a", undefined, "content_only")).toThrow(
+      expect.objectContaining({ code: "OCR_V2_REQUIRED", status: 409 }),
+    );
   });
 
   it("不同教师可以排队，但全局一次只领取一篇作文", () => {
@@ -635,7 +685,7 @@ describe("AnalysisJobService", () => {
       analyzeText: async (input: unknown) => {
         calls.push("content");
         contentInput = input;
-        return { report: readyEnvelope.report, annotationAnchors: [] };
+        return { report: paragraphReport, annotationAnchors: [] };
       },
       save: async () => calls.push("save-report"),
       fail: async () => { throw new Error("unreachable"); },
@@ -646,14 +696,15 @@ describe("AnalysisJobService", () => {
 
     expect(calls).toEqual(["vision", "save-ocr", "content", "save-report"]);
     expect(contentInput).toMatchObject({
-      pages: [{ pageIndex: 0, text: "我为自己鼓掌。" }],
+      paragraphs: [{ id: "paragraph-1", text: "我为自己鼓掌。" }],
     });
+    expect(contentInput).not.toHaveProperty("pages");
     expect(JSON.stringify(contentInput)).not.toContain("data:image");
   });
 
   it("本机 content_only 复用 OCR，不读取图片也不调用视觉模型", async () => {
     const checkpoint = {
-      version: 1 as const,
+      version: 2 as const,
       sourceRevision: 0,
       ocrRevision: 3,
       editedAt: "2026-07-21T00:00:00.000Z",
@@ -664,6 +715,19 @@ describe("AnalysisJobService", () => {
         warnings: [],
         blocks: [],
       }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "老师修正后的作文。",
+        segments: [{
+          pageIndex: 0,
+          text: "原始识别文字。",
+          x: 0.1,
+          y: 0.1,
+          width: 0.3,
+          height: 0.1,
+        }],
+      }],
     };
     sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?")
       .run(JSON.stringify(checkpoint), "review-a");
@@ -671,7 +735,7 @@ describe("AnalysisJobService", () => {
     const claimed = repository.claimNext()!;
     const recognize = vi.fn();
     const analyzeText = vi.fn(async () => ({
-      report: readyEnvelope.report as never,
+      report: paragraphReport,
       annotationAnchors: [],
     }));
     const worker = new AnalysisWorker({
@@ -703,7 +767,7 @@ describe("AnalysisJobService", () => {
     await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "succeeded" });
     expect(recognize).not.toHaveBeenCalled();
     expect(analyzeText).toHaveBeenCalledWith(expect.objectContaining({
-      pages: [{ pageIndex: 0, text: "老师修正后的作文。" }],
+      paragraphs: [{ id: "paragraph-1", text: "老师修正后的作文。" }],
     }));
   });
 

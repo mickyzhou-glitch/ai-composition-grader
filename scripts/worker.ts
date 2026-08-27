@@ -45,7 +45,7 @@ export async function runWorker(): Promise<void> {
     recognize: (imageDataUrls) => vision.recognize({ imageUrls: imageDataUrls }),
     saveOcr: (ownerId, reviewId, token, imageRevision, result) =>
       reviews.savePreparedOcr(ownerId, reviewId, token, imageRevision, result),
-    analyzeText: (input) => content.analyzeText(input as never) as never,
+    analyzeText: (input) => content.analyzeText(input),
     save: (ownerId, reviewId, token, envelope, claim, expectedOcrRevision) =>
       reviews.savePreparedAnalysisAndCompleteJob(
         ownerId,

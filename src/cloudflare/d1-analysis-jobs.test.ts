@@ -63,7 +63,19 @@ describe("D1AnalysisJobs", () => {
             id: "review-1",
             revision: 2,
             image_revision: 4,
-            ocr_checkpoint: JSON.stringify({ sourceRevision: 3, ocrRevision: 1 }),
+            ocr_checkpoint: JSON.stringify({
+              version: 2,
+              sourceRevision: 3,
+              ocrRevision: 1,
+              editedAt: null,
+              pages: [{ pageIndex: 0, text: "原文", readable: true, warnings: [], blocks: [] }],
+              paragraphs: [{
+                id: "paragraph-1",
+                paragraphIndex: 0,
+                text: "原文",
+                segments: [{ pageIndex: 0, text: "原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+              }],
+            }),
             expires_at: null,
             image_count: 1,
           }),
@@ -74,6 +86,52 @@ describe("D1AnalysisJobs", () => {
     await expect(new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
       mode: "content_only",
     })).rejects.toThrow("OCR_NOT_FOUND");
+  });
+
+  it("content_only without OCR returns OCR_V2_REQUIRED", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "review-1",
+            revision: 2,
+            image_revision: 4,
+            ocr_checkpoint: null,
+            image_count: 1,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
+      mode: "content_only",
+    })).rejects.toMatchObject({ code: "OCR_V2_REQUIRED", status: 409 });
+  });
+
+  it("content_only rejects a current OCR v1 checkpoint with OCR_V2_REQUIRED", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "review-1",
+            revision: 2,
+            image_revision: 4,
+            ocr_checkpoint: JSON.stringify({
+              version: 1,
+              sourceRevision: 4,
+              ocrRevision: 1,
+              editedAt: null,
+              pages: [{ pageIndex: 0, text: "旧原文", readable: true, warnings: [], blocks: [] }],
+            }),
+            image_count: 1,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
+      mode: "content_only",
+    })).rejects.toMatchObject({ code: "OCR_V2_REQUIRED", status: 409 });
   });
 
   it("stores the requested mode and exposes it in the public job view", async () => {
@@ -92,7 +150,19 @@ describe("D1AnalysisJobs", () => {
               id: "review-1",
               revision: 2,
               image_revision: 4,
-              ocr_checkpoint: JSON.stringify({ sourceRevision: 4, ocrRevision: 1 }),
+              ocr_checkpoint: JSON.stringify({
+                version: 2,
+                sourceRevision: 4,
+                ocrRevision: 1,
+                editedAt: null,
+                pages: [{ pageIndex: 0, text: "原文", readable: true, warnings: [], blocks: [] }],
+                paragraphs: [{
+                  id: "paragraph-1",
+                  paragraphIndex: 0,
+                  text: "原文",
+                  segments: [{ pageIndex: 0, text: "原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+                }],
+              }),
               expires_at: null,
               image_count: 1,
             };

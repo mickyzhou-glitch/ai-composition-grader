@@ -1,5 +1,9 @@
 import type { Annotation } from "../domain/contracts";
-import type { OcrCheckpoint, ReviewAnnotationAnchor } from "./contracts";
+import type {
+  OcrCheckpointV2,
+  OcrParagraphSegment,
+  ParagraphAnnotationAnchor,
+} from "./contracts";
 
 const MAX_MATCHED_BLOCKS = 4;
 
@@ -16,7 +20,7 @@ interface IndexedText {
   blockAt: number[];
 }
 
-function indexBlocks(blocks: OcrCheckpoint["pages"][number]["blocks"]): IndexedText {
+function indexBlocks(blocks: OcrCheckpointV2["pages"][number]["blocks"]): IndexedText {
   let text = "";
   const blockAt: number[] = [];
   blocks.forEach((block, blockIndex) => {
@@ -28,7 +32,7 @@ function indexBlocks(blocks: OcrCheckpoint["pages"][number]["blocks"]): IndexedT
 }
 
 function uniqueMatchStartBlock(
-  blocks: OcrCheckpoint["pages"][number]["blocks"],
+  blocks: OcrCheckpointV2["pages"][number]["blocks"],
   anchorText: string,
 ): number | null {
   const anchor = normalizeText(anchorText);
@@ -51,20 +55,52 @@ function uniqueMatchStartBlock(
   return matches.length === 1 ? matches[0] : null;
 }
 
+function matchCount(text: string, anchorText: string): number {
+  const source = normalizeText(text);
+  const anchor = normalizeText(anchorText);
+  if (!anchor) return 0;
+  let count = 0;
+  let offset = source.indexOf(anchor);
+  while (offset >= 0) {
+    count += 1;
+    offset = source.indexOf(anchor, offset + 1);
+  }
+  return count;
+}
+
+function uniqueMatchingSegment(
+  segments: OcrParagraphSegment[],
+  anchorText: string,
+): OcrParagraphSegment | null {
+  const matches = segments.flatMap((segment) => {
+    const count = matchCount(segment.text, anchorText);
+    return Array.from({ length: count }, () => segment);
+  });
+  return matches.length === 1 ? matches[0] : null;
+}
+
 export function mapAnnotationAnchors(
-  checkpoint: OcrCheckpoint,
-  anchors: ReviewAnnotationAnchor[],
+  checkpoint: OcrCheckpointV2,
+  anchors: ParagraphAnnotationAnchor[],
 ): Annotation[] {
   return anchors.flatMap((anchor) => {
-    const page = checkpoint.pages[anchor.pageIndex];
-    if (!page || page.pageIndex !== anchor.pageIndex) return [];
+    const paragraph = checkpoint.paragraphs.find(({ id }) => id === anchor.paragraphId);
+    if (!paragraph) return [];
+    const segment = uniqueMatchingSegment(paragraph.segments, anchor.anchorText);
+    if (!segment) return [];
+    const page = checkpoint.pages[segment.pageIndex];
+    if (!page || page.pageIndex !== segment.pageIndex) return [];
     const blockIndex = uniqueMatchStartBlock(page.blocks, anchor.anchorText);
     if (blockIndex === null) return [];
     const block = page.blocks[blockIndex];
     return [{
-      ...anchor,
+      pageIndex: segment.pageIndex,
       x: block.x,
       y: block.y,
+      category: anchor.category,
+      anchorText: anchor.anchorText,
+      comment: anchor.comment,
+      isHighlight: anchor.isHighlight,
     }];
   });
 }

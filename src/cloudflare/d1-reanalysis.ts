@@ -1,4 +1,9 @@
-import { assignmentConfigSchema } from "../domain/contracts";
+import {
+  assignmentConfigSchema,
+  isParagraphEvaluationReport,
+} from "../domain/contracts";
+import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mode";
+import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
 import {
   formatRevisionTeacherGuidance,
   normalizeAssignmentTitle,
@@ -27,9 +32,10 @@ interface ReviewRow {
   revision: number;
   image_revision: number;
   ocr_checkpoint: string | null;
+  report: string | null;
   deleting_at: number | null;
   image_count: number;
-  active_job?: number;
+  active_job?: number | boolean;
 }
 
 interface AssignmentRow {
@@ -95,14 +101,39 @@ function asIso(value: number | string): string {
   return new Date(asEpoch(value)).toISOString();
 }
 
-function hasCurrentOcr(checkpoint: string | null | undefined, imageRevision: number): boolean {
-  if (!checkpoint) return false;
+function currentOcr(
+  checkpoint: string | null | undefined,
+  imageRevision: number,
+): OcrCheckpoint | null {
+  if (!checkpoint) return null;
   try {
-    const parsed = JSON.parse(checkpoint) as { sourceRevision?: unknown };
-    return parsed !== null && typeof parsed === "object" && parsed.sourceRevision === imageRevision;
+    const parsed = ocrCheckpointSchema.safeParse(JSON.parse(checkpoint));
+    return parsed.success && parsed.data.sourceRevision === imageRevision ? parsed.data : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+function hasCurrentOcr(checkpoint: string | null | undefined, imageRevision: number): boolean {
+  return currentOcr(checkpoint, imageRevision) !== null;
+}
+
+function parsedReport(report: string | null): unknown {
+  if (!report) return null;
+  try {
+    return JSON.parse(report);
+  } catch {
+    return null;
+  }
+}
+
+function reanalysisMode(row: ReviewRow): AnalysisMode {
+  const checkpoint = currentOcr(row.ocr_checkpoint, row.image_revision);
+  if (!checkpoint) throw new D1ReanalysisError("OCR_NOT_CURRENT", publicReview(row));
+  const requested = checkpoint.version === 2 && isParagraphEvaluationReport(parsedReport(row.report))
+    ? "content_only"
+    : "full";
+  return analysisModeForCheckpoint(requested, checkpoint);
 }
 
 function configTitle(config: string): string {
@@ -119,7 +150,7 @@ function isAnalyzable(status: string): boolean {
 }
 
 function hasActiveJob(row: ReviewRow): boolean {
-  return row.active_job === 1 || (row.active_job as unknown) === true;
+  return row.active_job === 1 || row.active_job === true;
 }
 
 function isActiveJobConflict(error: unknown): boolean {
@@ -137,11 +168,12 @@ function queuedJob(
   id: string,
   reviewId: string,
   now: number,
+  mode: AnalysisMode,
 ): PublicAnalysisJobView {
   return {
     id,
     reviewId,
-    mode: "content_only",
+    mode,
     status: "queued",
     progressStage: "queued",
     message: null,
@@ -162,7 +194,8 @@ export class D1Reanalysis {
     const placeholders = inPlacePlaceholders(reviewIds);
     const reviewResult = await this.database.prepare(`
       SELECT reviews.id, reviews.status, reviews.student_name, reviews.config,
-        reviews.revision, reviews.image_revision, reviews.ocr_checkpoint, reviews.deleting_at,
+        reviews.revision, reviews.image_revision, reviews.ocr_checkpoint, reviews.report,
+        reviews.deleting_at,
         COUNT(review_images.id) AS image_count
       FROM reviews
       LEFT JOIN review_images ON review_images.review_id = reviews.id
@@ -246,7 +279,16 @@ export class D1Reanalysis {
     const jobId = crypto.randomUUID();
     const now = Date.now();
     const teacherGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
-    const statements = this.requestStatements(ownerId, reviewId, input.expectedRevision, jobId, now, teacherGuidance);
+    const mode = reanalysisMode(row!);
+    const statements = this.requestStatements(
+      ownerId,
+      reviewId,
+      input.expectedRevision,
+      jobId,
+      now,
+      teacherGuidance,
+      mode,
+    );
     let outcomes: D1Outcome[];
     try {
       outcomes = await this.database.batch(statements) as D1Outcome[];
@@ -258,7 +300,7 @@ export class D1Reanalysis {
       await this.assertRequestable(await this.readReview(ownerId, reviewId), input.expectedRevision);
       throw new D1ReanalysisError("REVISION_CONFLICT");
     }
-    return { newlyQueued: true, job: queuedJob(jobId, reviewId, now) };
+    return { newlyQueued: true, job: queuedJob(jobId, reviewId, now, mode) };
   }
 
   async commitBatch(
@@ -318,6 +360,7 @@ export class D1Reanalysis {
       assignmentConfigSchema.parse(JSON.parse(assignment.config));
     }
     const assignmentUpdatedAt = asEpoch(item.expectedAssignmentUpdatedAt);
+    const mode = reanalysisMode(row!);
     const jobId = crypto.randomUUID();
     const now = Date.now();
     const statements = this.commitStatements(
@@ -327,6 +370,7 @@ export class D1Reanalysis {
       assignmentUpdatedAt,
       jobId,
       now,
+      mode,
     );
     let outcomes: D1Outcome[];
     try {
@@ -344,7 +388,8 @@ export class D1Reanalysis {
   private async readReview(ownerId: string, reviewId: string): Promise<ReviewRow | null> {
     return this.database.prepare(`
       SELECT reviews.id, reviews.status, reviews.student_name, reviews.config,
-        reviews.revision, reviews.image_revision, reviews.ocr_checkpoint, reviews.deleting_at,
+        reviews.revision, reviews.image_revision, reviews.ocr_checkpoint, reviews.report,
+        reviews.deleting_at,
         (SELECT COUNT(*) FROM review_images WHERE review_images.review_id = reviews.id) AS image_count,
         EXISTS (
           SELECT 1 FROM analysis_jobs
@@ -399,6 +444,7 @@ export class D1Reanalysis {
     jobId: string,
     now: number,
     teacherGuidance: string,
+    mode: AnalysisMode,
   ): D1ReanalysisStatement[] {
     return [
       this.database.prepare(`
@@ -419,11 +465,11 @@ export class D1Reanalysis {
           id, review_id, owner_id, mode, status, attempt, available_at, lease_expires_at,
           progress_stage, error_code, message, teacher_guidance, created_at, started_at, finished_at
         )
-        SELECT ?, reviews.id, reviews.owner_id, 'content_only', 'queued', 0, ?, NULL,
+        SELECT ?, reviews.id, reviews.owner_id, ?, 'queued', 0, ?, NULL,
           'queued', NULL, NULL, ?, ?, NULL, NULL
         FROM reviews
         WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.analysis_run_id = ?
-      `).bind(jobId, now, teacherGuidance, now, reviewId, ownerId, jobId),
+      `).bind(jobId, mode, now, teacherGuidance, now, reviewId, ownerId, jobId),
     ];
   }
 
@@ -434,6 +480,7 @@ export class D1Reanalysis {
     assignmentUpdatedAt: number,
     jobId: string,
     now: number,
+    mode: AnalysisMode,
   ): D1ReanalysisStatement[] {
     return [
       this.database.prepare(`
@@ -481,11 +528,11 @@ export class D1Reanalysis {
           id, review_id, owner_id, mode, status, attempt, available_at, lease_expires_at,
           progress_stage, error_code, message, teacher_guidance, created_at, started_at, finished_at
         )
-        SELECT ?, reviews.id, reviews.owner_id, 'content_only', 'queued', 0, ?, NULL,
+        SELECT ?, reviews.id, reviews.owner_id, ?, 'queued', 0, ?, NULL,
           'queued', NULL, NULL, NULL, ?, NULL, NULL
         FROM reviews
         WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.analysis_run_id = ?
-      `).bind(jobId, now, now, item.reviewId, ownerId, jobId),
+      `).bind(jobId, mode, now, now, item.reviewId, ownerId, jobId),
     ];
   }
 

@@ -4,13 +4,17 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
 import { analysisJobs, reviewImages, reviews, savedAssignments } from "../db/schema";
-import { assignmentConfigSchema } from "../domain/contracts";
+import {
+  assignmentConfigSchema,
+  isParagraphEvaluationReport,
+} from "../domain/contracts";
 import type { AnalysisJobRecord } from "../jobs/analysis-job-repository";
 import {
   encodeReanalysisPendingPdfMarker,
   encodeReanalysisReadyMarker,
 } from "../jobs/analysis-job-metadata";
-import { ocrCheckpointSchema } from "../ocr/contracts";
+import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mode";
+import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
 import {
   formatRevisionTeacherGuidance,
   normalizeAssignmentTitle,
@@ -48,16 +52,24 @@ function domainError(
   return new ReanalysisDomainError(code, code === "REVIEW_NOT_FOUND" ? 404 : 409, review);
 }
 
-function assertCurrentOcr(ocrCheckpoint: unknown, imageRevision: number): void {
+function assertCurrentOcr(ocrCheckpoint: unknown, imageRevision: number): OcrCheckpoint {
   const parsed = ocrCheckpointSchema.safeParse(ocrCheckpoint);
   if (!parsed.success || parsed.data.sourceRevision !== imageRevision) {
     throw domainError("OCR_NOT_CURRENT");
   }
+  return parsed.data;
 }
 
 function hasCurrentOcr(ocrCheckpoint: unknown, imageRevision: number): boolean {
   const parsed = ocrCheckpointSchema.safeParse(ocrCheckpoint);
   return parsed.success && parsed.data.sourceRevision === imageRevision;
+}
+
+function reanalysisMode(report: unknown, checkpoint: OcrCheckpoint): AnalysisMode {
+  const requested = checkpoint.version === 2 && isParagraphEvaluationReport(report)
+    ? "content_only"
+    : "full";
+  return analysisModeForCheckpoint(requested, checkpoint);
 }
 
 function isActiveJobUniqueConflict(error: unknown): boolean {
@@ -109,6 +121,7 @@ export class ReanalysisRepository {
       revision: reviews.revision,
       imageRevision: reviews.imageRevision,
       ocrCheckpoint: reviews.ocrCheckpoint,
+      report: reviews.report,
       deletingAt: reviews.deletingAt,
     }).from(reviews).where(and(
       eq(reviews.ownerId, ownerId),
@@ -207,6 +220,7 @@ export class ReanalysisRepository {
         deletingAt: reviews.deletingAt,
         imageRevision: reviews.imageRevision,
         ocrCheckpoint: reviews.ocrCheckpoint,
+        report: reviews.report,
         pdfFilename: reviews.pdfFilename,
       }).from(reviews).where(and(
         eq(reviews.id, reviewId),
@@ -228,14 +242,17 @@ export class ReanalysisRepository {
       if (!ANALYZABLE_STATUSES.includes(review.status as (typeof ANALYZABLE_STATUSES)[number])) {
         throw domainError("REVIEW_UNAVAILABLE");
       }
-      assertCurrentOcr(review.ocrCheckpoint, review.imageRevision);
+      const mode = reanalysisMode(
+        review.report,
+        assertCurrentOcr(review.ocrCheckpoint, review.imageRevision),
+      );
 
       try {
         transaction.insert(analysisJobs).values({
           id,
           reviewId,
           ownerId,
-          mode: "content_only",
+          mode,
           status: "queued",
           attempt: 0,
           availableAt: now,
@@ -273,7 +290,7 @@ export class ReanalysisRepository {
         id,
         reviewId,
         ownerId,
-        mode: "content_only",
+        mode,
         status: "queued",
         attempt: 0,
         availableAt: now,
@@ -322,6 +339,7 @@ export class ReanalysisRepository {
         revision: reviews.revision,
         imageRevision: reviews.imageRevision,
         ocrCheckpoint: reviews.ocrCheckpoint,
+        report: reviews.report,
         deletingAt: reviews.deletingAt,
         pdfFilename: reviews.pdfFilename,
       }).from(reviews).where(and(
@@ -370,6 +388,10 @@ export class ReanalysisRepository {
         throw domainError("FRAMEWORK_CHANGED", publicReview);
       }
       const assignmentConfig = assignmentConfigSchema.parse(assignment.config);
+      const mode = reanalysisMode(
+        row.report,
+        assertCurrentOcr(row.ocrCheckpoint, row.imageRevision),
+      );
       const now = this.now();
       const id = this.createId();
       try {
@@ -377,7 +399,7 @@ export class ReanalysisRepository {
           id,
           reviewId: item.reviewId,
           ownerId,
-          mode: "content_only",
+          mode,
           status: "queued",
           attempt: 0,
           availableAt: now,

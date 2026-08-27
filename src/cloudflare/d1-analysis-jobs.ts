@@ -1,4 +1,6 @@
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
+import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
+import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
 import type { AnalysisJobMode } from "./cloud-analysis-pipeline";
 
 const stages = new Set(["queued", "reading_images", "saving_ocr", "generating_review", "mapping_annotations", "validating_result", "saving_result"]);
@@ -62,8 +64,15 @@ export class D1AnalysisJobs {
     }>();
     if (!review) return { job: null, newlyQueued: false };
     if (review.image_count < 1 || review.image_count > 4) throw new Error("IMAGES_REQUIRED");
-    if (mode === "content_only" && !hasCurrentOcr(review.ocr_checkpoint, review.image_revision)) {
-      throw new Error("OCR_NOT_FOUND");
+    if (mode === "content_only") {
+      const parsed = parseOcr(review.ocr_checkpoint);
+      if (!parsed) {
+        analysisModeForCheckpoint(mode, null);
+        throw new TypeError("unreachable");
+      }
+      if (parsed.sourceRevision !== review.image_revision) throw new Error("OCR_NOT_FOUND");
+      const checkpoint = parsed;
+      analysisModeForCheckpoint(mode, checkpoint);
     }
     const existing = await this.latest(ownerId, reviewId);
     if (existing && (existing as { status: string }).status === "queued") return { job: existing, newlyQueued: false };
@@ -114,12 +123,12 @@ function normalizeEnqueueInput(input: unknown): { mode: AnalysisJobMode; teacher
   return { mode, teacherGuidance: rawGuidance.trim() || null };
 }
 
-function hasCurrentOcr(raw: string | null | undefined, imageRevision: number): boolean {
-  if (!raw) return false;
+function parseOcr(raw: string | null | undefined): OcrCheckpoint | null {
+  if (!raw) return null;
   try {
-    const parsed = JSON.parse(raw) as { sourceRevision?: unknown };
-    return parsed.sourceRevision === imageRevision;
+    const parsed = ocrCheckpointSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : null;
   } catch {
-    return false;
+    return null;
   }
 }

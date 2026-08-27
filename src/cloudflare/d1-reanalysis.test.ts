@@ -9,7 +9,54 @@ import {
 const OWNER = "teacher-1";
 const REVIEW = "review-1";
 const ASSIGNMENT = "assignment-1";
-const CHECKPOINT = JSON.stringify({ sourceRevision: 4, ocrRevision: 2 });
+const CHECKPOINT = JSON.stringify({
+  version: 1,
+  sourceRevision: 4,
+  ocrRevision: 2,
+  editedAt: null,
+  pages: [{ pageIndex: 0, text: "原文", readable: true, warnings: [], blocks: [] }],
+});
+const V2_CHECKPOINT = JSON.stringify({
+  version: 2,
+  sourceRevision: 4,
+  ocrRevision: 2,
+  editedAt: null,
+  pages: [{
+    pageIndex: 0,
+    text: "原文",
+    readable: true,
+    warnings: [],
+    blocks: [{ text: "原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+  }],
+  paragraphs: [{
+    id: "paragraph-1",
+    paragraphIndex: 0,
+    text: "原文",
+    segments: [{ pageIndex: 0, text: "原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+  }],
+});
+const PARAGRAPH_REPORT = JSON.stringify({
+  version: 2,
+  themeFit: "fits",
+  themeReason: "切题",
+  personalizedComment: "真实",
+  painPoints: [],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "A-",
+  diagnostics: {
+    authenticityAndRelevance: { finding: "真实", action: "保留" },
+    materialAndDetails: { finding: "具体", action: "补写" },
+    structure: { finding: "完整", action: "强化" },
+    language: { finding: "自然", action: "精简" },
+  },
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "保留", advice: "保留原句", example: "原文" }],
+    revisedText: "原文",
+  }],
+  parentFeedbacks: [],
+});
 
 function statement(
   sql: string,
@@ -48,6 +95,7 @@ function reviewRow(overrides: Record<string, unknown> = {}) {
     ocr_checkpoint: CHECKPOINT,
     deleting_at: null,
     image_count: 1,
+    report: JSON.stringify({ sampleParagraphs: [{ title: "旧示例", text: "原文", suggestion: "修改" }] }),
     ...overrides,
   };
 }
@@ -96,7 +144,7 @@ describe("D1Reanalysis", () => {
     expect(calls.every((sql) => !/^\s*(UPDATE|INSERT|DELETE)/iu.test(sql))).toBe(true);
   });
 
-  it("单篇退回在一个原子 batch 中更新作文并条件插入 content_only 任务", async () => {
+  it("旧报告的单篇退回在原子 batch 中排 full 升级任务", async () => {
     const statements: Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }> = [];
     const database = {
       prepare: vi.fn((sql: string) => {
@@ -129,9 +177,39 @@ describe("D1Reanalysis", () => {
     expect(insert.sql).toContain("analysis_run_id = ?");
     expect(result).toMatchObject({
       newlyQueued: true,
-      job: { id: "job-1", reviewId: REVIEW, mode: "content_only", status: "queued" },
+      job: { id: "job-1", reviewId: REVIEW, mode: "full", status: "queued" },
     });
+    expect(insert.bindings).toContain("full");
     expect(insert.bindings).toContain("[不合适原因]\n原批改不合适\n[修改要求]\n重新关注结尾");
+  });
+
+  it("逐段报告与 OCR v2 单篇退回排 content_only", async () => {
+    const statements: Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const prepared = statement(sql, {
+          first: vi.fn(async () => reviewRow({
+            ocr_checkpoint: V2_CHECKPOINT,
+            report: PARAGRAPH_REPORT,
+          })),
+        }) as D1ReanalysisStatement & { sql: string; bindings: unknown[] };
+        statements.push(prepared);
+        return prepared;
+      }),
+      batch: vi.fn(async (batchStatements: D1ReanalysisStatement[]) =>
+        batchStatements.map(() => ({ meta: { changes: 1 } }))),
+    } as unknown as D1Database;
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("job-v2");
+
+    const result = await new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
+      expectedRevision: 3,
+      reason: "原批改不合适",
+      changeRequest: "重新关注结尾",
+    });
+
+    expect(result.job).toMatchObject({ mode: "content_only" });
+    expect(statements.find(({ sql }) => /INSERT INTO analysis_jobs/iu.test(sql))?.bindings)
+      .toContain("content_only");
   });
 
   it("批量确认逐项使用独立 batch，读取数据库 assignment.config 且保留旧报告", async () => {
@@ -167,6 +245,8 @@ describe("D1Reanalysis", () => {
     expect(batches[0][0].sql).toContain("revision = revision + 1");
     expect(batches[0][0].sql).toContain("SELECT config FROM saved_assignments");
     expect(batches[0][0].sql).not.toContain("report = NULL");
+    expect(batches[0].find(({ sql }) => /INSERT INTO analysis_jobs/iu.test(sql))?.bindings)
+      .toContain("full");
     expect(result).toEqual({
       submitted: [{ reviewId: REVIEW, jobId: "job-batch", revision: 4 }],
       skipped: [],

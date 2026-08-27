@@ -25,6 +25,7 @@ import type {
   OcrCheckpointV2,
   OcrParagraphTextEdit,
 } from "../ocr/contracts";
+import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
 import { InMemoryReviewLock, type ReviewLock } from "./review-lock";
@@ -413,10 +414,9 @@ export class ReviewService {
       }
       try {
         const source = this.repository.getAnalysisSource(ownerId, id);
-        const checkpoint = source.checkpoint;
-        if (mode === "content_only" && !checkpoint) {
-          throw Object.assign(new Error("OCR_NOT_FOUND"), { code: "OCR_NOT_FOUND" });
-        }
+        let checkpoint = source.checkpoint;
+        const effectiveMode = analysisModeForCheckpoint(mode, checkpoint);
+        if (effectiveMode === "full" && checkpoint?.version !== 2) checkpoint = null;
         const imageDataUrls = checkpoint ? [] : await Promise.all(
           review.images.map(async (image) => {
             const filename = image.aiPath.replace(/^images\//, "");

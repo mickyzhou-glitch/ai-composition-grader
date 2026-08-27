@@ -198,11 +198,17 @@ describe("ReviewService analysis CAS", () => {
       "SELECT image_revision AS imageRevision FROM reviews WHERE id = ?",
     ).get("review-1") as { imageRevision: number };
     sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
-      version: 1,
+      version: 2,
       sourceRevision: review.imageRevision,
       ocrRevision: 1,
       editedAt: null,
       pages: [{ pageIndex: 0, text: "作文原文", readable: true, warnings: [], blocks: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "作文原文",
+        segments: [{ pageIndex: 0, text: "作文原文", x: 0.1, y: 0.1, width: 0.3, height: 0.1 }],
+      }],
     }), "review-1");
     const analyze = vi.fn(async () => readyEnvelope);
     const reviews = serviceFor(analyze);

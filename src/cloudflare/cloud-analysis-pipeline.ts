@@ -1,6 +1,7 @@
 import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { Annotation, AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
 import type { OcrCheckpoint, OcrCheckpointV2 } from "../ocr/contracts";
 
@@ -36,7 +37,7 @@ export interface CloudAnalysisPipelineDependencies {
   ): Promise<OcrCheckpointV2>;
   analyzeText(input: {
     config: AssignmentConfig;
-    pages: Array<{ pageIndex: number; text: string }>;
+    paragraphs: Array<{ id: string; text: string }>;
     teacherGuidance?: string;
     studentName?: string;
   }): Promise<CompositionReviewResult>;
@@ -62,9 +63,10 @@ export class CloudAnalysisPipeline {
   async run(job: CloudAnalysisPipelineJob): Promise<void> {
     let checkpoint = await this.dependencies.readCheckpoint(job.ownerId, job.reviewId);
     if (checkpoint && checkpoint.sourceRevision !== job.imageRevision) checkpoint = null;
+    const mode = analysisModeForCheckpoint(job.mode, checkpoint);
+    if (mode === "full" && checkpoint?.version !== 2) checkpoint = null;
 
     if (!checkpoint) {
-      if (job.mode === "content_only") throw new CloudAnalysisConflictError("OCR_NOT_FOUND");
       await this.dependencies.updateStage(job.id, "reading_images");
       const imageUrls = await this.dependencies.loadImageUrls(job);
       const recognized = await this.dependencies.recognize(imageUrls);
@@ -77,6 +79,10 @@ export class CloudAnalysisPipeline {
       );
     }
 
+    if (checkpoint.version !== 2) {
+      throw new TypeError("Full OCR analysis must produce an OCR v2 checkpoint");
+    }
+
     if (checkpoint.pages.some((page) => !page.readable)) {
       await this.dependencies.saveUnreadable(job, checkpoint);
       return;
@@ -85,12 +91,12 @@ export class CloudAnalysisPipeline {
     await this.dependencies.updateStage(job.id, "generating_review");
     const result = await this.dependencies.analyzeText({
       config: job.config,
-      pages: checkpoint.pages.map(({ pageIndex, text }) => ({ pageIndex, text })),
+      paragraphs: checkpoint.paragraphs.map(({ id, text }) => ({ id, text })),
       teacherGuidance: job.teacherGuidance,
       studentName: job.studentName,
     });
     await this.dependencies.updateStage(job.id, "mapping_annotations");
-    const annotations = mapAnnotationAnchors(checkpoint, result.annotationAnchors as never);
+    const annotations = mapAnnotationAnchors(checkpoint, result.annotationAnchors);
     await this.dependencies.updateStage(job.id, "validating_result");
     await this.dependencies.updateStage(job.id, "saving_result");
     await this.dependencies.saveResult(job, {
