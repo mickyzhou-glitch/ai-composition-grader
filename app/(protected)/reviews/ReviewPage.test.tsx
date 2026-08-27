@@ -754,6 +754,46 @@ describe("复核页", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it("OCR 版本从 v1 切换到同 revision 的 v2 时重挂编辑器状态", async () => {
+    const finishedJob = {
+      id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",
+      message: null, createdAt: new Date().toISOString(), finishedAt: new Date().toISOString(),
+    };
+    const v1Review = {
+      ...review,
+      status: "analyzing" as const,
+      ocr: {
+        version: 1 as const,
+        ocrRevision: 0,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: "旧版逐页原文", readable: true, warnings: [] }],
+      },
+    };
+    const v2Review = {
+      ...review,
+      ocr: {
+        ...review.ocr,
+        ocrRevision: 0,
+        paragraphs: [{ ...review.ocr.paragraphs[0], text: "v2 自然段原文" }],
+      },
+    };
+    const finalReview = deferred<Response>();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(v1Review))
+      .mockImplementationOnce(() => json({ job: finishedJob }))
+      .mockImplementationOnce(() => finalReview.promise);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("tab", { name: "识别原文" }));
+    expect(screen.getByText("旧版逐页原文")).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await act(async () => finalReview.resolve(await json(v2Review)));
+
+    expect(await screen.findByRole("textbox", { name: "第 1 段识别原文" }))
+      .toHaveValue("v2 自然段原文");
+  });
+
   it("任务完成后拉取最终批改遇到短暂断线时自动重试", async () => {
     const finishedJob = {
       id: "job-1", reviewId: "review-1", status: "succeeded", progressStage: "saving_result",

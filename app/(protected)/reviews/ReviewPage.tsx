@@ -715,7 +715,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         </section>
         {review.ocr ? <section id="review-ocr-panel" role="tabpanel" aria-label="识别原文" hidden={activeView !== "ocr"}>
           <OcrTextEditor
-            key={`${review.id}:${review.ocr.ocrRevision}`}
+            key={`${review.id}:${review.ocr.version}:${review.ocr.ocrRevision}`}
             reviewId={review.id}
             ocr={review.ocr}
             disabled={busy !== null || analysisActive}
