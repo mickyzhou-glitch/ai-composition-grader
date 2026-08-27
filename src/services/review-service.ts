@@ -2,15 +2,19 @@ import { randomUUID } from "node:crypto";
 
 import {
   isLegacyEvaluationReport,
+  isParagraphEvaluationReport,
   MAX_REVIEW_IMAGES,
   type AiReviewEnvelope,
   type AssignmentConfig,
+  type ParagraphReview,
 } from "../domain/contracts";
 import type {
   FeedbackSection,
   RewriteFeedbackInput,
+  RewriteParagraphInput,
   RewriteSampleInput,
 } from "../ai/openai-review-adapter";
+import { validateParagraphReportForIds } from "../domain/report-validation";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { SavedAssignmentRecord } from "../db/review-repository";
 import type {
@@ -39,6 +43,7 @@ export interface AiReviewer {
   }): Promise<AiReviewEnvelope>;
   rewriteSample?(input: RewriteSampleInput): Promise<{ text: string }>;
   rewriteFeedback?(input: RewriteFeedbackInput): Promise<{ items: string[] }>;
+  rewriteParagraph?(input: RewriteParagraphInput): Promise<ParagraphReview>;
   rewriteAllSamples?(input: Omit<RewriteSampleInput, "index">): Promise<{
     sampleParagraphs: Array<{ title: string; text: string; suggestion: string }>;
   }>;
@@ -78,7 +83,12 @@ export class ReviewServiceError extends Error {
       | "REVIEW_NOT_FOUND"
       | "IMAGES_REQUIRED"
       | "INVALID_FILE_PATH"
-      | "FILE_NOT_FOUND",
+      | "FILE_NOT_FOUND"
+      | "LEGACY_REPORT"
+      | "OCR_V2_REQUIRED"
+      | "REPORT_STALE"
+      | "PARAGRAPH_NOT_FOUND"
+      | "PARAGRAPH_COVERAGE_MISMATCH",
     message: string,
     readonly status: number,
   ) {
@@ -253,6 +263,84 @@ export class ReviewService {
       config: review.config,
       report: review.report,
       section,
+    });
+  }
+
+  async rewriteParagraph(
+    ownerId: string,
+    id: string,
+    paragraphId: string,
+    input: { paragraphReviews: ParagraphReview[]; instruction?: string },
+  ): Promise<ParagraphReview> {
+    const review = this.get(ownerId, id);
+    if (!review.report) {
+      throw new ReviewServiceError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+    }
+    if (!isParagraphEvaluationReport(review.report)) {
+      throw new ReviewServiceError(
+        "LEGACY_REPORT",
+        "旧版示范段落报告需要完整重新分析",
+        409,
+      );
+    }
+    if (!review.ocr || review.ocr.version !== 2) {
+      throw new ReviewServiceError(
+        "OCR_V2_REQUIRED",
+        "当前识别原文需要重新识别",
+        409,
+      );
+    }
+    if (review.reportOcrRevision !== review.ocr.ocrRevision) {
+      throw new ReviewServiceError(
+        "REPORT_STALE",
+        "批改报告基于旧版识别原文，请重新生成批改",
+        409,
+      );
+    }
+    const paragraph = review.ocr.paragraphs.find(({ id: candidateId }) => (
+      candidateId === paragraphId
+    ));
+    if (!paragraph) {
+      throw new ReviewServiceError(
+        "PARAGRAPH_NOT_FOUND",
+        "自然段不存在",
+        404,
+      );
+    }
+    try {
+      validateParagraphReportForIds(
+        { ...review.report, paragraphReviews: input.paragraphReviews },
+        review.ocr.paragraphs.map(({ id: candidateId }) => candidateId),
+      );
+    } catch {
+      throw new ReviewServiceError(
+        "PARAGRAPH_COVERAGE_MISMATCH",
+        "逐段批改没有完整覆盖当前识别自然段",
+        400,
+      );
+    }
+    const current = input.paragraphReviews.find(({ paragraphId: candidateId }) => (
+      candidateId === paragraphId
+    ));
+    if (!current) {
+      throw new ReviewServiceError(
+        "PARAGRAPH_NOT_FOUND",
+        "自然段批改不存在",
+        404,
+      );
+    }
+    if (!this.aiReviewer.rewriteParagraph) {
+      throw new Error("当前 AI 服务不支持单段批改重写");
+    }
+    return this.aiReviewer.rewriteParagraph({
+      config: review.config,
+      paragraphs: review.ocr.paragraphs.map(({ id: candidateId, text }) => ({
+        id: candidateId,
+        text,
+      })),
+      current,
+      paragraphId,
+      instruction: input.instruction,
     });
   }
 

@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import worker, { savePipelineResult, saveUnreadableResult } from "./index";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { D1Reanalysis, D1ReanalysisBatchError } from "../src/cloudflare/d1-reanalysis";
+import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
+import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
 
 function workerEnv(assetResponse: () => Response, database?: unknown) {
   return {
@@ -71,7 +73,126 @@ const teacherReviewedReport = {
   parentFeedbacks: [],
 };
 
+const paragraphReport = {
+  version: 2 as const,
+  themeFit: "fits" as const,
+  themeReason: "切题",
+  personalizedComment: "细节真实",
+  painPoints: [],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "B+" as const,
+  diagnostics: teacherReviewedReport.diagnostics,
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "保留", advice: "保留真实动作", example: "我走上台。" }],
+    revisedText: "我走上台。",
+  }],
+  parentFeedbacks: [],
+};
+
+const paragraphReviewView = {
+  id: "review-1",
+  status: "ready_for_review" as const,
+  studentName: "小明",
+  config: reviewConfig,
+  report: paragraphReport,
+  revision: 3,
+  createdAt: new Date(1_700_000_000_000).toISOString(),
+  updatedAt: new Date(1_700_000_000_000).toISOString(),
+  teacherReviewedAt: null,
+  images: [],
+  annotations: [],
+  ocr: {
+    version: 2 as const,
+    ocrRevision: 2,
+    editedAt: null,
+    pages: [{ pageIndex: 0, text: "我走上台。", readable: true, warnings: [] }],
+    paragraphs: [{
+      id: "paragraph-1",
+      paragraphIndex: 0,
+      text: "我走上台。",
+      segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+    }],
+  },
+  reportStale: false,
+  hasPdf: false,
+  pdfFilename: null,
+};
+
 describe("Cloudflare Worker", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+  it("单段重写路由只把 OCR 段落文字和当前草稿发送给内容模型", async () => {
+    const get = vi.spyOn(D1ReviewReader.prototype, "get")
+      .mockResolvedValue(paragraphReviewView as never);
+    const rewritten = {
+      ...paragraphReport.paragraphReviews[0],
+      revisedText: "我听见自己的呼吸声，终于走上台。",
+    };
+    const rewriteParagraph = vi.spyOn(OpenAIReviewAdapter.prototype, "rewriteParagraph")
+      .mockResolvedValue(rewritten);
+
+    const response = await worker.fetch(new Request(
+      "https://grader.workers.dev/api/reviews/review-1/paragraph-reviews/paragraph-1",
+      {
+        method: "POST",
+        headers: {
+          cookie: "__Host-zuowen_session=session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          paragraphReviews: paragraphReport.paragraphReviews,
+          instruction: "补充听觉细节",
+        }),
+      },
+    ), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, data: rewritten });
+    expect(get).toHaveBeenCalledWith("teacher-1", "review-1");
+    expect(rewriteParagraph).toHaveBeenCalledWith({
+      config: reviewConfig,
+      paragraphs: [{ id: "paragraph-1", text: "我走上台。" }],
+      current: paragraphReport.paragraphReviews[0],
+      paragraphId: "paragraph-1",
+      instruction: "补充听觉细节",
+    });
+    get.mockRestore();
+    rewriteParagraph.mockRestore();
+  });
+
+  it.each([
+    ["旧报告", { ...paragraphReviewView, report: teacherReviewedReport }, "LEGACY_REPORT"],
+    ["过期报告", { ...paragraphReviewView, reportStale: true }, "REPORT_STALE"],
+    ["OCR v1", {
+      ...paragraphReviewView,
+      ocr: { version: 1, ocrRevision: 0, editedAt: null, pages: [] },
+    }, "OCR_V2_REQUIRED"],
+  ])("单段重写拒绝%s", async (_case, review, code) => {
+    const get = vi.spyOn(D1ReviewReader.prototype, "get").mockResolvedValue(review as never);
+    const rewriteParagraph = vi.spyOn(OpenAIReviewAdapter.prototype, "rewriteParagraph");
+
+    const response = await worker.fetch(new Request(
+      "https://grader.workers.dev/api/reviews/review-1/paragraph-reviews/paragraph-1",
+      {
+        method: "POST",
+        headers: {
+          cookie: "__Host-zuowen_session=session-token",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ paragraphReviews: paragraphReport.paragraphReviews }),
+      },
+    ), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ error: { code } });
+    expect(rewriteParagraph).not.toHaveBeenCalled();
+    get.mockRestore();
+    rewriteParagraph.mockRestore();
+  });
+
   it("analyze 路由把 OCR_V2_REQUIRED 显式映射为 409", async () => {
     const enqueue = vi.spyOn(D1AnalysisJobs.prototype, "enqueue").mockRejectedValue(
       Object.assign(new Error("OCR_V2_REQUIRED"), {

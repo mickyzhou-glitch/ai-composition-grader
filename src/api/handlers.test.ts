@@ -25,6 +25,7 @@ import {
   createAnalyzeRouteHandlers,
   createBatchReanalysisPreviewRouteHandlers,
   createBatchReanalysisRouteHandlers,
+  createParagraphRewriteRouteHandlers,
   createReviewImagesRouteHandlers,
   createReviewOcrRouteHandlers,
   createReviewExportCheckRouteHandlers,
@@ -82,6 +83,67 @@ function jsonRequest(url: string, method: string, body: unknown) {
 function expectNoStore(response: Response) {
   expect(response.headers.get("cache-control")).toBe("no-store");
 }
+
+describe("paragraph rewrite route handlers", () => {
+  const paragraphReviews = [{
+    paragraphId: "paragraph-1",
+    suggestions: [{
+      problem: "动作描写不够具体",
+      advice: "补充手指和呼吸的变化",
+      example: "我攥紧衣角，耳边只剩急促的呼吸声。",
+    }],
+    revisedText: "我攥紧衣角，走上台。",
+  }];
+
+  it("使用路径段落 ID 和完整未保存草稿调用服务", async () => {
+    const rewritten = {
+      ...paragraphReviews[0],
+      revisedText: "我攥紧衣角，听见自己急促的呼吸声。",
+    };
+    const rewriteParagraph = vi.fn(async () => rewritten);
+    const handlers = createParagraphRewriteRouteHandlers({
+      reviewService: { rewriteParagraph },
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(jsonRequest(
+      "http://localhost/api/reviews/review-1/paragraph-reviews/paragraph-1",
+      "POST",
+      { paragraphReviews, instruction: "  补充听觉细节  " },
+    ), {
+      params: Promise.resolve({ id: "review-1", paragraphId: "paragraph-1" }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toEqual({ ok: true, data: rewritten });
+    expect(rewriteParagraph).toHaveBeenCalledWith(
+      OWNER_ID,
+      "review-1",
+      "paragraph-1",
+      { paragraphReviews, instruction: "补充听觉细节" },
+    );
+  });
+
+  it("请求体不完整时返回 400 且不调用服务", async () => {
+    const rewriteParagraph = vi.fn();
+    const handlers = createParagraphRewriteRouteHandlers({
+      reviewService: { rewriteParagraph },
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(jsonRequest(
+      "http://localhost/api/reviews/review-1/paragraph-reviews/paragraph-1",
+      "POST",
+      { paragraphReviews: [] },
+    ), {
+      params: Promise.resolve({ id: "review-1", paragraphId: "paragraph-1" }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(await json(response)).toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+    expect(rewriteParagraph).not.toHaveBeenCalled();
+  });
+});
 
 describe("settings route handlers", () => {
   it("GET 只返回脱敏视图，绝不读取或回显 API key", async () => {

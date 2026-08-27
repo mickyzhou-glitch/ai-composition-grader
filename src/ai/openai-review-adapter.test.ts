@@ -6,6 +6,7 @@ import {
   isLegacyEvaluationReport,
   type AssignmentConfig,
   type LegacyEvaluationReport,
+  type ParagraphReview,
 } from "../domain/contracts";
 import { formatRevisionTeacherGuidance } from "../reanalysis/contracts";
 import {
@@ -75,6 +76,16 @@ const report: LegacyEvaluationReport = {
     text: "我".repeat(120),
     suggestion: "补充细节。",
   })),
+};
+
+const currentParagraphReview: ParagraphReview = {
+  paragraphId: "paragraph-1",
+  suggestions: [{
+    problem: "动作描写不够具体",
+    advice: "补写手指和呼吸的变化",
+    example: "我的手指攥紧衣角，呼吸也越来越急。",
+  }],
+  revisedText: "我攥紧衣角，深吸一口气走上台。",
 };
 
 const successEnvelope = {
@@ -386,6 +397,73 @@ describe("OpenAIReviewAdapter", () => {
     })).resolves.toEqual({ text: "我" });
     expect(harness.create).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("实际不足或超出也正常返回");
+  });
+
+  it("单段批改重写只发送原文上下文、当前草稿与教师要求", async () => {
+    const rewritten: ParagraphReview = {
+      ...currentParagraphReview,
+      suggestions: [{
+        problem: "紧张的感受还不够具体",
+        advice: "补充呼吸和手指的变化",
+        example: "我的手指攒紧衣角，耳边只剩急促的呼吸声。",
+      }],
+      revisedText: "我的手指攒紧衣角，耳边只剩急促的呼吸声。",
+    };
+    const harness = setup([JSON.stringify(rewritten)]);
+
+    await expect(harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [
+        { id: "paragraph-1", text: "我站在台下，心里很紧张。" },
+        { id: "paragraph-2", text: "轮到我时，我终于走上台。" },
+      ],
+      current: currentParagraphReview,
+      paragraphId: "paragraph-1",
+      instruction: "  补充听觉细节  ",
+    })).resolves.toEqual(rewritten);
+
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("我站在台下，心里很紧张。");
+    expect(serialized).toContain("轮到我时，我终于走上台。");
+    expect(serialized).toContain("动作描写不够具体");
+    expect(serialized).toContain("我攥紧衣角，深吸一口气走上台。");
+    expect(serialized).toContain("补充听觉细节");
+    expect(serialized).toContain(config.title);
+    expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
+  });
+
+  it.each([
+    ["返回其他段落 ID", { ...currentParagraphReview, paragraphId: "paragraph-2" }],
+    ["返回空修改稿", { ...currentParagraphReview, revisedText: "   " }],
+    ["返回 0 条建议", { ...currentParagraphReview, suggestions: [] }],
+    ["返回 5 条建议", {
+      ...currentParagraphReview,
+      suggestions: Array.from({ length: 5 }, () => currentParagraphReview.suggestions[0]),
+    }],
+  ])("单段批改重写%s时只修复一次并返回稳定错误", async (_case, invalid) => {
+    const harness = setup([JSON.stringify(invalid), JSON.stringify(invalid)]);
+
+    await expect(harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [{ id: "paragraph-1", text: "我站在台下。" }],
+      current: currentParagraphReview,
+      paragraphId: "paragraph-1",
+    })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("单段批改重写允许一次完整 JSON 结构修复", async () => {
+    const rewritten = { ...currentParagraphReview, revisedText: "我听见自己急促的呼吸声。" };
+    const harness = setup(["not-json", JSON.stringify(rewritten)]);
+
+    await expect(harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [{ id: "paragraph-1", text: "我很紧张。" }],
+      current: currentParagraphReview,
+      paragraphId: "paragraph-1",
+    })).resolves.toEqual(rewritten);
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("完整 JSON");
   });
 
   it("只读取 SettingsService 的原子运行时快照", async () => {

@@ -7,6 +7,7 @@ import {
   assignmentConfigSchema,
   evaluationReportSchema,
   MAX_REVIEW_IMAGES,
+  paragraphReviewSchema,
   PRIVACY_NOTICE_VERSION,
   studentNameSchema,
 } from "../domain/contracts";
@@ -723,6 +724,37 @@ export function createReviewExportCheckRouteHandlers(dependencies: {
 const sampleRewriteSchema = z.object({
   instruction: z.string().trim().max(1_000).optional(),
 }).strict();
+
+const paragraphRewriteSchema = z.object({
+  paragraphReviews: z.array(paragraphReviewSchema).min(1),
+  instruction: z.string().trim().max(1_000).optional(),
+}).strict();
+
+type ParagraphRewriteContext = {
+  params: Promise<{ id: string; paragraphId: string }>;
+};
+
+export function createParagraphRewriteRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "rewriteParagraph">;
+  ownerId: string;
+}) {
+  return {
+    async POST(request: Request, context: ParagraphRewriteContext) {
+      try {
+        const input = paragraphRewriteSchema.parse(await readJson(request));
+        const { id, paragraphId } = await context.params;
+        return okNoStore(await dependencies.reviewService.rewriteParagraph(
+          dependencies.ownerId,
+          id,
+          paragraphId,
+          input,
+        ));
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
 
 type SampleRewriteContext = { params: Promise<{ id: string; index: string }> };
 

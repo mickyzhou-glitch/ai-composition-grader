@@ -699,6 +699,117 @@ describe("ReviewService analysis CAS", () => {
     expect(rewriteAllSamples).not.toHaveBeenCalled();
   });
 
+  it("单段 AI 重写从当前 OCR v2 读取原文，使用完整教师草稿且不持久化", async () => {
+    const before = makeParagraphDeliveryExportable();
+    const draft = [{
+      ...paragraphReport.paragraphReviews[0],
+      revisedText: "教师尚未保存的修改稿。",
+    }];
+    const rewritten = {
+      ...draft[0],
+      revisedText: "我听见自己的呼吸声，然后走上台。",
+    };
+    const rewriteParagraph = vi.fn(async () => rewritten);
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteParagraph,
+    });
+
+    await expect(service.rewriteParagraph(
+      OWNER_ID,
+      "review-1",
+      "paragraph-1",
+      { paragraphReviews: draft, instruction: "补充听觉细节" },
+    )).resolves.toEqual(rewritten);
+
+    expect(rewriteParagraph).toHaveBeenCalledWith({
+      config,
+      paragraphs: [{ id: "paragraph-1", text: "我为自己喝彩。" }],
+      current: draft[0],
+      paragraphId: "paragraph-1",
+      instruction: "补充听觉细节",
+    });
+    expect(repository.getById(OWNER_ID, "review-1")?.report).toEqual(before.report);
+  });
+
+  it("单段 AI 重写拒绝旧报告", async () => {
+    repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report!);
+    const rewriteParagraph = vi.fn();
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteParagraph,
+    });
+
+    await expect(service.rewriteParagraph(OWNER_ID, "review-1", "paragraph-1", {
+      paragraphReviews: [paragraphReport.paragraphReviews[0]],
+    })).rejects.toMatchObject({ code: "LEGACY_REPORT", status: 409 });
+    expect(rewriteParagraph).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["缺少 OCR", null],
+    ["OCR v1", {
+      version: 1 as const,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "旧原文", readable: true, warnings: [] }],
+    }],
+  ])("单段 AI 重写在%s时返回 OCR_V2_REQUIRED", async (_case, ocr) => {
+    const current = repository.getById(OWNER_ID, "review-1")!;
+    vi.spyOn(repository, "getById").mockReturnValue({
+      ...current,
+      report: paragraphReport,
+      ocr,
+      reportOcrRevision: 0,
+    } as never);
+    const rewriteParagraph = vi.fn();
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteParagraph,
+    });
+
+    await expect(service.rewriteParagraph(OWNER_ID, "review-1", "paragraph-1", {
+      paragraphReviews: paragraphReport.paragraphReviews,
+    })).rejects.toMatchObject({ code: "OCR_V2_REQUIRED", status: 409 });
+    expect(rewriteParagraph).not.toHaveBeenCalled();
+  });
+
+  it("单段 AI 重写拒绝基于旧 OCR revision 的报告", async () => {
+    const current = makeParagraphDeliveryExportable();
+    vi.spyOn(repository, "getById").mockReturnValue({
+      ...current,
+      reportOcrRevision: 0,
+      ocr: { ...current.ocr!, ocrRevision: 1 },
+    } as never);
+    const rewriteParagraph = vi.fn();
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteParagraph,
+    });
+
+    await expect(service.rewriteParagraph(OWNER_ID, "review-1", "paragraph-1", {
+      paragraphReviews: paragraphReport.paragraphReviews,
+    })).rejects.toMatchObject({ code: "REPORT_STALE", status: 409 });
+    expect(rewriteParagraph).not.toHaveBeenCalled();
+  });
+
+  it("单段 AI 重写先校验草稿完整覆盖与目标 paragraphId", async () => {
+    makeParagraphDeliveryExportable();
+    const rewriteParagraph = vi.fn();
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteParagraph,
+    });
+
+    await expect(service.rewriteParagraph(OWNER_ID, "review-1", "paragraph-99", {
+      paragraphReviews: paragraphReport.paragraphReviews,
+    })).rejects.toMatchObject({ code: "PARAGRAPH_NOT_FOUND", status: 404 });
+    await expect(service.rewriteParagraph(OWNER_ID, "review-1", "paragraph-1", {
+      paragraphReviews: [],
+    })).rejects.toMatchObject({ code: "PARAGRAPH_COVERAGE_MISMATCH", status: 400 });
+    expect(rewriteParagraph).not.toHaveBeenCalled();
+  });
+
   it("教师审核在作文锁内保存并清理旧 PDF，随后移出待审核队列", async () => {
     const service = serviceFor(async () => readyEnvelope);
     repository.updateReport(OWNER_ID, "review-1", readyEnvelope.report);

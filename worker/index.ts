@@ -20,7 +20,13 @@ import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-ada
 import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter";
 import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
-import { assignmentConfigSchema, isLegacyEvaluationReport } from "../src/domain/contracts";
+import {
+  assignmentConfigSchema,
+  isLegacyEvaluationReport,
+  isParagraphEvaluationReport,
+  paragraphReviewSchema,
+} from "../src/domain/contracts";
+import { validateParagraphReportForIds } from "../src/domain/report-validation";
 import { D1OcrCheckpointRepository, OcrCheckpointError } from "../src/cloudflare/d1-ocr-checkpoint";
 import { createWorkerAiSettingsSource } from "../src/cloudflare/ai-settings";
 import {
@@ -45,6 +51,11 @@ const editOcrParagraphsSchema = z.object({
     paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
     text: z.string().trim().min(1),
   }).strict()).min(1),
+}).strict();
+
+const paragraphRewriteSchema = z.object({
+  paragraphReviews: z.array(paragraphReviewSchema).min(1),
+  instruction: z.string().trim().max(1_000).optional(),
 }).strict();
 
 function apiError(code: string, message: string, status: number, details?: unknown): Response {
@@ -580,8 +591,67 @@ export default {
       return Response.json({ ok: true, data: { job } }, { headers: { "cache-control": "no-store" } });
     }
     const sampleRewriteMatch = /^\/api\/reviews\/([^/]+)\/sample-paragraphs\/(\d+)$/u.exec(url.pathname);
+    const paragraphRewriteMatch = /^\/api\/reviews\/([^/]+)\/paragraph-reviews\/([^/]+)$/u.exec(url.pathname);
     const feedbackRewriteMatch = /^\/api\/reviews\/([^/]+)\/feedback\/(strengths|improvements)$/u.exec(url.pathname);
     const samplesRewriteMatch = /^\/api\/reviews\/([^/]+)\/sample-paragraphs\/regenerate$/u.exec(url.pathname);
+    if (paragraphRewriteMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const reviewId = decodeURIComponent(paragraphRewriteMatch[1]);
+        const paragraphId = decodeURIComponent(paragraphRewriteMatch[2]);
+        const body = paragraphRewriteSchema.parse(await request.json());
+        const review = await new D1ReviewReader(env.DB).get(user.id, reviewId) as ReviewView | null;
+        if (!review) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
+        if (!review.report) return apiError("IMAGES_REQUIRED", "请先完成作文分析", 422);
+        if (!isParagraphEvaluationReport(review.report)) {
+          return apiError("LEGACY_REPORT", "旧版示范段落报告需要完整重新分析", 409);
+        }
+        if (!review.ocr || review.ocr.version !== 2) {
+          return apiError("OCR_V2_REQUIRED", "当前识别原文需要重新识别", 409);
+        }
+        if (review.reportStale) {
+          return apiError("REPORT_STALE", "批改报告基于旧版识别原文，请重新生成批改", 409);
+        }
+        const paragraph = review.ocr.paragraphs.find(({ id }) => id === paragraphId);
+        if (!paragraph) return apiError("PARAGRAPH_NOT_FOUND", "自然段不存在", 404);
+        try {
+          validateParagraphReportForIds(
+            { ...review.report, paragraphReviews: body.paragraphReviews },
+            review.ocr.paragraphs.map(({ id }) => id),
+          );
+        } catch {
+          return apiError(
+            "PARAGRAPH_COVERAGE_MISMATCH",
+            "逐段批改没有完整覆盖当前识别自然段",
+            400,
+          );
+        }
+        const current = body.paragraphReviews.find(({ paragraphId: id }) => id === paragraphId);
+        if (!current) return apiError("PARAGRAPH_NOT_FOUND", "自然段批改不存在", 404);
+        const rewritten = await new OpenAIReviewAdapter(
+          workerAiSettings(env),
+          { clientFactory: createWorkerOpenAIClient },
+        ).rewriteParagraph({
+          config: review.config,
+          paragraphs: review.ocr.paragraphs.map(({ id, text }) => ({ id, text })),
+          current,
+          paragraphId,
+          instruction: body.instruction,
+        });
+        return Response.json(
+          { ok: true, data: rewritten },
+          { headers: { "cache-control": "no-store" } },
+        );
+      } catch (error) {
+        if (error instanceof ZodError || error instanceof SyntaxError) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        if (error instanceof AiAdapterError) {
+          return apiError(error.code, error.message, error.status);
+        }
+        return apiError("AI_REQUEST_FAILED", "单段批改重写失败", 502);
+      }
+    }
     if (sampleRewriteMatch && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {

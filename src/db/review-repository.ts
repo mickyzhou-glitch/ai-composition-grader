@@ -61,6 +61,7 @@ export interface ReviewRecord {
   studentName: string;
   config: AssignmentConfig;
   report: EvaluationReport | null;
+  reportOcrRevision?: number | null;
   revision: number;
   analysisRunId: string | null;
   pdfFilename: string | null;
@@ -337,6 +338,7 @@ export class ReviewRepository {
         revision: reviews.revision,
         imageRevision: reviews.imageRevision,
         ocrCheckpoint: reviews.ocrCheckpoint,
+        reportOcrRevision: reviews.reportOcrRevision,
         analysisRunId: reviews.analysisRunId,
         pdfFilename: reviews.pdfFilename,
         pdfPath: reviews.pdfPath,
