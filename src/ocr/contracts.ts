@@ -265,6 +265,14 @@ export const reviewAnnotationAnchorSchema = z.object({
   isHighlight: z.boolean(),
 }).strict();
 
+export const paragraphAnnotationAnchorSchema = z.object({
+  paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
+  category: annotationCategorySchema,
+  anchorText: z.string().trim().min(1),
+  comment: z.string().trim().min(1),
+  isHighlight: z.boolean(),
+}).strict();
+
 export type OcrBlock = z.infer<typeof ocrBlockSchema>;
 export type OcrPage = z.infer<typeof ocrPageSchema>;
 export type OcrCheckpointV1 = z.infer<typeof ocrCheckpointV1Schema>;
@@ -273,6 +281,7 @@ export type OcrParagraph = z.infer<typeof ocrParagraphSchema>;
 export type OcrCheckpointV2 = z.infer<typeof ocrCheckpointV2Schema>;
 export type OcrCheckpoint = z.infer<typeof ocrCheckpointSchema>;
 export type ReviewAnnotationAnchor = z.infer<typeof reviewAnnotationAnchorSchema>;
+export type ParagraphAnnotationAnchor = z.infer<typeof paragraphAnnotationAnchorSchema>;
 
 export function isOcrCheckpointV2(value: OcrCheckpoint): value is OcrCheckpointV2 {
   return value.version === 2;

@@ -6,7 +6,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -119,8 +121,54 @@ describe("最终交付的本机安全默认值", () => {
 
     expect(adapter).not.toContain("image_url");
     expect(adapter).not.toContain("data:image");
+    expect(adapter).not.toContain("signed");
+    expect(adapter).not.toContain("segments");
+    expect(adapter).not.toContain("blocks");
+    expect(adapter).not.toMatch(/["'](?:x|y)["']/u);
     expect(adapter).not.toMatch(/\b(x|y|width|height):/u);
     expect(adapter).not.toContain("console.");
     expect(pipeline).not.toContain("console.");
+  });
+
+  it("内容模型运行时请求递归扫描不到图片、链接、定位和 OCR 内部结构", async () => {
+    const create = vi.fn(async (_request: unknown) => ({
+      choices: [{ message: { content: "{}" } }],
+    }));
+    const adapter = new CompositionReviewAdapter({
+      getRuntimeConfig: vi.fn(async () => ({
+        baseUrl: "https://content.example/v1",
+        model: "content-model",
+        apiKey: "content-secret",
+      })),
+    }, {
+      clientFactory: () => ({ chat: { completions: { create } } }),
+    });
+
+    await expect(adapter.analyzeText({
+      config: {
+        title: "雨中的坚持",
+        grade: "六年级",
+        writingRequirements: "写一件真实的事。",
+        targetCharacters: 600,
+        structureRequirements: "开头点题，结尾升华。",
+        scoringFocus: "内容具体。",
+        templateType: "custom",
+      },
+      paragraphs: [{
+        id: "paragraph-1",
+        text: "我冒雨走进了赛场。",
+        segments: [{ x: 0.1, y: 0.2 }],
+        blocks: [],
+      }],
+      pages: [{ image_url: "data:image/jpeg;base64,QQ==" }],
+      studentName: "小艾",
+    } as never)).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+
+    const requests = create.mock.calls.map(([request]) => request);
+    const serialized = JSON.stringify(requests);
+    expect(serialized).not.toMatch(/image_url|data:image|signed|segments|blocks|https?:\/\//u);
+    expect(serialized).not.toMatch(/\\"(?:x|y)\\"/u);
+    expect(serialized).toContain("paragraph-1");
+    expect(serialized).toContain("我冒雨走进了赛场。");
   });
 });

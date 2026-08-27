@@ -6,6 +6,7 @@ import {
   ocrCheckpointSchema,
   ocrCheckpointV1Schema,
   ocrCheckpointV2Schema,
+  paragraphAnnotationAnchorSchema,
   ocrParagraphSchema,
   ocrParagraphSegmentSchema,
   reviewAnnotationAnchorSchema,
@@ -486,5 +487,19 @@ describe("OCR contracts", () => {
       isHighlight: false,
       x: 0.2,
     })).toThrow();
+  });
+
+  it("accepts strict paragraph annotation anchors without page coordinates", () => {
+    const anchor = {
+      paragraphId: "paragraph-1",
+      category: "structure" as const,
+      anchorText: "我终于明白了",
+      comment: "这里需要回扣题目",
+      isHighlight: false,
+    };
+
+    expect(paragraphAnnotationAnchorSchema.parse(anchor)).toEqual(anchor);
+    expect(() => paragraphAnnotationAnchorSchema.parse({ ...anchor, pageIndex: 0 })).toThrow();
+    expect(() => paragraphAnnotationAnchorSchema.parse({ ...anchor, anchorText: " " })).toThrow();
   });
 });

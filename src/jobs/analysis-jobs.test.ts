@@ -650,7 +650,10 @@ describe("AnalysisJobService", () => {
     service.enqueue(ownerA, "review-a", undefined, "content_only");
     const claimed = repository.claimNext()!;
     const recognize = vi.fn();
-    const analyzeText = vi.fn(async () => ({ report: readyEnvelope.report, annotationAnchors: [] }));
+    const analyzeText = vi.fn(async () => ({
+      report: readyEnvelope.report as never,
+      annotationAnchors: [],
+    }));
     const worker = new AnalysisWorker({
       claimNext: () => claimed,
       updateProgress: (job, stage) => ({ ...job, progressStage: stage } as never),

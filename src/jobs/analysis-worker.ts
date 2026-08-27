@@ -248,7 +248,7 @@ export class AnalysisWorker {
             readable: true,
             pageWarnings: checkpoint.pages.flatMap(({ warnings }) => warnings),
             report: result.report,
-            annotations: mapAnnotationAnchors(checkpoint, result.annotationAnchors),
+            annotations: mapAnnotationAnchors(checkpoint, result.annotationAnchors as never),
           };
         }
       } else {

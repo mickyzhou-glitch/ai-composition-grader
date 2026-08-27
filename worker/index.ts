@@ -660,7 +660,7 @@ export default {
           recognize: (imageUrls) => vision.recognize({ imageUrls }),
           saveRecognized: (ownerId, reviewId, sourceRevision, pages) =>
             ocr.saveRecognized(ownerId, reviewId, sourceRevision, pages),
-          analyzeText: (input) => content.analyzeText(input),
+          analyzeText: (input) => content.analyzeText(input as never) as never,
           updateStage: async (jobId, stage) => {
             const result = await env.DB.prepare(
               "UPDATE analysis_jobs SET progress_stage = ? WHERE id = ? AND status = 'running'",

@@ -73,14 +73,14 @@ function dependencies(overrides: Partial<CloudAnalysisPipelineDependencies> = {}
     analyzeText: vi.fn(async () => {
       calls.push("analyze_text");
       return {
-        report,
+        report: report as never,
         annotationAnchors: [{
           pageIndex: 0,
           category: "structure" as const,
           anchorText: "我终于明白了",
           comment: "结尾有回扣",
           isHighlight: false,
-        }],
+        }] as never,
       };
     }),
     updateStage: vi.fn(async (_jobId, stage) => {

@@ -90,7 +90,7 @@ export class CloudAnalysisPipeline {
       studentName: job.studentName,
     });
     await this.dependencies.updateStage(job.id, "mapping_annotations");
-    const annotations = mapAnnotationAnchors(checkpoint, result.annotationAnchors);
+    const annotations = mapAnnotationAnchors(checkpoint, result.annotationAnchors as never);
     await this.dependencies.updateStage(job.id, "validating_result");
     await this.dependencies.updateStage(job.id, "saving_result");
     await this.dependencies.saveResult(job, {
