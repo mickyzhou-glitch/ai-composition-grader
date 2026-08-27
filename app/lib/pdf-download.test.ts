@@ -7,6 +7,9 @@ const pdfMock = vi.hoisted(() => ({
   output: vi.fn<(type: "blob") => Blob>(() => new Blob(["pdf"], { type: "application/pdf" })),
   setProperties: vi.fn(),
 }));
+const deliveryMock = vi.hoisted(() => ({
+  build: vi.fn(),
+}));
 
 vi.mock("jspdf", () => ({
   jsPDF: class {
@@ -18,7 +21,17 @@ vi.mock("jspdf", () => ({
   },
 }));
 
-import { downloadReviewPdf, downloadReviewPdfArchive, markReviewExported, triggerFileDownload } from "./pdf-download";
+vi.mock("./delivery-document", () => ({
+  buildDeliveryDocument: deliveryMock.build,
+}));
+
+import {
+  createReviewPdf,
+  downloadReviewPdf,
+  downloadReviewPdfArchive,
+  markReviewExported,
+  triggerFileDownload,
+} from "./pdf-download";
 
 describe("PDF 文件下载", () => {
   afterEach(() => {
@@ -29,6 +42,7 @@ describe("PDF 文件下载", () => {
     pdfMock.addImage.mockReset();
     pdfMock.output.mockClear();
     pdfMock.setProperties.mockReset();
+    deliveryMock.build.mockReset();
     delete (document as unknown as { fonts?: unknown }).fonts;
     delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL;
     delete (URL as unknown as { revokeObjectURL?: unknown }).revokeObjectURL;
@@ -49,7 +63,7 @@ describe("PDF 文件下载", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:review-pdf");
   });
 
-  it("云端导出加载自托管楷体后按作文原图生成 A4 横版三栏页", async () => {
+  it("云端导出按共享交付模型生成 A4 纵向逐段 PDF", async () => {
     const renderEvents: string[] = [];
     const fontLoad = vi.fn(async () => {
       renderEvents.push("font");
@@ -60,11 +74,15 @@ describe("PDF 文件下载", () => {
       value: { load: fontLoad },
     });
     const paintedText: Array<{ text: string; color: string; font: string }> = [];
+    const paintedRects: Array<{ color: string }> = [];
+    const strokedLines: Array<{ color: string }> = [];
     const context = {
       fillStyle: "", strokeStyle: "", font: "", textAlign: "left", textBaseline: "top", lineWidth: 1,
       arcTo: vi.fn(), beginPath: vi.fn(), clip: vi.fn(), closePath: vi.fn(), drawImage: vi.fn(),
-      fill: vi.fn(), fillRect: vi.fn(), lineTo: vi.fn(), moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(),
-      scale: vi.fn(), stroke: vi.fn(),
+      fill: vi.fn(), lineTo: vi.fn(), moveTo: vi.fn(), restore: vi.fn(), save: vi.fn(),
+      scale: vi.fn(),
+      fillRect() { paintedRects.push({ color: this.fillStyle }); },
+      stroke() { strokedLines.push({ color: this.strokeStyle }); },
       measureText: (text: string) => ({ width: text.length * 8 }),
       fillText(text: string) { paintedText.push({ text, color: this.fillStyle, font: this.font }); },
     };
@@ -87,16 +105,28 @@ describe("PDF 文件下载", () => {
       teacherReviewedAt: "2026-08-22T06:00:00.000Z",
       studentName: "小明",
       config: { title: "珍贵的礼物" },
-      images: [{ id: 11 }, { id: 12 }],
+      images: [{ id: 11, position: 0, width: 1200, height: 1600 }],
       report: {
-        personalizedComment: "优点",
-        painPoints: ["需要修改"],
-        sampleParagraphs: [
-          { title: "第一段", suggestion: "修改建议一", text: "范文一" },
-          { title: "第二段", suggestion: "修改建议二", text: "范文二" },
-        ],
+        version: 2,
+        paragraphReviews: [{ paragraphId: "paragraph-1" }],
       },
     };
+    deliveryMock.build.mockResolvedValue({
+      title: "珍贵的礼物",
+      studentName: "小明",
+      paragraphs: [{
+        paragraphNumber: 1,
+        crops: [{ pageIndex: 0, bytes: new Uint8Array([1, 2, 3]), width: 1200, height: 260 }],
+        suggestions: [{ problem: "动作略快", advice: "补充听觉", example: "我听见急促的呼吸声。" }],
+        revisionRuns: [
+          { kind: "unchanged", text: "我" },
+          { kind: "deleted", text: "慢慢" },
+          { kind: "inserted", text: "终于" },
+          { kind: "punctuation", text: "，" },
+          { kind: "unchanged", text: "走上台。" },
+        ],
+      }],
+    });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = String(input);
       if (url === "/api/reviews/review-1") {
@@ -105,7 +135,6 @@ describe("PDF 文件下载", () => {
       if (url === "/api/reviews/export-check") {
         return new Response(JSON.stringify({ ok: true, data: { exportable: true } }), { headers: { "content-type": "application/json" } });
       }
-      if (url.includes("/files?")) return new Response(new Uint8Array([1]), { headers: { "content-type": "image/jpeg" } });
       if (url === "/api/reviews/review-1/exported") {
         return new Response(JSON.stringify({ ok: true, data: { status: "exported" } }), { headers: { "content-type": "application/json" } });
       }
@@ -114,26 +143,42 @@ describe("PDF 文件下载", () => {
 
     await downloadReviewPdf("review-1");
 
-    const modelText = "范文第一段范文一第二段范文二";
+    const modelText = "珍贵的礼物我慢慢终于，走上台。";
     expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', modelText);
     expect(fontLoad).toHaveBeenCalledWith('700 16px "LXGW WenKai"', modelText);
     expect(renderEvents.slice(0, 3)).toEqual(["font", "font", "canvas"]);
-    expect(pdfMock.constructorOptions).toMatchObject({ orientation: "landscape", format: "a4" });
+    expect(pdfMock.constructorOptions).toMatchObject({
+      orientation: "portrait",
+      unit: "pt",
+      format: "a4",
+    });
     expect(pdfMock.setProperties).toHaveBeenCalledWith({
       title: "珍贵的礼物",
-      subject: "作文批改报告",
-      author: "臧老师",
+      subject: "作文逐段批改",
+      author: "AI 作业批改助手",
     });
-    expect(pdfMock.addImage).toHaveBeenCalledTimes(2);
-    expect(pdfMock.addPage).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/files?imageId=11&variant=original");
-    expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/files?imageId=12&variant=original");
-    expect(paintedText.find(({ text }) => text === "修改建议一")).toMatchObject({ color: "#1557b0", font: expect.stringContaining("SimHei") });
-    expect(paintedText.find(({ text }) => text === "范文一")).toMatchObject({ color: "#c62828", font: expect.stringContaining("LXGW WenKai") });
-    expect(paintedText.some(({ text }) => text === "优点" || text === "需要修改")).toBe(false);
-    expect(paintedText.some(({ text }) => text.includes("青藤未来") || text.startsWith("学生：") || /第 \d+ 页批注/u.test(text))).toBe(false);
-    expect(context.fillRect).toHaveBeenCalledTimes(2);
-    expect(context.stroke).not.toHaveBeenCalled();
+    expect(pdfMock.addImage).toHaveBeenCalledOnce();
+    expect(pdfMock.addPage).not.toHaveBeenCalled();
+    expect(deliveryMock.build).toHaveBeenCalledWith(review);
+    expect(context.drawImage).toHaveBeenCalled();
+    expect(paintedRects).toContainEqual({ color: "#fff0bd" });
+    expect(paintedText.find(({ text }) => text.includes("动作略快"))).toMatchObject({ color: "#171717" });
+    expect(paintedText.find(({ text }) => text.includes("终于"))).toMatchObject({ color: "#c91f32", font: expect.stringContaining("LXGW WenKai") });
+    expect(strokedLines).toContainEqual({ color: "#c91f32" });
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/files?"));
+  });
+
+  it("旧报告在创建 PDF 对象前返回 LEGACY_REPORT", async () => {
+    await expect(createReviewPdf({
+      id: "review-legacy",
+      studentName: "小明",
+      config: { title: "旧报告" },
+      images: [{ id: 1 }],
+      report: { sampleParagraphs: [{ title: "示范", text: "正文", suggestion: "建议" }] },
+    } as never)).rejects.toMatchObject({ code: "LEGACY_REPORT" });
+
+    expect(pdfMock.constructorOptions).toBeNull();
+    expect(deliveryMock.build).not.toHaveBeenCalled();
   });
 
   it("批量导出在创建任一 PDF 前校验全部审核状态和 revision", async () => {

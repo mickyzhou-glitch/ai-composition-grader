@@ -95,6 +95,6 @@ export class PdfBatchService {
       const pdf = await this.pdfService.getOrCreate(ownerId, reviewId);
       entries.push({ filename: pdf.filename, data: pdf.data });
     }
-    return { data: zip(entries), filename: "作文批改批量导出.zip" };
+    return { data: zip(entries), filename: "作文批改批量导出-PDF.zip" };
   }
 }

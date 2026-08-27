@@ -1,5 +1,7 @@
 import { chromium } from "playwright";
 
+import { deliveryReadiness } from "../delivery/readiness";
+import { isLegacyEvaluationReport } from "../domain/contracts";
 import type {
   ExportedPdfInput,
   ReviewRecord,
@@ -12,7 +14,7 @@ const PDF_TIMEOUT_MS = 60_000;
 const PDF_CLOSE_TIMEOUT_MS = 5_000;
 // Bump this whenever the printable document structure changes so an otherwise
 // current review cannot return a PDF rendered with an older layout.
-const PDF_LAYOUT_RELEASED_AT = new Date("2026-08-25T03:30:00.000Z");
+const PDF_LAYOUT_RELEASED_AT = new Date("2026-08-25T04:00:00.000Z");
 
 interface PdfRoute {
   request(): { url(): string };
@@ -136,6 +138,7 @@ export class PdfServiceError extends Error {
   constructor(
     readonly code:
       | "REVIEW_NOT_FOUND"
+      | "LEGACY_REPORT"
       | "PDF_CONTENT_INCOMPLETE"
       | "PDF_ANALYSIS_IN_PROGRESS"
       | "TEACHER_REVIEW_REQUIRED"
@@ -227,6 +230,14 @@ function pdfTimeoutError(): PdfServiceError {
   );
 }
 
+function legacyReportError(): PdfServiceError {
+  return new PdfServiceError(
+    "LEGACY_REPORT",
+    "旧版示范段落报告需要完整重新分析后才能生成新格式",
+    409,
+  );
+}
+
 function remainingTime(deadline: number): number {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw pdfTimeoutError();
@@ -306,11 +317,50 @@ export class PdfService {
         422,
       );
     }
+    if (review.report && isLegacyEvaluationReport(review.report)) {
+      const hasCurrentCache = Boolean(
+        review.pdfFilename
+        && review.pdfPath === `pdf/${review.pdfFilename}`
+        && review.pdfRevision === review.revision,
+      );
+      if (hasCurrentCache && review.pdfFilename) {
+        try {
+          return {
+            data: await this.fileStore.readFile(
+              ownerId,
+              reviewId,
+              "pdf",
+              review.pdfFilename,
+            ),
+            filename: review.pdfFilename,
+            cached: true,
+          };
+        } catch (error) {
+          if (!missingFile(error)) throw error;
+        }
+      }
+      throw legacyReportError();
+    }
     if (!review.report || review.images.length === 0) {
       throw new PdfServiceError(
         "PDF_CONTENT_INCOMPLETE",
         "请先完成 AI 分析并保留至少一张作文图片",
         422,
+      );
+    }
+    const readiness = deliveryReadiness({
+      report: review.report,
+      teacherReviewedAt: review.teacherReviewedAt,
+      reportOcrRevision: review.reportOcrRevision,
+      ocr: review.ocr,
+      images: review.images,
+    });
+    if (!readiness.ready) {
+      throw new PdfServiceError(
+        "PDF_CONTENT_INCOMPLETE",
+        readiness.message,
+        422,
+        { reason: readiness.code },
       );
     }
     await this.fileStore.migrateLegacyReview?.(ownerId, reviewId);

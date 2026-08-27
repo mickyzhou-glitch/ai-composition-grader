@@ -21,7 +21,7 @@ describe("PdfBatchService", () => {
 
     const result = await service.exportBatch("teacher-1", ["review-1", "review-2"]);
 
-    expect(result.filename).toBe("作文批改批量导出.zip");
+    expect(result.filename).toBe("作文批改批量导出-PDF.zip");
     expect(result.data.subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
     expect(result.data.includes(Buffer.from("first-pdf"))).toBe(true);
     expect(result.data.includes(Buffer.from("second-pdf"))).toBe(true);

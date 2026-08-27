@@ -1,26 +1,46 @@
-import {
-  isLegacyEvaluationReport,
-  type LegacyEvaluationReport,
-  type SampleParagraph,
-} from "@/src/domain/contracts";
+import { isLegacyEvaluationReport } from "@/src/domain/contracts";
+import { DELIVERY_STYLE, type DeliveryCrop, type DeliveryDocument } from "@/src/delivery/contracts";
+import type { RevisionRun } from "@/src/revisions/revision-diff";
 
 import { apiFetch } from "./api";
+import { buildDeliveryDocument } from "./delivery-document";
+import {
+  paginateDeliveryDocument,
+  type DeliveryPage,
+  type DeliveryPageBlock,
+} from "./delivery-pagination";
 import type { ReviewView } from "./types";
 
-const PDF_WIDTH = 841.89;
-const PDF_HEIGHT = 595.28;
+const PDF_WIDTH = 595.28;
+const PDF_HEIGHT = 841.89;
+const POINTS_PER_MM = 72 / 25.4;
 const RENDER_SCALE = 2;
-const HEITI_FONT = '"SimHei", "Heiti SC", "Microsoft YaHei", sans-serif';
+const TITLE_HEIGHT_MM = 14;
+const SANS_FONT = '"SimHei", "Heiti SC", "Microsoft YaHei", sans-serif';
 const KAITI_FONT_FACE = '"LXGW WenKai"';
 const KAITI_FONT = `${KAITI_FONT_FACE}, "KaiTi", "STKaiti", "Kaiti SC", serif`;
-const BLUE = "#1557b0";
-const RED = "#c62828";
+const TEXT_COLOR = "#171717";
+const CHANGE_COLOR = "#c91f32";
+const SUGGESTION_COLOR = "#fff0bd";
 
 type CanvasPage = {
   canvas: HTMLCanvasElement;
   context: CanvasRenderingContext2D;
 };
-type PdfSample = SampleParagraph;
+
+export class ReviewPdfError extends Error {
+  constructor(
+    readonly code: "LEGACY_REPORT" | "PDF_CONTENT_INCOMPLETE",
+    message: string,
+  ) {
+    super(message);
+    this.name = "ReviewPdfError";
+  }
+}
+
+function mm(value: number): number {
+  return value * POINTS_PER_MM;
+}
 
 function safeFilenamePart(value: string) {
   return value
@@ -32,13 +52,13 @@ function safeFilenamePart(value: string) {
 
 function reviewPdfFilename(review: ReviewView) {
   const student = safeFilenamePart(review.studentName || "未填写学生姓名");
-  return `${safeFilenamePart(review.config.title)}-${student}.pdf`;
+  return `作文批改-${safeFilenamePart(review.config.title)}-${student}.pdf`;
 }
 
 function createCanvasPage(): CanvasPage {
   const canvas = document.createElement("canvas");
-  canvas.width = PDF_WIDTH * RENDER_SCALE;
-  canvas.height = PDF_HEIGHT * RENDER_SCALE;
+  canvas.width = Math.ceil(PDF_WIDTH * RENDER_SCALE);
+  canvas.height = Math.ceil(PDF_HEIGHT * RENDER_SCALE);
   const context = canvas.getContext("2d");
   if (!context) throw new Error("当前浏览器不支持生成 PDF");
   context.scale(RENDER_SCALE, RENDER_SCALE);
@@ -46,22 +66,25 @@ function createCanvasPage(): CanvasPage {
   return { canvas, context };
 }
 
-function roundedRect(context: CanvasRenderingContext2D, x: number, y: number, width: number, height: number, radius: number) {
-  const corner = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + corner, y);
-  context.arcTo(x + width, y, x + width, y + height, corner);
-  context.arcTo(x + width, y + height, x, y + height, corner);
-  context.arcTo(x, y + height, x, y, corner);
-  context.arcTo(x, y, x + width, y, corner);
-  context.closePath();
+function paintPageBackground(context: CanvasRenderingContext2D) {
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, PDF_WIDTH, PDF_HEIGHT);
 }
 
-function wrapLines(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
+function setFont(
+  context: CanvasRenderingContext2D,
+  sizePt: number,
+  family: "sans" | "kaiti",
+  weight: 400 | 700 = 400,
+) {
+  context.font = `${weight} ${sizePt}pt ${family === "kaiti" ? KAITI_FONT : SANS_FONT}`;
+}
+
+function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const lines: string[] = [];
   for (const rawLine of text.replace(/\r\n?/gu, "\n").split("\n")) {
     let line = "";
-    for (const character of rawLine || " ") {
+    for (const character of Array.from(rawLine)) {
       if (line && context.measureText(`${line}${character}`).width > maxWidth) {
         lines.push(line);
         line = character;
@@ -69,47 +92,40 @@ function wrapLines(context: CanvasRenderingContext2D, text: string, maxWidth: nu
         line += character;
       }
     }
-    if (line) lines.push(line);
+    lines.push(line);
   }
   return lines;
 }
 
-function drawLines(
+function drawWrappedText(
   context: CanvasRenderingContext2D,
-  lines: string[],
+  text: string,
   x: number,
   y: number,
+  maxWidth: number,
   lineHeight: number,
-) {
-  lines.forEach((line, index) => context.fillText(line, x, y + index * lineHeight));
-  return y + lines.length * lineHeight;
+): number {
+  for (const line of wrapText(context, text, maxWidth)) {
+    context.fillText(line, x, y);
+    y += lineHeight;
+  }
+  return y;
 }
 
-function paintPageBackground(context: CanvasRenderingContext2D) {
-  context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, PDF_WIDTH, PDF_HEIGHT);
-}
-
-function samplesForImage<T>(samples: T[], imageIndex: number, imageCount: number) {
-  if (samples.length === 0) return [];
-  return samples.filter((_, index) => Math.floor((index * imageCount) / samples.length) === imageIndex);
-}
-
-async function loadExportKaiti(report: LegacyEvaluationReport) {
+async function loadExportKaiti(document: DeliveryDocument) {
   const text = [
-    "范文",
-    ...report.sampleParagraphs.flatMap(({ title, text: sampleText }) => [title, sampleText]),
+    document.title,
+    ...document.paragraphs.flatMap(({ revisionRuns }) => revisionRuns.map(({ text }) => text)),
   ].join("");
   await Promise.all([
-    document.fonts.load(`400 16px ${KAITI_FONT_FACE}`, text),
-    document.fonts.load(`700 16px ${KAITI_FONT_FACE}`, text),
+    window.document.fonts.load(`400 16px ${KAITI_FONT_FACE}`, text),
+    window.document.fonts.load(`700 16px ${KAITI_FONT_FACE}`, text),
   ]);
 }
 
-async function loadReviewImage(reviewId: string, imageId: number) {
-  const response = await fetch(`/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${imageId}&variant=original`);
-  if (!response.ok) throw new Error("作文原图读取失败，无法生成 PDF");
-  const objectUrl = URL.createObjectURL(await response.blob());
+async function loadCropImage(crop: DeliveryCrop): Promise<HTMLImageElement> {
+  const blob = new Blob([crop.bytes.slice().buffer as ArrayBuffer], { type: "image/png" });
+  const objectUrl = URL.createObjectURL(blob);
   try {
     const image = new Image();
     image.src = objectUrl;
@@ -120,131 +136,171 @@ async function loadReviewImage(reviewId: string, imageId: number) {
   }
 }
 
-function drawFittedImage(context: CanvasRenderingContext2D, image: HTMLImageElement, x: number, y: number, width: number, height: number) {
-  const imageRatio = image.naturalWidth / image.naturalHeight;
-  const frameRatio = width / height;
-  const drawWidth = imageRatio > frameRatio ? width : height * imageRatio;
-  const drawHeight = imageRatio > frameRatio ? width / imageRatio : height;
-  context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
+function paragraphForBlock(document: DeliveryDocument, paragraphNumber: number) {
+  const paragraph = document.paragraphs.find((candidate) => (
+    candidate.paragraphNumber === paragraphNumber
+  ));
+  if (!paragraph) throw new Error("逐段交付内容不完整");
+  return paragraph;
 }
 
-function fittedTextSize(
-  context: CanvasRenderingContext2D,
-  samples: PdfSample[],
-  field: "suggestion" | "text",
-  width: number,
-  height: number,
-  fontFamily: string,
-  maximum: number,
-) {
-  for (let size = maximum; size >= 8; size -= 0.5) {
-    let totalHeight = 0;
-    for (const sample of samples) {
-      context.font = `700 ${size}px ${fontFamily}`;
-      totalHeight += wrapLines(context, sample.title, width).length * size * 1.35;
-      context.font = `400 ${size}px ${fontFamily}`;
-      totalHeight += wrapLines(context, sample[field], width).length * size * 1.5 + size * 0.85;
-    }
-    if (totalHeight <= height) return size;
-  }
-  return 8;
+function drawHeading(context: CanvasRenderingContext2D, text: string, x: number, y: number) {
+  setFont(context, DELIVERY_STYLE.fontPt.section, "sans", 400);
+  context.fillStyle = TEXT_COLOR;
+  context.textAlign = "left";
+  context.fillText(text, x, y);
 }
 
-function drawSampleColumn(
+function drawSuggestion(
   context: CanvasRenderingContext2D,
-  samples: PdfSample[],
-  field: "suggestion" | "text",
+  document: DeliveryDocument,
+  paragraphNumber: number,
+  block: Extract<DeliveryPageBlock, { kind: "suggestion" }>,
   x: number,
   y: number,
   width: number,
-  height: number,
-  color: string,
-  fontFamily: string,
-  maximumSize: number,
 ) {
-  const size = fittedTextSize(context, samples, field, width, height, fontFamily, maximumSize);
-  let cursor = y;
-  for (const sample of samples) {
-    context.fillStyle = color;
-    context.font = `700 ${size}px ${fontFamily}`;
-    cursor = drawLines(context, wrapLines(context, sample.title, width), x, cursor, size * 1.35);
-    context.font = `400 ${size}px ${fontFamily}`;
-    cursor = drawLines(context, wrapLines(context, sample[field], width), x, cursor, size * 1.5) + size * 0.85;
+  const suggestion = paragraphForBlock(document, paragraphNumber).suggestions[block.suggestionIndex];
+  if (!suggestion) throw new Error("修改建议内容不完整");
+  context.fillStyle = SUGGESTION_COLOR;
+  context.fillRect(x, y, width, mm(block.heightMm));
+  setFont(context, DELIVERY_STYLE.fontPt.suggestion, "sans", 400);
+  context.fillStyle = TEXT_COLOR;
+  const padding = mm(3);
+  const lineHeight = mm(5);
+  let cursor = y + padding;
+  const contentWidth = width - padding * 2;
+  cursor = drawWrappedText(context, `问题：${suggestion.problem}`, x + padding, cursor, contentWidth, lineHeight);
+  cursor = drawWrappedText(context, `动作：${suggestion.advice}`, x + padding, cursor, contentWidth, lineHeight);
+  drawWrappedText(context, `示例：${suggestion.example}`, x + padding, cursor, contentWidth, lineHeight);
+}
+
+function drawRevisionRuns(
+  context: CanvasRenderingContext2D,
+  runs: RevisionRun[],
+  x: number,
+  y: number,
+  maxWidth: number,
+) {
+  setFont(context, DELIVERY_STYLE.fontPt.revision, "kaiti", 400);
+  context.textAlign = "left";
+  const lineHeight = mm(5.6);
+  let cursorX = x;
+  let cursorY = y;
+
+  for (const run of runs) {
+    const color = run.kind === "inserted" || run.kind === "deleted" ? CHANGE_COLOR : TEXT_COLOR;
+    let chunk = "";
+    const flush = () => {
+      if (!chunk) return;
+      const startX = cursorX;
+      context.fillStyle = color;
+      context.fillText(chunk, cursorX, cursorY);
+      cursorX += context.measureText(chunk).width;
+      if (run.kind === "deleted") {
+        context.strokeStyle = CHANGE_COLOR;
+        context.lineWidth = 1.2;
+        context.beginPath();
+        context.moveTo(startX, cursorY + mm(2.7));
+        context.lineTo(cursorX, cursorY + mm(2.7));
+        context.stroke();
+      }
+      chunk = "";
+    };
+
+    for (const character of Array.from(run.text.replace(/\r\n?/gu, "\n"))) {
+      if (character === "\n") {
+        flush();
+        cursorX = x;
+        cursorY += lineHeight;
+        continue;
+      }
+      const nextWidth = context.measureText(`${chunk}${character}`).width;
+      if (chunk && cursorX + nextWidth > x + maxWidth) {
+        flush();
+        cursorX = x;
+        cursorY += lineHeight;
+      }
+      chunk += character;
+    }
+    flush();
   }
 }
 
-async function drawFeedbackPage(
-  review: ReviewView,
-  report: LegacyEvaluationReport,
-  imageIndex: number,
-) {
-  const imageMeta = review.images[imageIndex];
-  if (!imageMeta) throw new Error("批改内容不完整，暂不能导出 PDF");
-  const image = await loadReviewImage(review.id, imageMeta.id);
-  const { canvas, context } = createCanvasPage();
+async function drawDeliveryPage(canvasPage: CanvasPage, document: DeliveryDocument, page: DeliveryPage) {
+  const { canvas, context } = canvasPage;
   paintPageBackground(context);
+  const x = mm(DELIVERY_STYLE.page.marginXmm);
+  const width = mm(DELIVERY_STYLE.page.widthMm - DELIVERY_STYLE.page.marginXmm * 2);
+  let y = mm(DELIVERY_STYLE.page.marginYmm);
+  if (page.hasDocumentTitle) {
+    setFont(context, DELIVERY_STYLE.fontPt.title, "kaiti", 700);
+    context.fillStyle = TEXT_COLOR;
+    context.textAlign = "center";
+    context.fillText(document.title, PDF_WIDTH / 2, y);
+    context.textAlign = "left";
+    y += mm(TITLE_HEIGHT_MM);
+  }
 
-  const top = 18;
-  const height = PDF_HEIGHT - top - 18;
-  const leftX = 18;
-  const leftWidth = 175;
-  const imageX = leftX + leftWidth + 14;
-  const imageWidth = 310;
-  const rightX = imageX + imageWidth + 14;
-  const rightWidth = PDF_WIDTH - rightX - 18;
-  const samples = samplesForImage(report.sampleParagraphs, imageIndex, review.images.length);
-
-  context.fillStyle = "#f7faff";
-  roundedRect(context, leftX, top, leftWidth, height, 4);
-  context.fill();
-  context.fillStyle = "#f3f3f3";
-  roundedRect(context, imageX, top, imageWidth, height, 4);
-  context.fill();
-  context.save();
-  roundedRect(context, imageX, top, imageWidth, height, 4);
-  context.clip();
-  drawFittedImage(context, image, imageX, top, imageWidth, height);
-  context.restore();
-  context.fillStyle = "#fff8f8";
-  roundedRect(context, rightX, top, rightWidth, height, 4);
-  context.fill();
-
-  context.fillStyle = BLUE;
-  context.font = `700 13px ${HEITI_FONT}`;
-  context.fillText("修改建议", leftX + 12, top + 12);
-  context.fillStyle = RED;
-  context.font = `700 15px ${KAITI_FONT}`;
-  context.fillText("范文", rightX + 12, top + 12);
-  drawSampleColumn(context, samples, "suggestion", leftX + 12, top + 40, leftWidth - 24, height - 52, BLUE, HEITI_FONT, 11.5);
-  drawSampleColumn(context, samples, "text", rightX + 12, top + 42, rightWidth - 24, height - 54, RED, KAITI_FONT, 13);
+  let paragraphNumber = 0;
+  for (const block of page.blocks) {
+    if (block.kind === "paragraph-heading") {
+      paragraphNumber = block.paragraphNumber;
+      drawHeading(context, `【第 ${block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`, x, y);
+    } else if (block.kind === "crop") {
+      const crop = paragraphForBlock(document, paragraphNumber).crops[block.cropIndex];
+      if (!crop) throw new Error("原文裁图内容不完整");
+      const image = await loadCropImage(crop);
+      const drawWidth = mm(block.widthMm);
+      const drawHeight = mm(block.heightMm);
+      context.drawImage(image, x + (width - drawWidth) / 2, y, drawWidth, drawHeight);
+    } else if (block.kind === "suggestion-heading") {
+      drawHeading(context, `【修改建议${block.continued ? "（续）" : ""}】`, x, y);
+    } else if (block.kind === "suggestion") {
+      drawSuggestion(context, document, paragraphNumber, block, x, y, width);
+    } else if (block.kind === "revision-heading") {
+      drawHeading(context, `【修改后段落${block.continued ? "（续）" : ""}】`, x, y);
+    } else {
+      drawRevisionRuns(context, block.runs, x, y, width);
+    }
+    y += mm(block.heightMm);
+  }
   return canvas;
 }
 
-async function createReviewPdf(review: ReviewView) {
+export async function createReviewPdf(review: ReviewView): Promise<Blob> {
   if (!review.report || review.images.length === 0) {
-    throw new Error("批改尚未完成，暂不能导出 PDF");
+    throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "批改尚未完成，暂不能导出 PDF");
   }
-  if (!isLegacyEvaluationReport(review.report)) {
-    throw new Error("逐段批改报告暂不支持旧版 PDF 导出");
+  if (isLegacyEvaluationReport(review.report)) {
+    throw new ReviewPdfError(
+      "LEGACY_REPORT",
+      "旧版示范段落报告需要完整重新分析后才能导出新格式",
+    );
   }
-  const report = review.report;
-  await loadExportKaiti(report);
+
+  const document = await buildDeliveryDocument(review);
+  await loadExportKaiti(document);
+  const firstCanvasPage = createCanvasPage();
+  const pages = paginateDeliveryDocument(document, {
+    measureText: (text, fontPt, family) => {
+      setFont(firstCanvasPage.context, fontPt, family, 400);
+      return firstCanvasPage.context.measureText(text).width / POINTS_PER_MM;
+    },
+  });
   const { jsPDF } = await import("jspdf");
-  const pdf = new jsPDF({
-    orientation: "landscape",
-    unit: "pt",
-    format: "a4",
-    compress: true,
+  const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4", compress: true });
+  pdf.setProperties({
+    title: review.config.title,
+    subject: "作文逐段批改",
+    author: "AI 作业批改助手",
   });
-  pdf.setProperties({ title: review.config.title, subject: "作文批改报告", author: "臧老师" });
-  const pages: HTMLCanvasElement[] = [];
-  for (let index = 0; index < review.images.length; index += 1) {
-    pages.push(await drawFeedbackPage(review, report, index));
-  }
-  pages.forEach((canvas, index) => {
-    if (index > 0) pdf.addPage("a4", "landscape");
+  for (let index = 0; index < pages.length; index += 1) {
+    const canvasPage = index === 0 ? firstCanvasPage : createCanvasPage();
+    const canvas = await drawDeliveryPage(canvasPage, document, pages[index]);
+    if (index > 0) pdf.addPage("a4", "portrait");
     pdf.addImage(canvas.toDataURL("image/jpeg", 0.94), "JPEG", 0, 0, PDF_WIDTH, PDF_HEIGHT, undefined, "FAST");
-  });
+  }
   return pdf.output("blob");
 }
 
@@ -271,9 +327,7 @@ async function assertReviewsExportable(reviews: ReviewView[]) {
   await apiFetch<{ exportable: true }>("/api/reviews/export-check", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      reviews: reviews.map(({ id, revision }) => ({ id, revision })),
-    }),
+    body: JSON.stringify({ reviews: reviews.map(({ id, revision }) => ({ id, revision })) }),
   });
 }
 
@@ -300,7 +354,7 @@ export async function downloadReviewPdfArchive(reviewIds: string[]): Promise<str
   for (const review of reviews) {
     archive.file(reviewPdfFilename(review), await createReviewPdf(review));
   }
-  const filename = "作文批改批量导出.zip";
+  const filename = "作文批改批量导出-PDF.zip";
   triggerFileDownload(await archive.generateAsync({ type: "blob", compression: "DEFLATE" }), filename);
   await Promise.all(reviewIds.map((reviewId) => markReviewExported(reviewId)));
   return filename;

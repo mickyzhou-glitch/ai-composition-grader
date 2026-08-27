@@ -11,6 +11,52 @@ import {
 
 const OWNER_ID = "local-admin";
 
+const paragraphReport = {
+  version: 2 as const,
+  themeFit: "fits" as const,
+  themeReason: "切题",
+  personalizedComment: "真实",
+  painPoints: [],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "A-" as const,
+  diagnostics: {
+    authenticityAndRelevance: { finding: "真实", action: "保留" },
+    materialAndDetails: { finding: "细节少", action: "补动作" },
+    structure: { finding: "完整", action: "保留" },
+    language: { finding: "普通", action: "改具体" },
+  },
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "描写普通", advice: "补充听觉", example: "我听见呼吸声。" }],
+    revisedText: "我走上台。",
+  }],
+  parentFeedbacks: [] as [],
+};
+
+const legacyReport = {
+  themeFit: "fits" as const,
+  themeReason: "切题",
+  personalizedComment: "真实",
+  painPoints: [],
+  commonIssues: [],
+  revisionSuggestions: [],
+  sampleParagraphs: [{ title: "示范", text: "正文", suggestion: "建议" }],
+};
+
+const ocrV2 = {
+  version: 2 as const,
+  ocrRevision: 3,
+  editedAt: null,
+  pages: [{ pageIndex: 0, text: "我走上台。", readable: true, warnings: [] }],
+  paragraphs: [{
+    id: "paragraph-1",
+    paragraphIndex: 0,
+    text: "我走上台。",
+    segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+  }],
+};
+
 function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
   return {
     id: "review-1",
@@ -33,24 +79,8 @@ function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
       scoringFocus: "细节",
       templateType: "custom",
     },
-    report: {
-      themeFit: "fits",
-      themeReason: "切题",
-      personalizedComment: "真实",
-      painPoints: [],
-      commonIssues: [],
-      revisionSuggestions: [],
-      scores: {
-        themeIntent: 8,
-        contentSelection: 8,
-        structure: 7,
-        languageExpression: 7,
-        writingConventions: 3,
-        total: 33,
-        level: "二类作文",
-      },
-      sampleParagraphs: [{ title: "示范", text: "正文", suggestion: "建议" }],
-    },
+    report: paragraphReport,
+    reportOcrRevision: 3,
     createdAt: new Date("2026-07-20T00:00:00.000Z"),
     updatedAt: new Date("2026-07-20T01:00:00.000Z"),
     images: [
@@ -71,8 +101,8 @@ function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
       },
     ],
     annotations: [],
+    ocr: ocrV2,
     ...overrides,
-    ocr: overrides.ocr ?? null,
   };
 }
 
@@ -209,6 +239,64 @@ describe("PdfService", () => {
     });
     expect(result.data).toEqual(Buffer.from("cached-pdf"));
     expect(browserFactory.launch).not.toHaveBeenCalled();
+    expect(repository.markExported).not.toHaveBeenCalled();
+  });
+
+  it("旧报告的同 revision 缓存即使早于新版式也原样返回", async () => {
+    const cached = review({
+      report: legacyReport,
+      ocr: null,
+      reportOcrRevision: null,
+      status: "exported",
+      revision: 8,
+      pdfRevision: 8,
+      pdfFilename: "旧版作文批改.pdf",
+      pdfPath: "pdf/旧版作文批改.pdf",
+      exportedAt: new Date("2026-08-24T03:00:00.000Z"),
+    });
+    const { service, fileStore, browserFactory, repository } = harness({ current: cached });
+    fileStore.readFile.mockResolvedValue(Buffer.from("legacy-cached-pdf"));
+
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).resolves.toMatchObject({
+      data: Buffer.from("legacy-cached-pdf"),
+      filename: "旧版作文批改.pdf",
+      cached: true,
+    });
+    expect(browserFactory.launch).not.toHaveBeenCalled();
+    expect(fileStore.writeFile).not.toHaveBeenCalled();
+    expect(repository.markExported).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["同 revision 缓存文件缺失", {
+      pdfRevision: 8,
+      pdfFilename: "旧版作文批改.pdf",
+      pdfPath: "pdf/旧版作文批改.pdf",
+      exportedAt: new Date("2026-08-24T03:00:00.000Z"),
+    }, true],
+    ["没有同 revision 缓存", {
+      pdfRevision: null,
+      pdfFilename: null,
+      pdfPath: null,
+      exportedAt: null,
+    }, false],
+  ])("旧报告%s时返回 LEGACY_REPORT 且不生成", async (_case, cache, missing) => {
+    const current = review({
+      report: legacyReport,
+      ocr: null,
+      reportOcrRevision: null,
+      revision: 8,
+      ...cache,
+    });
+    const { service, fileStore, browserFactory, repository } = harness({ current });
+    if (missing) fileStore.readFile.mockRejectedValue(Object.assign(new Error("missing"), { code: "ENOENT" }));
+
+    await expect(service.getOrCreate(OWNER_ID, "review-1")).rejects.toMatchObject({
+      code: "LEGACY_REPORT",
+      status: 409,
+    });
+    expect(browserFactory.launch).not.toHaveBeenCalled();
+    expect(fileStore.writeFile).not.toHaveBeenCalled();
     expect(repository.markExported).not.toHaveBeenCalled();
   });
 

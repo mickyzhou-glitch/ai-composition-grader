@@ -1,60 +1,83 @@
-import type { ReviewView } from "@/app/lib/types";
-import { isLegacyEvaluationReport } from "@/src/domain/contracts";
+import type { DeliveryDocument } from "@/src/delivery/contracts";
+import { paginateDeliveryDocument, type DeliveryPageBlock } from "@/app/lib/delivery-pagination";
 
 import styles from "./print.module.css";
 
-function sampleParagraphsForPage<T>(paragraphs: T[], pageIndex: number, pageCount: number): T[] {
-  return paragraphs.filter((_, index) => Math.floor((index * pageCount) / paragraphs.length) === pageIndex);
+function sectionHeading(
+  block: Extract<DeliveryPageBlock, { kind: "paragraph-heading" | "suggestion-heading" | "revision-heading" }>,
+) {
+  if (block.kind === "paragraph-heading") {
+    return `【第 ${block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`;
+  }
+  const title = block.kind === "suggestion-heading" ? "修改建议" : "修改后段落";
+  return `【${title}${block.continued ? "（续）" : ""}】`;
 }
 
-type PrintableReview = Pick<ReviewView, "images" | "report">;
+export function PrintReview({
+  document,
+  cropSources,
+}: {
+  document: DeliveryDocument;
+  cropSources: string[][];
+}) {
+  const pages = paginateDeliveryDocument(document);
 
-export function PrintReview({ review, imageSources }: { review: PrintableReview; imageSources: string[] }) {
-  if (
-    !review.report
-    || !isLegacyEvaluationReport(review.report)
-    || review.images.length === 0
-  ) {
-    throw new TypeError("print review requires report and images");
-  }
-
-  const report = review.report;
   return (
     <article className={styles.document} data-print-ready="true">
-      {review.images.map((image, pageIndex) => {
-        const samples = sampleParagraphsForPage(report.sampleParagraphs, pageIndex, review.images.length);
+      {pages.map((page, pageIndex) => {
+        let paragraphNumber = 0;
         return (
           <section
-            className={`${styles.sheet} ${styles.feedbackPage}`}
-            data-page-kind="feedback"
-            data-print-section={`feedback-page-${pageIndex + 1}`}
-            data-print-final={pageIndex === review.images.length - 1 ? "true" : undefined}
-            key={image.id}
+            className={styles.sheet}
+            data-print-section={`page-${page.pageNumber}`}
+            data-print-final={pageIndex === pages.length - 1 ? "true" : undefined}
+            key={page.pageNumber}
           >
-            <div className={styles.feedbackLayout}>
-              <aside className={styles.suggestionColumn} aria-label={`第 ${pageIndex + 1} 页段落修改建议`}>
-                {samples.map((paragraph, index) => (
-                  <article className={styles.suggestionParagraph} data-testid="sample-suggestion" key={`${pageIndex}-${index}-${paragraph.title}`}>
-                    <h3>{paragraph.title}修改建议：</h3>
-                    <p>{paragraph.suggestion}</p>
-                  </article>
-                ))}
-              </aside>
-              <figure className={styles.imageFigure}>
-                {/* A native image is intentional: PdfService waits on document.images. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img alt={`第 ${pageIndex + 1} 页原作文`} src={imageSources[pageIndex]} />
-              </figure>
-              <aside className={styles.modelColumn} aria-label={`第 ${pageIndex + 1} 页考场范文`}>
-                {pageIndex === 0 ? <h2>改后范文</h2> : null}
-                {samples.map((paragraph, index) => (
-                  <article className={styles.modelParagraph} data-testid="sample-paragraph" key={`${pageIndex}-${index}-${paragraph.title}`}>
-                    <h4>{paragraph.title}</h4>
-                    <p>{paragraph.text}</p>
-                  </article>
-                ))}
-              </aside>
-            </div>
+            {page.hasDocumentTitle ? <h1 className={styles.title}>{document.title}</h1> : null}
+            {page.blocks.map((block, blockIndex) => {
+              if (block.kind === "paragraph-heading") {
+                paragraphNumber = block.paragraphNumber;
+                return <h2 className={styles.sectionHeading} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>{sectionHeading(block)}</h2>;
+              }
+              const paragraphIndex = document.paragraphs.findIndex((paragraph) => (
+                paragraph.paragraphNumber === paragraphNumber
+              ));
+              const paragraph = document.paragraphs[paragraphIndex];
+              if (!paragraph) throw new TypeError("逐段打印内容不完整");
+              if (block.kind === "crop") {
+                const crop = paragraph.crops[block.cropIndex];
+                const source = cropSources[paragraphIndex]?.[block.cropIndex];
+                if (!crop || !source) throw new TypeError("原文裁图不完整");
+                return <figure className={styles.cropFigure} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
+                  {/* Canvas-generated object URLs intentionally bypass Next image optimization. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    alt={`第 ${paragraph.paragraphNumber} 段原文裁图，第 ${crop.pageIndex + 1} 页`}
+                    src={source}
+                    style={{ width: `${block.widthMm}mm`, height: `${block.heightMm}mm` }}
+                  />
+                </figure>;
+              }
+              if (block.kind === "suggestion-heading" || block.kind === "revision-heading") {
+                return <h2 className={styles.sectionHeading} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>{sectionHeading(block)}</h2>;
+              }
+              if (block.kind === "suggestion") {
+                const suggestion = paragraph.suggestions[block.suggestionIndex];
+                if (!suggestion) throw new TypeError("修改建议不完整");
+                return <ol className={styles.suggestions} start={block.suggestionIndex + 1} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
+                  <li>
+                    <p><b>问题：</b>{suggestion.problem}</p>
+                    <p><b>动作：</b>{suggestion.advice}</p>
+                    <p><b>示例：</b>{suggestion.example}</p>
+                  </li>
+                </ol>;
+              }
+              return <p className={styles.revision} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
+                {block.runs.map((run, runIndex) => run.kind === "deleted"
+                  ? <del className={styles.deleted} data-run-kind={run.kind} key={runIndex}>{run.text}</del>
+                  : <span className={run.kind === "inserted" ? styles.inserted : undefined} data-run-kind={run.kind} key={runIndex}>{run.text}</span>)}
+              </p>;
+            })}
           </section>
         );
       })}

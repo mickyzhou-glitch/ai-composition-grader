@@ -1,18 +1,14 @@
 @page {
-  size: A4 landscape;
-  margin: 0;
+  size: A4 portrait;
+  margin: 16mm 18mm;
 }
 
 .document {
-  --blue: #255ab1;
-  --red: #c90000;
-  --heiti: SimHei, "Heiti SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --kaiti: "LXGW WenKai", STKaiti, KaiTi, "Kaiti SC", "FZKai-Z03", serif;
   min-height: 100%;
   background: #fff;
-  color: var(--blue);
-  font-family: var(--heiti);
-  font-size: 12pt;
+  color: #171717;
+  font-family: SimHei, "Heiti SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 10.5pt;
   line-height: 1.45;
   -webkit-print-color-adjust: exact;
   print-color-adjust: exact;
@@ -24,23 +20,11 @@
   box-sizing: border-box;
 }
 
-.document h2,
-.document h3,
-.document h4,
-.document p {
-  margin-top: 0;
-}
-
-.document h2,
-.document h3,
-.document h4 {
-  break-after: avoid-page;
-}
-
 .sheet {
-  width: 297mm;
-  height: 210mm;
-  min-height: 210mm;
+  width: 174mm;
+  height: 265mm;
+  min-height: 265mm;
+  overflow: hidden;
   break-after: page;
 }
 
@@ -48,151 +32,86 @@
   break-after: auto;
 }
 
-.feedbackPage {
-  display: grid;
-  align-content: stretch;
-  padding: 0;
+.title {
+  height: 14mm;
+  margin: 0;
+  color: #171717;
+  font-family: "LXGW WenKai", STKaiti, KaiTi, serif;
+  font-size: 16pt;
+  line-height: 1.35;
+  text-align: center;
 }
 
-.feedbackLayout {
-  display: grid;
-  height: 210mm;
-  min-height: 210mm;
-  grid-template-columns: 19.5% 44% 36.5%;
-  align-items: stretch;
+.sectionHeading {
+  margin: 0;
+  color: #171717;
+  font-size: 11pt;
+  font-weight: 400;
+  line-height: 1.45;
+  break-after: avoid-page;
 }
 
-.suggestionColumn,
-.modelColumn {
-  min-width: 0;
+.cropFigure {
+  display: flex;
+  width: 100%;
+  margin: 0;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.cropFigure img {
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.suggestions {
+  margin: 0;
+  padding: 3mm 4mm 3mm 10mm;
+  overflow: hidden;
+  background: #fff0bd;
+  color: #171717;
+  font-size: 10.5pt;
+  line-height: 5mm;
+}
+
+.suggestions p {
+  margin: 0;
   overflow-wrap: anywhere;
 }
 
-.suggestionColumn {
-  padding: 10mm 4mm 7mm 6mm;
-  color: var(--blue);
-  font-family: var(--heiti);
-  font-size: 11pt;
-  line-height: 1.4;
-}
-
-.modelColumn {
-  padding: 4mm 5mm;
-  color: var(--red);
-  font-family: var(--kaiti);
-  font-size: 9.5pt;
-  line-height: 1.3;
-}
-
-.modelColumn > h2 {
-  margin: 0 0 1.5mm;
-  font-size: 14pt;
-  font-weight: 500;
-}
-
-.imageFigure {
-  position: relative;
-  width: 100%;
-  height: 210mm;
+.revision {
   margin: 0;
   overflow: hidden;
-  background: #fff;
-}
-
-.imageFigure img {
-  display: block;
-  width: 100%;
-  height: 210mm;
-  object-fit: contain;
-  object-position: center;
-}
-
-.suggestionParagraph {
-  margin: 0 0 9mm;
-}
-
-.suggestionParagraph h3 {
-  margin: 0 0 1mm;
-  color: inherit;
-  font-size: 12pt;
-  font-weight: 700;
-}
-
-.suggestionParagraph p {
-  margin: 0;
-}
-
-.modelParagraph {
-  margin: 0 0 2.5mm;
-  padding: 0;
-}
-
-.modelParagraph h4 {
-  margin: 0 0 .5mm;
-  color: inherit;
-  font-size: 10pt;
-  font-weight: 500;
-}
-
-.modelParagraph p {
-  margin: 0;
+  font-family: "LXGW WenKai", STKaiti, KaiTi, serif;
+  font-size: 11.5pt;
+  color: #171717;
+  line-height: 5.6mm;
+  overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 
-@media screen and (max-width: 768px) {
+.inserted,
+.deleted {
+  color: #c91f32;
+}
+
+.deleted {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+@media screen {
   .document {
-    font-size: 16px;
-    line-height: 1.55;
+    width: min(100%, 210mm);
+    margin: 0 auto;
+    padding: 16mm 18mm;
   }
 
   .sheet {
-    width: 100%;
-    height: auto;
-    min-height: 0;
-  }
-
-  .feedbackLayout {
-    height: auto;
-    min-height: 0;
-    grid-template-columns: 1fr;
-  }
-
-  .suggestionColumn,
-  .modelColumn {
-    padding: 22px 18px;
-    font-size: 1rem;
-    line-height: 1.55;
-  }
-
-  .suggestionParagraph {
-    margin-bottom: 20px;
-  }
-
-  .suggestionParagraph h3,
-  .modelParagraph h4 {
-    font-size: 1.1rem;
-  }
-
-  .modelColumn > h2 {
-    font-size: 1.45rem;
-  }
-
-  .imageFigure,
-  .imageFigure img {
-    height: auto;
-    min-height: 0;
-  }
-
-  .imageFigure img {
-    max-height: none;
-    object-fit: contain;
-  }
-}
-
-@media print {
-  .sheet,
-  .suggestionParagraph,
-  .modelParagraph {
-    break-inside: avoid;
+    max-width: 100%;
+    margin-bottom: 12mm;
+    border-bottom: 1px solid #ddd;
   }
 }
