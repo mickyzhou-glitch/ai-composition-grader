@@ -95,6 +95,7 @@ function reviewDto(review: {
   exportedAt?: unknown;
   teacherReviewedAt?: unknown;
   expiresAt?: unknown;
+  ocr?: unknown;
 }) {
   const hasPdf =
     typeof review.pdfFilename === "string" &&
@@ -117,6 +118,7 @@ function reviewDto(review: {
     pdfFilename: hasPdf ? review.pdfFilename : null,
     teacherReviewedAt: review.teacherReviewedAt ?? null,
     expiresAt: review.expiresAt ?? null,
+    ocr: review.ocr ?? null,
   };
 }
 
@@ -197,12 +199,18 @@ function failure(error: unknown): Response {
     typeof error.status === "number"
   ) {
     status = error.status;
+    const ocrMessages: Record<string, string> = {
+      OCR_NOT_FOUND: "识别原文不存在",
+      OCR_REVISION_CONFLICT: "识别原文已被更新",
+      IMAGE_REVISION_CONFLICT: "作文图片已被更新",
+      OCR_V2_REQUIRED: "当前识别原文需要重新识别",
+    };
     body = {
       code: error.code,
-      message:
-        "message" in error && typeof error.message === "string"
+      message: ocrMessages[error.code]
+        ?? ("message" in error && typeof error.message === "string"
           ? error.message
-          : "请求失败",
+          : "请求失败"),
       ...( "details" in error && error.details !== undefined
         ? { details: error.details }
         : {}),
@@ -519,6 +527,14 @@ const multipartRevisionSchema = z
   .transform(Number)
   .pipe(z.number().int().nonnegative());
 
+const editOcrParagraphsSchema = z.object({
+  expectedOcrRevision: z.number().int().nonnegative(),
+  paragraphs: z.array(z.object({
+    paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
+    text: z.string().trim().min(1),
+  }).strict()).min(1),
+}).strict();
+
 export function createReviewsRouteHandlers(dependencies: {
   reviewService: ReviewService;
   ownerId: string;
@@ -598,6 +614,27 @@ export function createReviewRouteHandlers(dependencies: {
       try {
         await dependencies.reviewService.delete(dependencies.ownerId, (await context.params).id);
         return ok({ deleted: true });
+      } catch (error) {
+        return failure(error);
+      }
+    },
+  };
+}
+
+export function createReviewOcrRouteHandlers(dependencies: {
+  reviewService: Pick<ReviewService, "editParagraphTexts">;
+  ownerId: string;
+}) {
+  return {
+    async PATCH(request: Request, context: RouteContext) {
+      try {
+        const input = editOcrParagraphsSchema.parse(await readJson(request));
+        return ok(reviewDto(await dependencies.reviewService.editParagraphTexts(
+          dependencies.ownerId,
+          (await context.params).id,
+          input.expectedOcrRevision,
+          input.paragraphs,
+        )));
       } catch (error) {
         return failure(error);
       }

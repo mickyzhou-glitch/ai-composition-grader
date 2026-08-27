@@ -5,6 +5,7 @@ import type {
   NormalizedCrop,
   ReviewStatus,
 } from "@/src/domain/contracts";
+import type { PublicOcrView } from "@/src/ocr/contracts";
 export type {
   BatchReanalysisCommitItem,
   BatchReanalysisCommitResult,
@@ -37,11 +38,7 @@ export interface ReviewView {
   expiresAt?: string | null;
   images: ReviewImageView[];
   annotations: Annotation[];
-  ocr: {
-    ocrRevision: number;
-    editedAt: string | null;
-    pages: Array<{ pageIndex: number; text: string; readable: boolean; warnings: string[] }>;
-  } | null;
+  ocr: PublicOcrView | null;
   reportStale: boolean;
   hasPdf: boolean;
   pdfFilename: string | null;

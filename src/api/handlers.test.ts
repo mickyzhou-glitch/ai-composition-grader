@@ -26,6 +26,7 @@ import {
   createBatchReanalysisPreviewRouteHandlers,
   createBatchReanalysisRouteHandlers,
   createReviewImagesRouteHandlers,
+  createReviewOcrRouteHandlers,
   createReviewExportCheckRouteHandlers,
   createRevisionRequestRouteHandlers,
   createTeacherReviewQueueRouteHandlers,
@@ -426,6 +427,102 @@ describe("review route handlers", () => {
     expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({
       revision: 1,
       config: { title: "第一页已保存" },
+    });
+  });
+
+  it("OCR PATCH 严格要求当前全部自然段并返回安全视图", async () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 2,
+      sourceRevision: 0,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{
+        pageIndex: 0,
+        text: "第一段。第二段。",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "内部分块", x: 0.1, y: 0.2, width: 0.5, height: 0.08 }],
+      }],
+      paragraphs: [
+        {
+          id: "paragraph-1",
+          paragraphIndex: 0,
+          text: "第一段。",
+          segments: [{ pageIndex: 0, text: "第一段。", x: 0.1, y: 0.2, width: 0.5, height: 0.08 }],
+        },
+        {
+          id: "paragraph-2",
+          paragraphIndex: 1,
+          text: "第二段。",
+          segments: [{ pageIndex: 0, text: "第二段。", x: 0.1, y: 0.5, width: 0.5, height: 0.08 }],
+        },
+      ],
+    }), "review-1");
+    const handlers = createReviewOcrRouteHandlers({ reviewService, ownerId: OWNER_ID });
+    const context = { params: Promise.resolve({ id: "review-1" }) };
+
+    const legacy = await handlers.PATCH(jsonRequest(
+      "http://localhost/api/reviews/review-1/ocr",
+      "PATCH",
+      { expectedOcrRevision: 0, pages: [{ pageIndex: 0, text: "伪装的逐页编辑" }] },
+    ), context);
+    expect(legacy.status).toBe(400);
+
+    const response = await handlers.PATCH(jsonRequest(
+      "http://localhost/api/reviews/review-1/ocr",
+      "PATCH",
+      {
+        expectedOcrRevision: 0,
+        paragraphs: [
+          { paragraphId: "paragraph-1", text: "老师修正的第一段。" },
+          { paragraphId: "paragraph-2", text: "老师修正的第二段。" },
+        ],
+      },
+    ), context);
+
+    expect(response.status).toBe(200);
+    const body = await json(response);
+    expect(body).toMatchObject({
+      ok: true,
+      data: {
+        ocr: {
+          version: 2,
+          ocrRevision: 1,
+          paragraphs: [
+            { id: "paragraph-1", text: "老师修正的第一段。" },
+            { id: "paragraph-2", text: "老师修正的第二段。" },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(body)).not.toContain("blocks");
+  });
+
+  it("OCR PATCH 对 v1 检查点返回稳定 OCR_V2_REQUIRED 冲突", async () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 1,
+      sourceRevision: 0,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "旧正文", readable: true, warnings: [], blocks: [] }],
+    }), "review-1");
+    const handlers = createReviewOcrRouteHandlers({ reviewService, ownerId: OWNER_ID });
+
+    const response = await handlers.PATCH(jsonRequest(
+      "http://localhost/api/reviews/review-1/ocr",
+      "PATCH",
+      {
+        expectedOcrRevision: 0,
+        paragraphs: [{ paragraphId: "paragraph-1", text: "修正" }],
+      },
+    ), { params: Promise.resolve({ id: "review-1" }) });
+
+    expect(response.status).toBe(409);
+    expect(await json(response)).toMatchObject({
+      ok: false,
+      error: { code: "OCR_V2_REQUIRED" },
     });
   });
 

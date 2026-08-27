@@ -72,6 +72,7 @@ function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
     ],
     annotations: [],
     ...overrides,
+    ocr: overrides.ocr ?? null,
   };
 }
 

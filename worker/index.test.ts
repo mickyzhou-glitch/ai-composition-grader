@@ -268,11 +268,17 @@ describe("Cloudflare Worker", () => {
 
   it("OCR 版本冲突时返回 409 且不暴露内部检查点", async () => {
     const checkpoint = JSON.stringify({
-      version: 1,
+      version: 2,
       sourceRevision: 2,
       ocrRevision: 3,
       editedAt: null,
       pages: [{ pageIndex: 0, text: "作文原文", readable: true, warnings: [], blocks: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "作文原文",
+        segments: [{ pageIndex: 0, text: "作文原文", x: 0.1, y: 0.2, width: 0.5, height: 0.08 }],
+      }],
     });
     const database = {
       prepare: vi.fn((sql: string) => ({
@@ -296,7 +302,7 @@ describe("Cloudflare Worker", () => {
       },
       body: JSON.stringify({
         expectedOcrRevision: 3,
-        pages: [{ pageIndex: 0, text: "修正后原文" }],
+        paragraphs: [{ paragraphId: "paragraph-1", text: "修正后原文" }],
       }),
     }), workerEnv(() => new Response("asset"), database));
 
@@ -304,6 +310,57 @@ describe("Cloudflare Worker", () => {
     await expect(response.json()).resolves.toEqual({
       ok: false,
       error: { code: "OCR_REVISION_CONFLICT", message: "识别原文已被更新" },
+    });
+  });
+
+  it("OCR PATCH 拒绝旧逐页请求和 v1 检查点", async () => {
+    const checkpoint = JSON.stringify({
+      version: 1,
+      sourceRevision: 2,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "旧作文原文", readable: true, warnings: [], blocks: [] }],
+    });
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1", username: "teacher", role: "teacher",
+            must_change_password: 0, expires_at: Date.now() + 60_000,
+          } : sql.includes("SELECT image_revision, ocr_checkpoint") ? {
+            image_revision: 2, ocr_checkpoint: checkpoint,
+          } : null),
+          run: vi.fn().mockResolvedValue({ meta: { changes: 1 } }),
+        })),
+      })),
+    };
+    const env = workerEnv(() => new Response("asset"), database);
+    const headers = {
+      cookie: "__Host-zuowen_session=session-token",
+      "content-type": "application/json",
+    };
+
+    const legacy = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/ocr", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        expectedOcrRevision: 0,
+        pages: [{ pageIndex: 0, text: "伪装的逐页编辑" }],
+      }),
+    }), env);
+    expect(legacy.status).toBe(400);
+
+    const v1 = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/ocr", {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify({
+        expectedOcrRevision: 0,
+        paragraphs: [{ paragraphId: "paragraph-1", text: "修正" }],
+      }),
+    }), env);
+    expect(v1.status).toBe(409);
+    await expect(v1.json()).resolves.toMatchObject({
+      error: { code: "OCR_V2_REQUIRED" },
     });
   });
 

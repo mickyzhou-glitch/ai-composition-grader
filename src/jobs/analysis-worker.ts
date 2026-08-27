@@ -3,7 +3,7 @@ import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { AnalysisToken } from "../db/review-repository";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
-import type { OcrCheckpoint } from "../ocr/contracts";
+import type { OcrCheckpoint, OcrCheckpointV2 } from "../ocr/contracts";
 import { ReviewPreparationError } from "../services/review-service";
 import type { AnalysisJobStatus } from "../db/schema";
 import {
@@ -63,8 +63,8 @@ export interface AnalysisExecutionService {
     reviewId: string,
     token: AnalysisToken,
     imageRevision: number,
-    pages: VisionOcrResult["pages"],
-  ): Promise<OcrCheckpoint>;
+    result: VisionOcrResult,
+  ): Promise<OcrCheckpointV2>;
   analyzeText?(input: {
     config: AssignmentConfig;
     pages: Array<{ pageIndex: number; text: string }>;
@@ -225,7 +225,7 @@ export class AnalysisWorker {
             claim.reviewId,
             prepared.token,
             prepared.imageRevision,
-            recognized.pages,
+            recognized,
           );
         } else {
           claim = this.jobs.updateProgress(claim, "saving_ocr");

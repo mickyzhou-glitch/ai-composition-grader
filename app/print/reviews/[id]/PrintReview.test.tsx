@@ -86,6 +86,7 @@ const review: ReviewRecord = {
     { pageIndex: 0, x: 0.2, y: 0.8, category: "structure", anchorText: "第二处", comment: "第二条", isHighlight: false },
     { pageIndex: 0, x: 0.3, y: 0.1, category: "typo", anchorText: "第一处", comment: "第一条", isHighlight: false },
   ],
+  ocr: null,
 };
 
 describe("A4 打印稿", () => {

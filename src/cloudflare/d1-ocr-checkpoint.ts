@@ -1,25 +1,21 @@
-import { z } from "zod";
+import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
+import {
+  createOcrCheckpointV2,
+  editOcrParagraphTexts,
+  OcrCheckpointError,
+  ocrCheckpointSchema,
+  publicOcrView,
+  type OcrCheckpoint,
+  type OcrCheckpointV2,
+  type OcrParagraphTextEdit,
+  type PublicOcrView,
+} from "../ocr/contracts";
 
-import { ocrCheckpointSchema, type OcrCheckpoint, type OcrPage } from "../ocr/contracts";
-
-const editPagesSchema = z.array(z.object({
-  pageIndex: z.number().int().nonnegative(),
-  text: z.string(),
-}).strict()).min(1).max(4);
+export { OcrCheckpointError } from "../ocr/contracts";
 
 interface OcrRow {
   image_revision: number;
   ocr_checkpoint: string | null;
-}
-
-export class OcrCheckpointError extends Error {
-  constructor(
-    readonly code: "OCR_NOT_FOUND" | "OCR_REVISION_CONFLICT" | "IMAGE_REVISION_CONFLICT",
-    readonly status: 404 | 409,
-  ) {
-    super(code);
-    this.name = "OcrCheckpointError";
-  }
 }
 
 export class D1OcrCheckpointRepository {
@@ -38,47 +34,35 @@ export class D1OcrCheckpointRepository {
     ownerId: string,
     reviewId: string,
     sourceRevision: number,
-    pages: OcrPage[],
-  ): Promise<OcrCheckpoint> {
-    const checkpoint = ocrCheckpointSchema.parse({
-      version: 1,
+    result: VisionOcrResult,
+  ): Promise<OcrCheckpointV2> {
+    const checkpoint = createOcrCheckpointV2({
       sourceRevision,
-      ocrRevision: 0,
-      editedAt: null,
-      pages,
+      pages: result.pages,
+      paragraphs: result.paragraphs,
     });
-    const result = await this.database.prepare(`
+    const update = await this.database.prepare(`
       UPDATE reviews SET ocr_checkpoint = ?, report_ocr_revision = NULL
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND image_revision = ?
     `).bind(JSON.stringify(checkpoint), reviewId, ownerId, sourceRevision).run();
-    if (result.meta.changes === 0) throw new OcrCheckpointError("IMAGE_REVISION_CONFLICT", 409);
+    if (update.meta.changes === 0) throw new OcrCheckpointError("IMAGE_REVISION_CONFLICT", 409);
     return checkpoint;
   }
 
-  async editTexts(
+  async editParagraphTexts(
     ownerId: string,
     reviewId: string,
     expectedOcrRevision: number,
-    pageTexts: Array<{ pageIndex: number; text: string }>,
-  ): Promise<OcrCheckpoint> {
-    const edits = editPagesSchema.parse(pageTexts);
+    edits: OcrParagraphTextEdit[],
+  ): Promise<OcrCheckpointV2> {
     const current = await this.readInternal(ownerId, reviewId);
     if (!current) throw new OcrCheckpointError("OCR_NOT_FOUND", 404);
-    if (current.ocrRevision !== expectedOcrRevision) {
-      throw new OcrCheckpointError("OCR_REVISION_CONFLICT", 409);
-    }
-    if (
-      edits.length !== current.pages.length ||
-      edits.some((edit, index) => edit.pageIndex !== index)
-    ) {
-      throw new TypeError("OCR edits must contain every page in order");
-    }
-    const next = ocrCheckpointSchema.parse({
-      ...current,
-      ocrRevision: current.ocrRevision + 1,
-      editedAt: new Date().toISOString(),
-      pages: current.pages.map((page, index) => ({ ...page, text: edits[index].text })),
-    });
+    const next = editOcrParagraphTexts(
+      current,
+      expectedOcrRevision,
+      edits,
+      new Date().toISOString(),
+    );
     const result = await this.database.prepare(`
       UPDATE reviews SET ocr_checkpoint = ?
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND image_revision = ?
@@ -90,16 +74,7 @@ export class D1OcrCheckpointRepository {
     return next;
   }
 
-  static publicView(checkpoint: OcrCheckpoint) {
-    return {
-      ocrRevision: checkpoint.ocrRevision,
-      editedAt: checkpoint.editedAt,
-      pages: checkpoint.pages.map(({ pageIndex, text, readable, warnings }) => ({
-        pageIndex,
-        text,
-        readable,
-        warnings,
-      })),
-    };
+  static publicView(checkpoint: OcrCheckpoint): PublicOcrView {
+    return publicOcrView(checkpoint);
   }
 }

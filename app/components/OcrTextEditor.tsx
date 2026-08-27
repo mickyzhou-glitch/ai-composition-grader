@@ -19,10 +19,11 @@ export function OcrTextEditor({
   disabled: boolean;
   onSaved: (review: ReviewView) => void;
 }) {
-  const [texts, setTexts] = useState(() => ocr.pages.map(({ text }) => text));
+  const paragraphs = ocr.version === 2 ? ocr.paragraphs : [];
+  const [texts, setTexts] = useState(() => paragraphs.map(({ text }) => text));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const dirty = texts.some((text, index) => text !== ocr.pages[index]?.text);
+  const dirty = texts.some((text, index) => text !== paragraphs[index]?.text);
 
   async function save() {
     if (!dirty || disabled || saving) return;
@@ -34,7 +35,10 @@ export function OcrTextEditor({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           expectedOcrRevision: ocr.ocrRevision,
-          pages: texts.map((text, pageIndex) => ({ pageIndex, text })),
+          paragraphs: texts.map((text, index) => ({
+            paragraphId: paragraphs[index].id,
+            text,
+          })),
         }),
       });
       onSaved(review);
@@ -45,21 +49,29 @@ export function OcrTextEditor({
     }
   }
 
+  if (ocr.version === 1) {
+    return (
+      <section className="ocr-editor" aria-label="识别原文编辑器">
+        <p>该识别原文是旧版逐页结构，请重新识别后按自然段复核。</p>
+        {ocr.pages.map((page) => <p key={page.pageIndex}>{page.text}</p>)}
+      </section>
+    );
+  }
+
   return (
     <section className="ocr-editor" aria-label="识别原文编辑器">
       {error ? <div className="error-banner" role="alert">{error}</div> : null}
       <div className="ocr-page-grid">
-        {ocr.pages.map((page, index) => (
-          <label className="ocr-page" key={page.pageIndex}>
-            <span>第 {page.pageIndex + 1} 页</span>
+        {paragraphs.map((paragraph, index) => (
+          <label className="ocr-page" key={paragraph.id}>
+            <span>第 {paragraph.paragraphIndex + 1} 段</span>
             <textarea
-              aria-label={`第 ${page.pageIndex + 1} 页识别原文`}
+              aria-label={`第 ${paragraph.paragraphIndex + 1} 段识别原文`}
               value={texts[index] ?? ""}
               disabled={disabled || saving}
               onChange={(event) => setTexts((current) =>
                 current.map((text, textIndex) => textIndex === index ? event.target.value : text))}
             />
-            {page.warnings.length > 0 ? <small>{page.warnings.join("；")}</small> : null}
           </label>
         ))}
       </div>

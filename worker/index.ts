@@ -39,6 +39,14 @@ import {
 } from "../src/reanalysis/contracts";
 import { z, ZodError } from "zod";
 
+const editOcrParagraphsSchema = z.object({
+  expectedOcrRevision: z.number().int().nonnegative(),
+  paragraphs: z.array(z.object({
+    paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
+    text: z.string().trim().min(1),
+  }).strict()).min(1),
+}).strict();
+
 function apiError(code: string, message: string, status: number, details?: unknown): Response {
   return Response.json({
     ok: false,
@@ -517,25 +525,25 @@ export default {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       const reviewId = decodeURIComponent(ocrMatch[1]);
       try {
-        const body = await request.json() as {
-          expectedOcrRevision?: unknown;
-          pages?: unknown;
-        };
-        if (!Number.isSafeInteger(body.expectedOcrRevision) || !Array.isArray(body.pages)) {
-          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
-        }
-        await new D1OcrCheckpointRepository(env.DB).editTexts(
+        const body = editOcrParagraphsSchema.parse(await request.json());
+        await new D1OcrCheckpointRepository(env.DB).editParagraphTexts(
           user.id,
           reviewId,
-          body.expectedOcrRevision as number,
-          body.pages as Array<{ pageIndex: number; text: string }>,
+          body.expectedOcrRevision,
+          body.paragraphs,
         );
         const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
         if (!review) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
         return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
       } catch (error) {
         if (error instanceof OcrCheckpointError) {
-          return apiError(error.code, error.code === "OCR_REVISION_CONFLICT" ? "识别原文已被更新" : "识别原文不存在", error.status);
+          const messages = {
+            OCR_NOT_FOUND: "识别原文不存在",
+            OCR_REVISION_CONFLICT: "识别原文已被更新",
+            IMAGE_REVISION_CONFLICT: "作文图片已被更新",
+            OCR_V2_REQUIRED: "当前识别原文需要重新识别",
+          };
+          return apiError(error.code, messages[error.code], error.status);
         }
         return apiError("VALIDATION_ERROR", "请求参数无效", 400);
       }
@@ -658,8 +666,8 @@ export default {
             return loadInlineAiImageUrls(env.FILES, images);
           },
           recognize: (imageUrls) => vision.recognize({ imageUrls }),
-          saveRecognized: (ownerId, reviewId, sourceRevision, pages) =>
-            ocr.saveRecognized(ownerId, reviewId, sourceRevision, pages),
+          saveRecognized: (ownerId, reviewId, sourceRevision, result) =>
+            ocr.saveRecognized(ownerId, reviewId, sourceRevision, result),
           analyzeText: (input) => content.analyzeText(input as never) as never,
           updateStage: async (jobId, stage) => {
             const result = await env.DB.prepare(

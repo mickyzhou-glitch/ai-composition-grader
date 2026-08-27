@@ -578,7 +578,7 @@ describe("AnalysisJobService", () => {
     const calls: string[] = [];
     let contentInput: unknown;
     const checkpoint = {
-      version: 1 as const,
+      version: 2 as const,
       sourceRevision: 1,
       ocrRevision: 0,
       editedAt: null,
@@ -588,6 +588,19 @@ describe("AnalysisJobService", () => {
         readable: true,
         warnings: [],
         blocks: [{ text: "我为自己鼓掌。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+      }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "我为自己鼓掌。",
+        segments: [{
+          pageIndex: 0,
+          text: "我为自己鼓掌。",
+          x: 0.1,
+          y: 0.2,
+          width: 0.3,
+          height: 0.1,
+        }],
       }],
     };
     const worker = new AnalysisWorker({
@@ -606,7 +619,14 @@ describe("AnalysisJobService", () => {
       }),
       recognize: async () => {
         calls.push("vision");
-        return { pages: checkpoint.pages };
+        return {
+          pages: checkpoint.pages,
+          paragraphs: checkpoint.paragraphs.map(({ paragraphIndex, text, segments }) => ({
+            paragraphIndex,
+            text,
+            segments,
+          })),
+        };
       },
       saveOcr: async () => {
         calls.push("save-ocr");

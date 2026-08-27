@@ -9,6 +9,7 @@ import type {
   AssignmentConfig,
   EvaluationReport,
 } from "../domain/contracts";
+import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import { initializeSchema } from "./init";
 import {
   CorruptReviewDataError,
@@ -50,6 +51,29 @@ const report: EvaluationReport = {
   parentFeedbacks: [],
 };
 
+const paragraphReport: EvaluationReport = {
+  version: 2,
+  themeFit: "fits",
+  themeReason: "紧扣主题。",
+  personalizedComment: "细节真实。",
+  painPoints: ["结尾略快"],
+  commonIssues: [],
+  revisionSuggestions: ["补充感受"],
+  grade: "A-",
+  diagnostics: {
+    authenticityAndRelevance: { finding: "主题紧扣真实事件。", action: "保留这件亲身经历。" },
+    materialAndDetails: { finding: "关键动作还可展开。", action: "补写一个动作和心理。" },
+    structure: { finding: "五段结构完整。", action: "让转折段承接前文。" },
+    language: { finding: "段首衔接自然。", action: "继续用动作承接段落。" },
+  },
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "结尾略快", advice: "补充感受", example: "我终于明白了。" }],
+    revisedText: "我终于明白了。",
+  }],
+  parentFeedbacks: [],
+};
+
 const annotation: Annotation = {
   pageIndex: 0,
   x: 0.2,
@@ -58,6 +82,28 @@ const annotation: Annotation = {
   anchorText: "我跑得很快",
   comment: "可以增加动作细节。",
   isHighlight: false,
+};
+
+const recognizedOcr: VisionOcrResult = {
+  pages: [{
+    pageIndex: 0,
+    text: "我为自己喝彩。",
+    readable: true,
+    warnings: [],
+    blocks: [{ text: "我为自己喝彩。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+  }],
+  paragraphs: [{
+    paragraphIndex: 0,
+    text: "我为自己喝彩。",
+    segments: [{
+      pageIndex: 0,
+      text: "我为自己喝彩。",
+      x: 0.1,
+      y: 0.2,
+      width: 0.3,
+      height: 0.1,
+    }],
+  }],
 };
 
 const customConfig: AssignmentConfig = {
@@ -468,18 +514,33 @@ describe("ReviewRepository", () => {
       "review-1",
       firstToken,
       1,
-      [{
+      recognizedOcr,
+    );
+
+    expect(withImage.revision).toBe(1);
+    expect(checkpoint).toMatchObject({
+      version: 2,
+      sourceRevision: 1,
+      ocrRevision: 0,
+      paragraphs: [{ id: "paragraph-1", paragraphIndex: 0 }],
+    });
+    expect(repository.getById(OWNER_ID, "review-1")?.ocr).toEqual({
+      version: 2,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{
         pageIndex: 0,
         text: "我为自己喝彩。",
         readable: true,
         warnings: [],
-        blocks: [{ text: "我为自己喝彩。", x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
       }],
-    );
-
-    expect(withImage.revision).toBe(1);
-    expect(checkpoint).toMatchObject({ sourceRevision: 1, ocrRevision: 0 });
-    expect(repository.getById(OWNER_ID, "review-1")).not.toHaveProperty("ocrCheckpoint");
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "我为自己喝彩。",
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.3, height: 0.1 }],
+      }],
+    });
     const firstLeaseExpiresAt = new Date("2026-07-20T11:00:00.000Z");
     sqlite.prepare(`
       INSERT INTO analysis_jobs (
@@ -560,6 +621,73 @@ describe("ReviewRepository", () => {
       ocr_checkpoint: null,
       report_ocr_revision: null,
     });
+  });
+
+  it("全量编辑 OCR 自然段只改文字和 OCR 版本", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const withImage = repository.replaceImages(OWNER_ID, "review-1", 0, [{
+      position: 0,
+      originalName: "第一页.jpg",
+      mimeType: "image/jpeg",
+      originalPath: "images/page-1-original.jpg",
+      annotationPath: "images/page-1-annotation.jpg",
+      aiPath: "images/page-1-ai.jpg",
+      width: 1200,
+      height: 1600,
+      rotation: 0,
+      crop: null,
+    }]);
+    const token = repository.beginAnalysis(OWNER_ID, "review-1", "run-ocr", withImage.revision);
+    const original = repository.saveRecognizedOcr(
+      OWNER_ID,
+      "review-1",
+      token,
+      1,
+      recognizedOcr,
+    );
+
+    const edited = repository.editParagraphTexts(
+      OWNER_ID,
+      "review-1",
+      0,
+      [{ paragraphId: "paragraph-1", text: "  老师修正后的正文。  " }],
+    );
+
+    expect(edited).toMatchObject({
+      version: 2,
+      sourceRevision: 1,
+      ocrRevision: 1,
+      paragraphs: [{ id: "paragraph-1", text: "老师修正后的正文。" }],
+    });
+    expect(edited.editedAt).not.toBeNull();
+    expect(edited.pages).toEqual(original.pages);
+    expect(edited.paragraphs[0].segments).toEqual(original.paragraphs[0].segments);
+  });
+
+  it("明确拒绝编辑 v1 OCR 检查点", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ? WHERE id = ?").run(JSON.stringify({
+      version: 1,
+      sourceRevision: 0,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: recognizedOcr.pages,
+    }), "review-1");
+
+    expect(() => repository.editParagraphTexts(
+      OWNER_ID,
+      "review-1",
+      0,
+      [{ paragraphId: "paragraph-1", text: "修正" }],
+    )).toThrow(expect.objectContaining({ code: "OCR_V2_REQUIRED", status: 409 }));
+  });
+
+  it("详情读取保留结构化 v2 批改报告", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    sqlite.prepare("UPDATE reviews SET report = ? WHERE id = ?")
+      .run(JSON.stringify(paragraphReport), "review-1");
+
+    expect(repository.getById(OWNER_ID, "review-1")?.report).toEqual(paragraphReport);
   });
 
   it("原子保存可辨认或不可辨认的 AI 分析结果", () => {

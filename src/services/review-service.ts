@@ -11,6 +11,7 @@ import type {
   RewriteFeedbackInput,
   RewriteSampleInput,
 } from "../ai/openai-review-adapter";
+import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { SavedAssignmentRecord } from "../db/review-repository";
 import type {
   ReviewRecord,
@@ -19,7 +20,11 @@ import type {
   AnalysisToken,
   AnalysisJobCompletionClaim,
 } from "../db/review-repository";
-import type { OcrCheckpoint, OcrPage } from "../ocr/contracts";
+import type {
+  OcrCheckpoint,
+  OcrCheckpointV2,
+  OcrParagraphTextEdit,
+} from "../ocr/contracts";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
 import { InMemoryReviewLock, type ReviewLock } from "./review-lock";
@@ -480,11 +485,23 @@ export class ReviewService {
     id: string,
     token: AnalysisToken,
     imageRevision: number,
-    pages: OcrPage[],
-  ): Promise<OcrCheckpoint> {
+    result: VisionOcrResult,
+  ): Promise<OcrCheckpointV2> {
     return this.lock.runExclusive(id, async () =>
-      this.repository.saveRecognizedOcr(ownerId, id, token, imageRevision, pages),
+      this.repository.saveRecognizedOcr(ownerId, id, token, imageRevision, result),
     );
+  }
+
+  async editParagraphTexts(
+    ownerId: string,
+    id: string,
+    expectedOcrRevision: number,
+    edits: OcrParagraphTextEdit[],
+  ): Promise<ReviewRecord> {
+    return this.lock.runExclusive(id, async () => {
+      this.repository.editParagraphTexts(ownerId, id, expectedOcrRevision, edits);
+      return this.get(ownerId, id);
+    });
   }
 
   async failPreparedAnalysis(ownerId: string, id: string, token: AnalysisToken): Promise<boolean> {

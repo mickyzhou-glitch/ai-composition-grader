@@ -49,9 +49,16 @@ const review = {
     parentFeedbacks,
   },
   ocr: {
+    version: 2 as const,
     ocrRevision: 1,
     editedAt: null,
     pages: [{ pageIndex: 0, text: "我为自己鼓掌。", readable: true, warnings: [] }],
+    paragraphs: [{
+      id: "paragraph-1",
+      paragraphIndex: 0,
+      text: "我为自己鼓掌。",
+      segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.08 }],
+    }],
   },
   reportStale: false,
   hasPdf: false,
@@ -247,7 +254,11 @@ describe("复核页", () => {
   it("识别原文保存后保留旧报告并提示重新生成", async () => {
     const staleReview = {
       ...review,
-      ocr: { ...review.ocr, ocrRevision: 2, pages: [{ ...review.ocr.pages[0], text: "老师修正后的作文。" }] },
+      ocr: {
+        ...review.ocr,
+        ocrRevision: 2,
+        paragraphs: [{ ...review.ocr.paragraphs[0], text: "老师修正后的作文。" }],
+      },
       reportStale: true,
     };
     vi.spyOn(globalThis, "fetch")
@@ -258,7 +269,7 @@ describe("复核页", () => {
     render(<ReviewPage />);
 
     await user.click(await screen.findByRole("tab", { name: "识别原文" }));
-    const editor = screen.getByRole("textbox", { name: "第 1 页识别原文" });
+    const editor = screen.getByRole("textbox", { name: "第 1 段识别原文" });
     await user.clear(editor);
     await user.type(editor, "老师修正后的作文。");
     await user.click(screen.getByRole("button", { name: "保存识别原文" }));

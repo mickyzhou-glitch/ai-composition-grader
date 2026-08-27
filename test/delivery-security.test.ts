@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
+import { publicOcrView } from "../src/ocr/contracts";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -128,6 +129,48 @@ describe("最终交付的本机安全默认值", () => {
     expect(adapter).not.toMatch(/\b(x|y|width|height):/u);
     expect(adapter).not.toContain("console.");
     expect(pipeline).not.toContain("console.");
+  });
+
+  it("公开 OCR JSON 不包含 blocks 或 segment 原始文字", () => {
+    const view = publicOcrView({
+      version: 2,
+      sourceRevision: 1,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{
+        pageIndex: 0,
+        text: "公开页文字",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "BLOCK_SECRET", x: 0.1, y: 0.2, width: 0.5, height: 0.08 }],
+      }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "教师可复核文字",
+        segments: [{
+          pageIndex: 0,
+          text: "SEGMENT_SECRET",
+          x: 0.1,
+          y: 0.2,
+          width: 0.5,
+          height: 0.08,
+        }],
+      }],
+    });
+
+    const serialized = JSON.stringify(view);
+    expect(serialized).not.toContain("blocks");
+    expect(serialized).not.toContain("BLOCK_SECRET");
+    expect(serialized).not.toContain("SEGMENT_SECRET");
+    if (view.version !== 2) throw new Error("expected OCR v2 public view");
+    expect(view.paragraphs[0].segments[0]).toEqual({
+      pageIndex: 0,
+      x: 0.1,
+      y: 0.2,
+      width: 0.5,
+      height: 0.08,
+    });
   });
 
   it("内容模型运行时请求递归扫描不到图片、链接、定位和 OCR 内部结构", async () => {

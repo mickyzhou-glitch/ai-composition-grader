@@ -283,6 +283,50 @@ export type OcrCheckpoint = z.infer<typeof ocrCheckpointSchema>;
 export type ReviewAnnotationAnchor = z.infer<typeof reviewAnnotationAnchorSchema>;
 export type ParagraphAnnotationAnchor = z.infer<typeof paragraphAnnotationAnchorSchema>;
 
+export type OcrParagraphTextEdit = {
+  paragraphId: string;
+  text: string;
+};
+
+export type PublicOcrPage = Omit<OcrPage, "blocks">;
+export type PublicOcrParagraphSegment = Omit<OcrParagraphSegment, "text">;
+export type PublicOcrParagraph = Omit<OcrParagraph, "segments"> & {
+  segments: PublicOcrParagraphSegment[];
+};
+export type PublicOcrView =
+  | {
+      version: 1;
+      ocrRevision: number;
+      editedAt: string | null;
+      pages: PublicOcrPage[];
+    }
+  | {
+      version: 2;
+      ocrRevision: number;
+      editedAt: string | null;
+      pages: PublicOcrPage[];
+      paragraphs: PublicOcrParagraph[];
+    };
+
+export class OcrCheckpointError extends Error {
+  constructor(
+    readonly code:
+      | "OCR_NOT_FOUND"
+      | "OCR_REVISION_CONFLICT"
+      | "IMAGE_REVISION_CONFLICT"
+      | "OCR_V2_REQUIRED",
+    readonly status: 404 | 409,
+  ) {
+    super(code);
+    this.name = "OcrCheckpointError";
+  }
+}
+
+const paragraphTextEditsSchema = z.array(z.object({
+  paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
+  text: z.string().trim().min(1),
+}).strict()).min(1);
+
 export function isOcrCheckpointV2(value: OcrCheckpoint): value is OcrCheckpointV2 {
   return value.version === 2;
 }
@@ -312,6 +356,64 @@ export function createOcrCheckpointV2(input: {
     paragraphs: candidate.paragraphs.map((paragraph, index) => ({
       ...paragraph,
       id: `paragraph-${index + 1}`,
+    })),
+  };
+}
+
+export function editOcrParagraphTexts(
+  checkpoint: OcrCheckpoint,
+  expectedOcrRevision: number,
+  input: OcrParagraphTextEdit[],
+  editedAt: string,
+): OcrCheckpointV2 {
+  const edits = paragraphTextEditsSchema.parse(input);
+  if (checkpoint.version !== 2) throw new OcrCheckpointError("OCR_V2_REQUIRED", 409);
+  if (checkpoint.ocrRevision !== expectedOcrRevision) {
+    throw new OcrCheckpointError("OCR_REVISION_CONFLICT", 409);
+  }
+  if (
+    edits.length !== checkpoint.paragraphs.length
+    || edits.some((edit, index) => edit.paragraphId !== checkpoint.paragraphs[index].id)
+  ) {
+    throw new TypeError("OCR edits must contain every paragraph in order");
+  }
+  return ocrCheckpointV2Schema.parse({
+    ...checkpoint,
+    ocrRevision: checkpoint.ocrRevision + 1,
+    editedAt,
+    paragraphs: checkpoint.paragraphs.map((paragraph, index) => ({
+      ...paragraph,
+      text: edits[index].text,
+    })),
+  });
+}
+
+export function publicOcrView(checkpoint: OcrCheckpoint): PublicOcrView {
+  const base = {
+    ocrRevision: checkpoint.ocrRevision,
+    editedAt: checkpoint.editedAt,
+    pages: checkpoint.pages.map(({ pageIndex, text, readable, warnings }) => ({
+      pageIndex,
+      text,
+      readable,
+      warnings,
+    })),
+  };
+  if (checkpoint.version === 1) return { version: 1, ...base };
+  return {
+    version: 2,
+    ...base,
+    paragraphs: checkpoint.paragraphs.map(({ id, paragraphIndex, text, segments }) => ({
+      id,
+      paragraphIndex,
+      text,
+      segments: segments.map(({ pageIndex, x, y, width, height }) => ({
+        pageIndex,
+        x,
+        y,
+        width,
+        height,
+      })),
     })),
   };
 }

@@ -38,6 +38,18 @@ const checkpoint: OcrCheckpoint = {
   pages,
 };
 
+const recognizedCheckpoint = {
+  version: 2 as const,
+  sourceRevision: 3,
+  ocrRevision: 0,
+  editedAt: null,
+  pages,
+  paragraphs: paragraphs.map((paragraph, index) => ({
+    ...paragraph,
+    id: `paragraph-${index + 1}`,
+  })),
+};
+
 const report = {
   themeFit: "fits",
   themeReason: "中心明确",
@@ -68,7 +80,7 @@ function dependencies(overrides: Partial<CloudAnalysisPipelineDependencies> = {}
     }),
     saveRecognized: vi.fn(async () => {
       calls.push("save_ocr");
-      return checkpoint;
+      return recognizedCheckpoint;
     }),
     analyzeText: vi.fn(async () => {
       calls.push("analyze_text");
@@ -122,6 +134,12 @@ describe("CloudAnalysisPipeline", () => {
     expect(deps.analyzeText).toHaveBeenCalledWith(expect.objectContaining({
       pages: [{ pageIndex: 0, text: "我终于明白了。" }],
     }));
+    expect(deps.saveRecognized).toHaveBeenCalledWith(
+      "owner-1",
+      "review-1",
+      3,
+      { pages, paragraphs },
+    );
     expect(JSON.stringify(vi.mocked(deps.analyzeText).mock.calls[0])).not.toContain("data:image");
   });
 
@@ -148,7 +166,7 @@ describe("CloudAnalysisPipeline", () => {
 
   it("OCR 包含不可读页面时不调用内容模型并保存重拍状态", async () => {
     const unreadable = {
-      ...checkpoint,
+      ...recognizedCheckpoint,
       pages: [{ ...pages[0], readable: false, warnings: ["请重拍"] }],
     };
     const deps = dependencies({

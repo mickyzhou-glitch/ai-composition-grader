@@ -2,6 +2,7 @@ import { and, asc, desc, eq, gt, inArray, isNull, isNotNull, lt, or, sql } from 
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 
+import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import {
   annotationSchema,
   assignmentConfigSchema,
@@ -19,7 +20,17 @@ import {
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import { encodeOrdinaryBoundMarker } from "../jobs/analysis-job-metadata";
-import { ocrCheckpointSchema, type OcrCheckpoint, type OcrPage } from "../ocr/contracts";
+import {
+  createOcrCheckpointV2,
+  editOcrParagraphTexts,
+  OcrCheckpointError,
+  ocrCheckpointSchema,
+  publicOcrView,
+  type OcrCheckpoint,
+  type OcrCheckpointV2,
+  type OcrParagraphTextEdit,
+  type PublicOcrView,
+} from "../ocr/contracts";
 import type { AppDatabase } from "./client";
 import { analysisJobs, annotations, reviewImages, reviews, savedAssignments } from "./schema";
 
@@ -64,6 +75,7 @@ export interface ReviewRecord {
   updatedAt: Date;
   images: ReviewImage[];
   annotations: Annotation[];
+  ocr: PublicOcrView | null;
 }
 
 export interface RetentionCandidate {
@@ -322,6 +334,8 @@ export class ReviewRepository {
         status: reviews.status,
         studentName: reviews.studentName,
         revision: reviews.revision,
+        imageRevision: reviews.imageRevision,
+        ocrCheckpoint: reviews.ocrCheckpoint,
         analysisRunId: reviews.analysisRunId,
         pdfFilename: reviews.pdfFilename,
         pdfPath: reviews.pdfPath,
@@ -430,8 +444,23 @@ export class ReviewRepository {
       .orderBy(annotations.position)
       .all();
 
+    let ocr: PublicOcrView | null = null;
+    if (review.ocrCheckpoint !== null) {
+      try {
+        const checkpoint = ocrCheckpointSchema.parse(review.ocrCheckpoint);
+        if (checkpoint.sourceRevision === review.imageRevision) {
+          ocr = publicOcrView(checkpoint);
+        }
+      } catch {
+        throw new CorruptReviewDataError(id, "ocrCheckpoint");
+      }
+    }
+    const { imageRevision: _imageRevision, ocrCheckpoint: _ocrCheckpoint, ...safeReview } = review;
+    void _imageRevision;
+    void _ocrCheckpoint;
+
     return {
-      ...review,
+      ...safeReview,
       config,
       status,
       report,
@@ -445,6 +474,7 @@ export class ReviewRepository {
         comment: annotation.comment,
         isHighlight: annotation.isHighlight,
       })),
+      ocr,
     };
     });
   }
@@ -915,14 +945,12 @@ export class ReviewRepository {
     id: string,
     token: AnalysisToken,
     sourceRevision: number,
-    pages: OcrPage[],
-  ): OcrCheckpoint {
-    const checkpoint = ocrCheckpointSchema.parse({
-      version: 1,
+    result: VisionOcrResult,
+  ): OcrCheckpointV2 {
+    const checkpoint = createOcrCheckpointV2({
       sourceRevision,
-      ocrRevision: 0,
-      editedAt: null,
-      pages,
+      pages: result.pages,
+      paragraphs: result.paragraphs,
     });
     const update = this.database.update(reviews).set({
       ocrCheckpoint: checkpoint,
@@ -938,6 +966,54 @@ export class ReviewRepository {
     )).run();
     if (update.changes === 0) throw new AnalysisConflictError(id);
     return checkpoint;
+  }
+
+  editParagraphTexts(
+    ownerId: string,
+    id: string,
+    expectedOcrRevision: number,
+    edits: OcrParagraphTextEdit[],
+  ): OcrCheckpointV2 {
+    const row = this.database.select({
+      imageRevision: reviews.imageRevision,
+      ocrCheckpoint: reviews.ocrCheckpoint,
+    }).from(reviews).where(and(
+      eq(reviews.id, id),
+      eq(reviews.ownerId, ownerId),
+      isNull(reviews.deletingAt),
+    )).get();
+    if (!row?.ocrCheckpoint) throw new OcrCheckpointError("OCR_NOT_FOUND", 404);
+
+    let current: OcrCheckpoint;
+    try {
+      current = ocrCheckpointSchema.parse(row.ocrCheckpoint);
+    } catch {
+      throw new CorruptReviewDataError(id, "ocrCheckpoint");
+    }
+    if (current.sourceRevision !== row.imageRevision) {
+      throw new OcrCheckpointError("OCR_NOT_FOUND", 404);
+    }
+    const now = this.now();
+    const next = editOcrParagraphTexts(
+      current,
+      expectedOcrRevision,
+      edits,
+      now.toISOString(),
+    );
+    const update = this.database.update(reviews).set({
+      ocrCheckpoint: next,
+      updatedAt: now,
+    }).where(and(
+      eq(reviews.id, id),
+      eq(reviews.ownerId, ownerId),
+      isNull(reviews.deletingAt),
+      eq(reviews.imageRevision, current.sourceRevision),
+      sql`json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision') = ${expectedOcrRevision}`,
+    )).run();
+    if (update.changes === 0) {
+      throw new OcrCheckpointError("OCR_REVISION_CONFLICT", 409);
+    }
+    return next;
   }
 
   saveAnalysis(

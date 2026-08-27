@@ -2,7 +2,7 @@ import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
 import type { Annotation, AssignmentConfig, EvaluationReport } from "../domain/contracts";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
-import type { OcrCheckpoint } from "../ocr/contracts";
+import type { OcrCheckpoint, OcrCheckpointV2 } from "../ocr/contracts";
 
 export type AnalysisJobMode = "full" | "content_only";
 export type CloudAnalysisProgressStage =
@@ -32,8 +32,8 @@ export interface CloudAnalysisPipelineDependencies {
     ownerId: string,
     reviewId: string,
     sourceRevision: number,
-    pages: VisionOcrResult["pages"],
-  ): Promise<OcrCheckpoint>;
+    result: VisionOcrResult,
+  ): Promise<OcrCheckpointV2>;
   analyzeText(input: {
     config: AssignmentConfig;
     pages: Array<{ pageIndex: number; text: string }>;
@@ -73,7 +73,7 @@ export class CloudAnalysisPipeline {
         job.ownerId,
         job.reviewId,
         job.imageRevision,
-        recognized.pages,
+        recognized,
       );
     }
 

@@ -43,8 +43,8 @@ export async function runWorker(): Promise<void> {
         : reviews.prepareAnalysis(ownerId, reviewId, mode, claim),
     analyze: (input) => reviews.analyzePrepared(input),
     recognize: (imageDataUrls) => vision.recognize({ imageUrls: imageDataUrls }),
-    saveOcr: (ownerId, reviewId, token, imageRevision, pages) =>
-      reviews.savePreparedOcr(ownerId, reviewId, token, imageRevision, pages),
+    saveOcr: (ownerId, reviewId, token, imageRevision, result) =>
+      reviews.savePreparedOcr(ownerId, reviewId, token, imageRevision, result),
     analyzeText: (input) => content.analyzeText(input as never) as never,
     save: (ownerId, reviewId, token, envelope, claim, expectedOcrRevision) =>
       reviews.savePreparedAnalysisAndCompleteJob(
