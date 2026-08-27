@@ -17,6 +17,19 @@ const pages: OcrPage[] = [{
   blocks: [{ text: "我终于明白了。", x: 0.2, y: 0.3, width: 0.4, height: 0.1 }],
 }];
 
+const paragraphs = [{
+  paragraphIndex: 0,
+  text: "我终于明白了。",
+  segments: [{
+    pageIndex: 0,
+    text: "我终于明白了。",
+    x: 0.2,
+    y: 0.3,
+    width: 0.4,
+    height: 0.1,
+  }],
+}];
+
 const checkpoint: OcrCheckpoint = {
   version: 1,
   sourceRevision: 3,
@@ -51,7 +64,7 @@ function dependencies(overrides: Partial<CloudAnalysisPipelineDependencies> = {}
     }),
     recognize: vi.fn(async () => {
       calls.push("recognize");
-      return { pages };
+      return { pages, paragraphs };
     }),
     saveRecognized: vi.fn(async () => {
       calls.push("save_ocr");
