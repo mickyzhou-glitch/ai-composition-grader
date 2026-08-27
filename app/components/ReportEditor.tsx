@@ -4,15 +4,27 @@ import { useState } from "react";
 
 import {
   gradeFromLegacyTotal,
+  isLegacyEvaluationReport,
   type CompositionGrade,
   type Diagnostics,
+  type EvaluationReport,
   type LegacyEvaluationReport,
+  type ParagraphEvaluationReport,
 } from "@/src/domain/contracts";
+import type { PublicOcrView } from "@/src/ocr/contracts";
+import type { ReviewImageView } from "../lib/types";
+import { ParagraphReviewEditor } from "./ParagraphReviewEditor";
 import { ScoreCard } from "./ScoreCard";
 
 interface ReportEditorProps {
-  report: LegacyEvaluationReport;
-  onChange: (report: LegacyEvaluationReport) => void;
+  report: EvaluationReport;
+  onChange: (report: EvaluationReport) => void;
+  reviewId?: string;
+  ocr?: PublicOcrView | null;
+  images?: ReviewImageView[] | Array<{ id: number; position: number }>;
+  disabled?: boolean;
+  onRewriteParagraph?: (paragraphId: string, instruction?: string) => Promise<void>;
+  rewritingParagraphId?: string | null;
   onRewriteFeedback?: (section: FeedbackSection) => Promise<void>;
   rewritingFeedbackSection?: FeedbackSection | null;
   onRewriteSample?: (index: number, instruction?: string) => Promise<void>;
@@ -44,6 +56,12 @@ const diagnosticLabels: Array<[keyof Diagnostics, string, string]> = [
 const pointLabels = ["一", "二", "三", "四", "五", "六"] as const;
 const MAX_FEEDBACK_POINTS = pointLabels.length;
 
+function isParagraphReportDraft(
+  report: EvaluationReport,
+): report is ParagraphEvaluationReport {
+  return "paragraphReviews" in report && Array.isArray(report.paragraphReviews);
+}
+
 export function ReportEditor({
   report,
   onChange,
@@ -53,8 +71,48 @@ export function ReportEditor({
   rewritingSampleIndex = null,
   onRewriteAllSamples,
   rewritingAllSamples = false,
-  expectedSampleParagraphCount = report.sampleParagraphs.length,
+  expectedSampleParagraphCount,
+  reviewId,
+  ocr,
+  images = [],
+  disabled = false,
+  onRewriteParagraph,
+  rewritingParagraphId = null,
 }: ReportEditorProps) {
+  const [rewriteInstructions, setRewriteInstructions] = useState<string[]>([]);
+  const [rewriteAllInstruction, setRewriteAllInstruction] = useState("");
+
+  if (isParagraphReportDraft(report)) {
+    if (!reviewId || !ocr || ocr.version !== 2) {
+      return <div className="paragraph-review-error" role="alert">
+        逐段批改需要当前自然段识别结果
+      </div>;
+    }
+    return (
+      <div className="report-editor">
+        <header className="report-version-heading">
+          <h2>逐段修改</h2>
+        </header>
+        <ParagraphReviewEditor
+          reviewId={reviewId}
+          report={report}
+          ocr={ocr}
+          images={images}
+          disabled={disabled}
+          onChange={onChange}
+          onRewriteParagraph={onRewriteParagraph}
+          rewritingParagraphId={rewritingParagraphId}
+        />
+      </div>
+    );
+  }
+  if (!isLegacyEvaluationReport(report)) {
+    return <div className="paragraph-review-error" role="alert">
+      批改报告格式无法识别
+    </div>;
+  }
+  const legacyReport = report;
+  const expectedParagraphCount = expectedSampleParagraphCount ?? report.sampleParagraphs.length;
   const grade = report.grade ?? gradeFromLegacyTotal(report.scores?.total ?? 0);
   const diagnostics: Diagnostics = report.diagnostics ?? {
     authenticityAndRelevance: { finding: report.themeReason, action: "围绕题目补写一处真实经历，让正文能支撑结尾感悟。" },
@@ -62,15 +120,13 @@ export function ReportEditor({
     structure: { finding: "历史报告未保留结构诊断。", action: "按五段式检查开篇、发展、转折、行动和感悟。" },
     language: { finding: "历史报告未保留语言诊断。", action: "把段首时间词改成承接上一段动作或情绪的句子。" },
   };
-  const [rewriteInstructions, setRewriteInstructions] = useState<string[]>([]);
-  const [rewriteAllInstruction, setRewriteAllInstruction] = useState("");
-  const sampleStructureMatches = report.sampleParagraphs.length === expectedSampleParagraphCount;
+  const sampleStructureMatches = report.sampleParagraphs.length === expectedParagraphCount;
   function update<K extends keyof LegacyEvaluationReport>(key: K, value: LegacyEvaluationReport[K]) {
     onChange({ ...report, [key]: value });
   }
 
   function updateSample(index: number, change: Partial<LegacyEvaluationReport["sampleParagraphs"][number]>) {
-    const sampleParagraphs = report.sampleParagraphs.map((sample, sampleIndex) =>
+    const sampleParagraphs = legacyReport.sampleParagraphs.map((sample, sampleIndex) =>
       sampleIndex === index ? { ...sample, ...change } : sample,
     );
     update("sampleParagraphs", sampleParagraphs);
@@ -108,6 +164,9 @@ export function ReportEditor({
 
   return (
     <div className="report-editor">
+      <header className="report-version-heading">
+        <h2>旧版示范段落报告</h2>
+      </header>
       <section className="report-section report-theme" aria-labelledby="theme-report-heading">
         <div className="report-section-heading"><div><p className="eyebrow">审题诊断</p><h2 id="theme-report-heading">主题判断</h2></div><select aria-label="主题判断" value={report.themeFit} onChange={(event) => updateThemeFit(event.target.value as LegacyEvaluationReport["themeFit"])}><option value="fits">切合题意</option><option value="partial">部分切题</option><option value="off_topic">偏离题意</option></select></div>
         <label>判断依据<textarea aria-label="主题判断依据" value={report.themeReason} onChange={(event) => update("themeReason", event.target.value)} /></label>
@@ -175,10 +234,10 @@ export function ReportEditor({
       </section>
 
       <section className="report-section" aria-labelledby="samples-heading">
-        <p className="eyebrow">可直接借鉴</p><h2 id="samples-heading">示范段落</h2><p className="muted">每段保留示范正文和对应的修改建议；本题要求 {expectedSampleParagraphCount} 段。</p>
-        {!sampleStructureMatches ? <p className="form-error">当前为 {report.sampleParagraphs.length} 段，题目要求 {expectedSampleParagraphCount} 段，请先使用 AI 全文重新生成。</p> : null}
+        <p className="eyebrow">可直接借鉴</p><h2 id="samples-heading">示范段落</h2><p className="muted">每段保留示范正文和对应的修改建议；本题要求 {expectedParagraphCount} 段。</p>
+        {!sampleStructureMatches ? <p className="form-error">当前为 {report.sampleParagraphs.length} 段，题目要求 {expectedParagraphCount} 段，请先使用 AI 全文重新生成。</p> : null}
         {onRewriteAllSamples ? <div className="sample-ai-all-actions">
-          <div><b>AI 整体优化</b><small>一次重写完整 {expectedSampleParagraphCount} 段示范文，并遵循本题结构要求。</small></div>
+          <div><b>AI 整体优化</b><small>一次重写完整 {expectedParagraphCount} 段示范文，并遵循本题结构要求。</small></div>
           <label>AI 整体修改要求（可选）<input aria-label="AI 整体修改要求" value={rewriteAllInstruction} placeholder="例如：让礼物线索贯穿全文，删去无关人物" onChange={(event) => setRewriteAllInstruction(event.target.value)} /></label>
           <div className="sample-ai-all-buttons">
             <button type="button" disabled={rewritingAllSamples || rewritingSampleIndex !== null} onClick={() => void onRewriteAllSamples()}>AI 全文重新生成</button>

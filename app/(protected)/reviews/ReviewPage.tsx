@@ -12,6 +12,8 @@ import {
   type Annotation,
   type EvaluationReport,
   type LegacyEvaluationReport,
+  type ParagraphEvaluationReport,
+  type ParagraphReview,
 } from "@/src/domain/contracts";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -99,6 +101,12 @@ function saveErrorMessage(error: unknown): string {
   return errorMessage(error);
 }
 
+function isParagraphReportDraft(
+  report: EvaluationReport,
+): report is ParagraphEvaluationReport {
+  return "paragraphReviews" in report && Array.isArray(report.paragraphReviews);
+}
+
 export function ReviewPage({ reviewId }: { reviewId: string }) {
   const [review, setReview] = useState<ReviewView | null>(null);
   const [studentName, setStudentName] = useState("");
@@ -109,9 +117,10 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   const [activePage, setActivePage] = useState(0);
   const [activeView, setActiveView] = useState<"report" | "ocr">("report");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | "rewrite-feedback" | "rewrite-sample" | "rewrite-all-samples" | null>(null);
+  const [busy, setBusy] = useState<"save" | "analyze" | "replace" | "export" | "rewrite-feedback" | "rewrite-sample" | "rewrite-all-samples" | "rewrite-paragraph" | null>(null);
   const [rewritingFeedbackSection, setRewritingFeedbackSection] = useState<FeedbackSection | null>(null);
   const [rewritingSampleIndex, setRewritingSampleIndex] = useState<number | null>(null);
+  const [rewritingParagraphId, setRewritingParagraphId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -330,6 +339,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     [activePage, review?.images],
   );
   const editableLegacyReport = report !== null && isLegacyEvaluationReport(report);
+  const editableParagraphReport = report !== null
+    && isParagraphReportDraft(report)
+    && review?.ocr?.version === 2
+    && !review.reportStale;
+  const editableReport = editableLegacyReport || editableParagraphReport;
 
   function changeAnnotations(next: Annotation[]) {
     if (report && !isLegacyEvaluationReport(report)) return;
@@ -417,6 +431,51 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
   }
 
+  async function rewriteParagraph(paragraphId: string, instruction?: string) {
+    if (
+      !review
+      || !report
+      || !isParagraphReportDraft(report)
+      || review.ocr?.version !== 2
+      || review.reportStale
+      || busy
+      || analysisJob?.status === "queued"
+      || analysisJob?.status === "running"
+    ) return;
+    setBusy("rewrite-paragraph");
+    setRewritingParagraphId(paragraphId);
+    setError("");
+    setNotice("");
+    try {
+      const rewritten = await apiFetch<ParagraphReview>(
+        `/api/reviews/${encodeURIComponent(review.id)}/paragraph-reviews/${encodeURIComponent(paragraphId)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            paragraphReviews: report.paragraphReviews,
+            ...(instruction?.trim() ? { instruction: instruction.trim() } : {}),
+          }),
+        },
+      );
+      changeReport({
+        ...report,
+        paragraphReviews: report.paragraphReviews.map((paragraph) => (
+          paragraph.paragraphId === paragraphId ? rewritten : paragraph
+        )),
+      });
+      const paragraphNumber = review.ocr.paragraphs.find(
+        ({ id }) => id === paragraphId,
+      )?.paragraphIndex;
+      setNotice(`${paragraphNumber === undefined ? "当前" : `第 ${paragraphNumber + 1}`} 段已由 AI 更新，请复核后保存。`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setRewritingParagraphId(null);
+      setBusy(null);
+    }
+  }
+
   async function rewriteAllSamples(instruction?: string) {
     if (
       !review
@@ -449,8 +508,8 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
 
   async function save() {
     if (!report || !review || busy || analysisJob?.status === "queued" || analysisJob?.status === "running") return;
-    if (!isLegacyEvaluationReport(report)) {
-      setError("逐段批改报告请使用逐段复核界面，旧版复核页暂不支持保存。");
+    if (!editableReport) {
+      setError("当前批改报告与识别原文不一致，请先重新生成批改。");
       setNotice("");
       return;
     }
@@ -648,6 +707,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           <div className="review-actions">
             <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive || Boolean(report && !editableLegacyReport)} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>重新分析</AsyncButton>
+            {editableParagraphReport ? <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成整篇批改</AsyncButton> : null}
             {review.status !== "needs_better_images" ? replacementControl() : null}
             {report ? (
               <AsyncButton
@@ -658,7 +718,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
                 onClick={() => void exportPdf()}
               >{review.hasPdf ? "下载 PDF" : "导出 PDF"}</AsyncButton>
             ) : null}
-            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!editableLegacyReport || !dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
+            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!editableReport || !dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
           </div>
         </header>
         {error ? <ErrorBanner
@@ -687,9 +747,29 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             <ParentFeedbackEditor
               feedbacks={report.parentFeedbacks ?? []}
               savedFeedbacks={review.report?.parentFeedbacks ?? []}
-              disabled={busy !== null || analysisActive || !editableLegacyReport}
+              disabled={busy !== null || analysisActive || !editableReport}
               onChange={(parentFeedbacks) => {
-                if (editableLegacyReport && isLegacyEvaluationReport(report)) {
+                if (editableParagraphReport && isParagraphReportDraft(report)) {
+                  if (parentFeedbacks.length === 0) {
+                    const nextFeedbacks: ParagraphEvaluationReport["parentFeedbacks"] = [];
+                    changeReport({ ...report, parentFeedbacks: nextFeedbacks });
+                  } else if (
+                    parentFeedbacks.length === 3
+                    && parentFeedbacks[0].style === "warm"
+                    && parentFeedbacks[1].style === "professional"
+                    && parentFeedbacks[2].style === "concise"
+                  ) {
+                    const nextFeedbacks: ParagraphEvaluationReport["parentFeedbacks"] = [
+                      parentFeedbacks[0],
+                      parentFeedbacks[1],
+                      parentFeedbacks[2],
+                    ];
+                    changeReport({
+                      ...report,
+                      parentFeedbacks: nextFeedbacks,
+                    });
+                  }
+                } else if (editableLegacyReport) {
                   changeReport({ ...report, parentFeedbacks });
                 }
               }}
@@ -709,7 +789,23 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             {activeImage ? <PhotoAnnotationEditor imageUrl={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${activeImage.id}&variant=annotation`} pageIndex={activePage} annotations={annotations} disabled={!editableLegacyReport} onChange={changeAnnotations} /> : <div className="empty-state"><h3>尚未上传作文图片</h3><p>请从新建流程上传 1 至 {MAX_REVIEW_IMAGES} 张图片后再分析。</p></div>}
           </div>
           <div className="report-pane">
-            {report && isLegacyEvaluationReport(report) ? <ReportEditor report={report} onChange={changeReport} onRewriteFeedback={rewriteFeedback} rewritingFeedbackSection={rewritingFeedbackSection} onRewriteSample={rewriteSample} rewritingSampleIndex={rewritingSampleIndex} onRewriteAllSamples={rewriteAllSamples} rewritingAllSamples={busy === "rewrite-all-samples"} expectedSampleParagraphCount={expectedSampleParagraphCount(review.config)} /> : report ? <p className="muted">逐段批改报告暂不支持旧版复核界面</p> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            {report ? <ReportEditor
+              report={report}
+              onChange={changeReport}
+              reviewId={review.id}
+              ocr={review.ocr}
+              images={review.images}
+              disabled={!editableReport || busy !== null || analysisActive}
+              onRewriteParagraph={isParagraphReportDraft(report) ? rewriteParagraph : undefined}
+              rewritingParagraphId={rewritingParagraphId}
+              onRewriteFeedback={isLegacyEvaluationReport(report) ? rewriteFeedback : undefined}
+              rewritingFeedbackSection={rewritingFeedbackSection}
+              onRewriteSample={isLegacyEvaluationReport(report) ? rewriteSample : undefined}
+              rewritingSampleIndex={rewritingSampleIndex}
+              onRewriteAllSamples={isLegacyEvaluationReport(report) ? rewriteAllSamples : undefined}
+              rewritingAllSamples={busy === "rewrite-all-samples"}
+              expectedSampleParagraphCount={isLegacyEvaluationReport(report) ? expectedSampleParagraphCount(review.config) : undefined}
+            /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
           </div>
           </div>
         </section>

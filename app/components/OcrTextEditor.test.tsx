@@ -111,6 +111,7 @@ describe("OcrTextEditor", () => {
     />);
 
     expect(screen.getByText("旧版逐页原文")).toBeInTheDocument();
+    expect(screen.getByText("需要完整重新识别")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "保存识别原文" })).not.toBeInTheDocument();
   });
 });

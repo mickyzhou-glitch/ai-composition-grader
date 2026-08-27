@@ -10,6 +10,12 @@ vi.mock("../../../lib/pdf-download", () => ({
   downloadReviewPdfArchive: pdfDownloads.batch,
 }));
 
+vi.mock("../../../components/ParagraphCropPreview", () => ({
+  ParagraphCropPreview: ({ paragraphNumber }: { paragraphNumber: number }) => (
+    <div data-testid={`page-crop-${paragraphNumber}`}>第 {paragraphNumber} 段原文裁图</div>
+  ),
+}));
+
 import { BatchReviewPage } from "./BatchReviewPage";
 
 const report = {
@@ -34,13 +40,53 @@ const report = {
   parentFeedbacks: [],
 };
 
-function detail(id: string, studentName: string, revision: number, currentReport = report) {
+const paragraphReport = {
+  version: 2 as const,
+  themeFit: "fits" as const,
+  themeReason: "切题",
+  personalizedComment: "选材贴近真实生活",
+  painPoints: [],
+  commonIssues: [],
+  revisionSuggestions: [],
+  grade: "A-" as const,
+  diagnostics: report.diagnostics,
+  paragraphReviews: [{
+    paragraphId: "paragraph-1",
+    suggestions: [{ problem: "描写普通", advice: "补充听觉", example: "我听见了呼吸声。" }],
+    revisedText: "我走上台。",
+  }],
+  parentFeedbacks: [],
+};
+
+function detail(
+  id: string,
+  studentName: string,
+  revision: number,
+  currentReport: typeof report | typeof paragraphReport = report,
+) {
+  const ocr = "paragraphReviews" in currentReport ? {
+    version: 2 as const,
+    ocrRevision: 1,
+    editedAt: null,
+    pages: [{ pageIndex: 0, text: `${studentName}的作文原文`, readable: true, warnings: [] }],
+    paragraphs: [{
+      id: "paragraph-1",
+      paragraphIndex: 0,
+      text: "我走上台。",
+      segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+    }],
+  } : {
+    version: 1 as const,
+    ocrRevision: 1,
+    editedAt: null,
+    pages: [{ pageIndex: 0, text: `${studentName}的作文原文`, readable: true, warnings: [] }],
+  };
   return {
     id, studentName, revision, status: "ready_for_review", teacherReviewedAt: null,
     config: { title: `作文${id.at(-1)}`, grade: "六年级", writingRequirements: "叙事", targetCharacters: 600, structureRequirements: "完整", scoringFocus: "细节", templateType: "custom" },
     report: currentReport, createdAt: "2026-08-22T01:00:00.000Z", updatedAt: "2026-08-22T01:00:00.000Z",
     images: [{ id: revision, position: 0, originalName: "作文.jpg", mimeType: "image/jpeg", width: 1200, height: 1600, rotation: 0, crop: null }],
-    annotations: [], ocr: { ocrRevision: 1, editedAt: null, pages: [{ pageIndex: 0, text: `${studentName}的作文原文`, readable: true, warnings: [] }] }, reportStale: false, hasPdf: false, pdfFilename: null,
+    annotations: [], ocr, reportStale: false, hasPdf: false, pdfFilename: null,
   };
 }
 
@@ -57,7 +103,10 @@ function queueItem(id: string, studentName: string, revision: number) {
 
 function mockReviewApi(
   queue: ReturnType<typeof queueItem>[],
-  options: { rejectTeacherReview?: boolean; currentReport?: typeof report } = {},
+  options: {
+    rejectTeacherReview?: boolean;
+    currentReport?: typeof report | typeof paragraphReport;
+  } = {},
 ) {
   const details = new Map(queue.map((item) => [
     item.id,
@@ -93,6 +142,32 @@ describe("BatchReviewPage", () => {
     cleanup();
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("逐段报告可编辑并完成批量审核，不受示范段数门禁影响", async () => {
+    const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1)], {
+      currentReport: paragraphReport,
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "逐段修改" })).toBeVisible();
+    expect(screen.getByTestId("page-crop-1")).toBeVisible();
+    const revised = screen.getByLabelText("第 1 段修改稿");
+    await user.clear(revised);
+    await user.type(revised, "我听见急促的呼吸声，终于走上台。");
+    await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
+
+    const teacherCall = fetchMock.mock.calls.find(([input]) => (
+      String(input) === "/api/reviews/review-1/teacher-review"
+    ));
+    expect(teacherCall).toBeDefined();
+    expect(JSON.parse(String(teacherCall?.[1]?.body))).toMatchObject({
+      report: {
+        version: 2,
+        paragraphReviews: [{ revisedText: "我听见急促的呼吸声，终于走上台。" }],
+      },
+    });
   });
 
   it("returns an unsuitable review with the revision guard and immediately opens a prefetched successor", async () => {

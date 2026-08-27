@@ -52,7 +52,8 @@ export function OcrTextEditor({
   if (ocr.version === 1) {
     return (
       <section className="ocr-editor" aria-label="识别原文编辑器">
-        <p>该识别原文是旧版逐页结构，请重新识别后按自然段复核。</p>
+        <p><strong>需要完整重新识别</strong></p>
+        <p>该识别原文是旧版逐页结构，重新识别后才能按自然段复核。</p>
         {ocr.pages.map((page) => <p key={page.pageIndex}>{page.text}</p>)}
       </section>
     );

@@ -1,9 +1,17 @@
 "use client";
 
+/* eslint-disable @next/next/no-img-element -- Protected review images use runtime API URLs. */
+
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { expectedSampleParagraphCount, isLegacyEvaluationReport } from "@/src/domain/contracts";
+import {
+  expectedSampleParagraphCount,
+  isLegacyEvaluationReport,
+  type EvaluationReport,
+  type ParagraphEvaluationReport,
+} from "@/src/domain/contracts";
+import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../../components/AppHeader";
 import { ErrorBanner } from "../../../components/ErrorBanner";
 import { RevisionRequestDialog } from "../../../components/RevisionRequestDialog";
@@ -25,6 +33,12 @@ export interface ReviewQueueItemView {
 
 function cacheKey(id: string, revision: number) {
   return `${id}:${revision}`;
+}
+
+function isParagraphReportDraft(
+  report: EvaluationReport,
+): report is ParagraphEvaluationReport {
+  return "paragraphReviews" in report && Array.isArray(report.paragraphReviews);
 }
 
 interface RevisionJobTracker {
@@ -60,6 +74,13 @@ export function BatchReviewPage() {
     isLegacyEvaluationReport(review.report) &&
     review.report.sampleParagraphs.length !== expectedSampleParagraphCount(review.config),
   );
+  const paragraphReadiness = useMemo(() => {
+    if (!review?.report || !isParagraphReportDraft(review.report)) return null;
+    return deliveryReadiness({
+      ...review,
+      teacherReviewedAt: review.teacherReviewedAt ?? "pending-teacher-review",
+    });
+  }, [review]);
 
   const loadDetail = useCallback((item: ReviewQueueItemView): Promise<ReviewView> => {
     const key = cacheKey(item.id, item.revision);
@@ -199,8 +220,8 @@ export function BatchReviewPage() {
 
   async function completeReview() {
     if (!review?.report || saving) return;
-    if (!isLegacyEvaluationReport(review.report)) {
-      setError("逐段批改报告请使用逐段复核界面，旧版批量审核暂不支持保存。");
+    if (paragraphReadiness && !paragraphReadiness.ready) {
+      setError(paragraphReadiness.message);
       return;
     }
     setSaving(true);
@@ -318,9 +339,17 @@ export function BatchReviewPage() {
           </> : null}
         </section>
         <section className="batch-report-pane">
-          {review?.report ? <><label className="batch-student-name">学生姓名<input value={review.studentName} disabled={!isLegacyEvaluationReport(review.report)} onChange={(event) => { if (!isLegacyEvaluationReport(review.report)) return; setReview({ ...review, studentName: event.target.value }); setDirty(true); }} /></label>{isLegacyEvaluationReport(review.report) ? <ReportEditor report={review.report} onChange={(report) => { setReview({ ...review, report }); setDirty(true); }} expectedSampleParagraphCount={expectedSampleParagraphCount(review.config)} /> : <p className="muted">逐段批改报告暂不支持旧版批量复核界面，请切换到逐段复核。</p>}</> : <p className="muted">选择一篇作文开始审核</p>}
+          {review?.report ? <><label className="batch-student-name">学生姓名<input value={review.studentName} disabled={!isLegacyEvaluationReport(review.report)} onChange={(event) => { if (!isLegacyEvaluationReport(review.report)) return; setReview({ ...review, studentName: event.target.value }); setDirty(true); }} /></label><ReportEditor
+            report={review.report}
+            reviewId={review.id}
+            ocr={review.ocr}
+            images={review.images}
+            disabled={saving || revisionSubmitting || review.reportStale || (isParagraphReportDraft(review.report) && review.ocr?.version !== 2)}
+            onChange={(report) => { setReview({ ...review, report }); setDirty(true); }}
+            expectedSampleParagraphCount={isLegacyEvaluationReport(review.report) ? expectedSampleParagraphCount(review.config) : undefined}
+          /></> : <p className="muted">选择一篇作文开始审核</p>}
         </section>
-        <footer className="batch-review-footer"><span>{review?.report && !isLegacyEvaluationReport(review.report) ? "逐段批改报告请使用逐段复核界面，旧版批量审核为只读。" : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-footer-actions"><button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || !isLegacyEvaluationReport(review.report) || saving || revisionSubmitting || sampleParagraphCountMismatch} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></footer>
+        <footer className="batch-review-footer"><span>{paragraphReadiness && !paragraphReadiness.ready ? paragraphReadiness.message : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-footer-actions"><button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || saving || revisionSubmitting || sampleParagraphCountMismatch || Boolean(paragraphReadiness && !paragraphReadiness.ready)} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></footer>
       </div>}
     </main>
     {revisionDialogOpen ? <RevisionRequestDialog open submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} /> : null}

@@ -22,6 +22,12 @@ vi.mock("../../lib/pdf-download", () => ({
   downloadReviewPdf: pdfDownloads.single,
 }));
 
+vi.mock("../../components/ParagraphCropPreview", () => ({
+  ParagraphCropPreview: ({ paragraphNumber }: { paragraphNumber: number }) => (
+    <div data-testid={`page-crop-${paragraphNumber}`}>第 {paragraphNumber} 段原文裁图</div>
+  ),
+}));
+
 import ReviewPage from "./ReviewPage";
 
 const parentFeedbacks = [
@@ -66,6 +72,33 @@ const review = {
   expiresAt: "2026-08-19T08:00:00.000Z",
 };
 
+const paragraphReview = {
+  ...review,
+  studentName: "小明",
+  report: {
+    version: 2 as const,
+    themeFit: "fits" as const,
+    themeReason: "切题",
+    personalizedComment: "选材真实",
+    painPoints: [],
+    commonIssues: [],
+    revisionSuggestions: [],
+    grade: "A-" as const,
+    diagnostics: {
+      authenticityAndRelevance: { finding: "真实", action: "保留" },
+      materialAndDetails: { finding: "细节少", action: "补动作" },
+      structure: { finding: "完整", action: "保留" },
+      language: { finding: "普通", action: "改具体" },
+    },
+    paragraphReviews: [{
+      paragraphId: "paragraph-1",
+      suggestions: [{ problem: "描写普通", advice: "补充听觉", example: "我听见呼吸声。" }],
+      revisedText: "我为自己鼓掌。",
+    }],
+    parentFeedbacks,
+  },
+};
+
 function json(data: unknown, status = 200) {
   return Promise.resolve(new Response(JSON.stringify(status < 400 ? { ok: true, data } : { ok: false, error: data }), {
     status,
@@ -90,6 +123,82 @@ describe("复核页", () => {
     } else {
       Reflect.deleteProperty(navigator, "clipboard");
     }
+  });
+
+  it("逐段报告可编辑、保存并且不受旧示范段落数量限制", async () => {
+    const saved = { ...paragraphReview, revision: 2 };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(saved));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "逐段修改" })).toBeInTheDocument();
+    expect(screen.getByTestId("page-crop-1")).toBeInTheDocument();
+    const revised = screen.getByLabelText("第 1 段修改稿");
+    await user.clear(revised);
+    await user.type(revised, "我听见自己的呼吸声，然后走上台。");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1");
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toMatchObject({
+      report: {
+        version: 2,
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          revisedText: "我听见自己的呼吸声，然后走上台。",
+        }],
+      },
+    });
+    expect(screen.queryByText(/示范作文段落数/u)).not.toBeInTheDocument();
+  });
+
+  it("单段重写发送当前全部逐段草稿并只更新目标段", async () => {
+    const rewritten = {
+      ...paragraphReview.report.paragraphReviews[0],
+      revisedText: "我听见急促的呼吸声，终于走上台。",
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(rewritten));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.type(await screen.findByLabelText("第 1 段 AI 修改要求"), "补充听觉细节");
+    await user.click(screen.getByRole("button", { name: "按要求重写第 1 段" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[2][0])
+      .toBe("/api/reviews/review-1/paragraph-reviews/paragraph-1");
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
+      paragraphReviews: paragraphReview.report.paragraphReviews,
+      instruction: "补充听觉细节",
+    });
+    expect(screen.getByLabelText("第 1 段修改稿")).toHaveValue(rewritten.revisedText);
+  });
+
+  it("逐段报告整篇重生成使用当前 OCR 的 content_only 模式", async () => {
+    const queuedJob = {
+      id: "job-1", reviewId: "review-1", status: "queued", progressStage: "queued",
+      message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(queuedJob));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "重新生成整篇批改" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(fetchMock.mock.calls[2][0]).toBe("/api/reviews/review-1/analyze");
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
+      mode: "content_only",
+    });
   });
 
   it("复核与导出入口显示长期保留说明", async () => {

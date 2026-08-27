@@ -3,6 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ReportEditor } from "./ReportEditor";
 
+vi.mock("./ParagraphReviewEditor", () => ({
+  ParagraphReviewEditor: ({ report }: { report: { version: number } }) => (
+    <div data-testid="paragraph-review-editor">逐段编辑器 v{report.version}</div>
+  ),
+}));
+
 const report = {
   themeFit: "fits" as const,
   themeReason: "切合题意",
@@ -27,6 +33,65 @@ const report = {
 };
 
 describe("ReportEditor", () => {
+  it("逐段报告只进入逐段编辑器，旧报告显示明确版本标题", () => {
+    const paragraphReport = {
+      themeFit: "fits" as const,
+      themeReason: "切题",
+      personalizedComment: "真实",
+      painPoints: [],
+      commonIssues: [],
+      revisionSuggestions: [],
+      version: 2 as const,
+      grade: "A-" as const,
+      diagnostics: {
+        authenticityAndRelevance: { finding: "真实", action: "保留" },
+        materialAndDetails: { finding: "细节少", action: "补动作" },
+        structure: { finding: "完整", action: "保留" },
+        language: { finding: "普通", action: "改具体" },
+      },
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        suggestions: [{ problem: "保留", advice: "保留原句", example: "原句" }],
+        revisedText: "原句",
+      }],
+      parentFeedbacks: [] as [],
+    };
+    const ocr = {
+      version: 2 as const,
+      ocrRevision: 0,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "原句", readable: true, warnings: [] }],
+      paragraphs: [{
+        id: "paragraph-1", paragraphIndex: 0, text: "原句",
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+      }],
+    };
+
+    const { rerender } = render(<ReportEditor
+      reviewId="review-1"
+      report={paragraphReport}
+      ocr={ocr}
+      images={[{ id: 1, position: 0 }]}
+      onChange={vi.fn()}
+    />);
+    expect(screen.getByRole("heading", { name: "逐段修改" })).toBeInTheDocument();
+    expect(screen.getByTestId("paragraph-review-editor")).toBeInTheDocument();
+    expect(screen.queryByText("示范段落")).not.toBeInTheDocument();
+
+    rerender(<ReportEditor report={report} onChange={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "旧版示范段落报告" })).toBeInTheDocument();
+    expect(screen.queryByTestId("paragraph-review-editor")).not.toBeInTheDocument();
+
+    rerender(<ReportEditor
+      reviewId="review-1"
+      report={paragraphReport}
+      ocr={ocr}
+      images={[{ id: 1, position: 0 }]}
+      onChange={vi.fn()}
+    />);
+    expect(screen.getByRole("heading", { name: "逐段修改" })).toBeInTheDocument();
+  });
+
   it("按实际条数展示优点和需要修改", () => {
     render(
       <ReportEditor
