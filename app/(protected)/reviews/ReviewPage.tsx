@@ -556,7 +556,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     }
   }
 
-  async function analyze(mode: "full" | "content_only" = "full") {
+  async function analyze(mode?: "full" | "content_only") {
     if (busy) return;
     if (dirty && !window.confirm("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？")) {
       return;
@@ -568,11 +568,16 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setError("");
     setNotice("");
     try {
+      const requestedMode = mode ?? (
+        review?.status === "failed" && report === null && review.ocr?.version === 2
+          ? "content_only"
+          : "full"
+      );
       const job = await apiFetch<AnalysisJobView>(`/api/reviews/${encodeURIComponent(reviewId)}/analyze`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          mode,
+          mode: requestedMode,
           ...(teacherGuidance.trim() ? { teacherGuidance: teacherGuidance.trim() } : {}),
         }),
       });

@@ -363,6 +363,27 @@ describe("复核页", () => {
     });
   });
 
+  it("识图成功但批改失败后重新分析会复用当前 OCR", async () => {
+    const failedReview = {
+      ...paragraphReview,
+      status: "failed" as const,
+      report: null,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(failedReview))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({ id: "job-1", status: "queued", progressStage: "queued", message: null }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    await user.click(await screen.findByRole("button", { name: "重新分析" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
+      mode: "content_only",
+    });
+  });
+
   it("识别原文保存后保留旧报告并提示重新生成", async () => {
     const staleReview = {
       ...review,
