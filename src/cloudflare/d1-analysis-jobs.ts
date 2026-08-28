@@ -35,6 +35,8 @@ function view(row: JobRow) {
       ? "AI 返回格式异常，请重新分析"
     : row.error_code === "AI_UPSTREAM_HTTP_400"
       ? "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入"
+    : row.error_code?.startsWith("AI_UPSTREAM_HTTP_402")
+      ? "AI 内容批改服务额度不足，请联系管理员充值后重试"
     : row.error_code === "AI_UPSTREAM_HTTP_401" || row.error_code?.startsWith("AI_UPSTREAM_HTTP_401_")
       ? "AI 服务拒绝了访问密钥，请在设置中重新保存并测试"
       : row.error_code === "AI_UPSTREAM_HTTP_403" || row.error_code?.startsWith("AI_UPSTREAM_HTTP_403_")

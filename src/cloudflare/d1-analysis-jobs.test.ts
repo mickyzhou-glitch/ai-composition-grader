@@ -38,6 +38,23 @@ describe("D1AnalysisJobs", () => {
     });
   });
 
+  it("把生成批改报告时的 402 说明为内容服务额度不足", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "job-1", review_id: "review-1", status: "failed", progress_stage: "generating_review",
+            error_code: "AI_UPSTREAM_HTTP_402", created_at: 1_700_000_000_000, finished_at: 1_700_000_000_100,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
+      message: "AI 内容批改服务额度不足，请联系管理员充值后重试",
+    });
+  });
+
   it("reuses an already queued job for the same review", async () => {
     const database = {
       prepare: vi.fn((query: string) => ({
