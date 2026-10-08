@@ -26,6 +26,7 @@ function safeFilenamePart(value: string, fallback: string): string {
 export function reviewFilename(review: ReviewView, format: ExportFormat): string {
   const title = safeFilenamePart(review.config.title, "未命名作文");
   const student = safeFilenamePart(review.studentName, "未填写学生姓名");
+  if (format === "pdf") return `${student}＋${title}.pdf`;
   return `作文批改-${title}-${student}.${format}`;
 }
 
