@@ -85,6 +85,7 @@ type LoadedImage = {
 };
 
 const graphemeSegmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
+const sentenceSegmenter = new Intl.Segmenter("zh-CN", { granularity: "sentence" });
 
 export class ReviewPdfError extends Error {
   constructor(
@@ -107,7 +108,7 @@ function safeFilenamePart(value: string, fallback: string) {
 function reviewPdfTitle(review: ReviewView) {
   const student = safeFilenamePart(review.studentName, "未填写学生姓名");
   const title = safeFilenamePart(review.config.title, "未命名作文");
-  return `${student}＋${title}`;
+  return `${student}${title}`;
 }
 
 function reviewPdfFilename(review: ReviewView) {
@@ -118,9 +119,13 @@ function graphemes(value: string): string[] {
   return Array.from(graphemeSegmenter.segment(value), ({ segment }) => segment);
 }
 
+function sentences(value: string): string[] {
+  return Array.from(sentenceSegmenter.segment(value), ({ segment }) => segment);
+}
+
 function buildPdfRevisionRuns(source: string, revised: string): PdfRevisionRun[] {
   const runs: PdfRevisionRun[] = [];
-  for (const change of diffArrays(graphemes(source), graphemes(revised))) {
+  for (const change of diffArrays(sentences(source), sentences(revised))) {
     if (change.removed) continue;
     const text = change.value.join("");
     if (text.length === 0) continue;
