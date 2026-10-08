@@ -73,10 +73,13 @@ export function countSampleTextCharacters(
   paragraphs: SampleParagraphLike[],
 ): number {
   return paragraphs.reduce(
-    (total, paragraph) =>
-      total + (paragraph.text.match(/\p{Script=Han}/gu)?.length ?? 0),
+    (total, paragraph) => total + countHanCharacters(paragraph.text),
     0,
   );
+}
+
+export function countHanCharacters(text: string): number {
+  return text.match(/\p{Script=Han}/gu)?.length ?? 0;
 }
 
 export function validateSampleWritingRequirements(

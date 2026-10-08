@@ -13,10 +13,10 @@ import {
 } from "@/src/domain/contracts";
 import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../../components/AppHeader";
+import { BatchReviewReportEditor } from "../../../components/BatchReviewReportEditor";
 import { ErrorBanner } from "../../../components/ErrorBanner";
 import { ExportMenu } from "../../../components/ExportMenu";
 import { RevisionRequestDialog } from "../../../components/RevisionRequestDialog";
-import { ReportEditor } from "../../../components/ReportEditor";
 import { ReviewExportList } from "../../../components/ReviewExportList";
 import { apiFetch, errorMessage } from "../../../lib/api";
 import { downloadReviewArchive, type ExportFormat } from "../../../lib/review-export";
@@ -343,20 +343,18 @@ export function BatchReviewPage() {
         <section className="batch-essay-pane">
           {loading || (activeId && !review) ? <p className="loading-note" role="status">正在展开作文与批改报告…</p> : !activeId ? <div className="batch-empty"><h2>待审核队列已完成</h2><p>可以前往待导出清单核对并导出作文。</p></div> : review ? <>
             <div className="batch-pane-heading"><div><p className="eyebrow">当前学生</p><h2>{review.studentName || "未填写学生"}</h2></div><span>{review.config.title}</span></div>
-            <div className="batch-essay-content">{review.images.map((image, index) => <figure key={image.id}><img src={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${image.id}&variant=annotation`} alt={`作文第 ${index + 1} 页`} /><figcaption>第 {index + 1} 页</figcaption></figure>)}</div>
-            {review.ocr ? <details className="batch-ocr"><summary>查看识别原文</summary>{review.ocr.pages.map((page) => <p key={page.pageIndex}>{page.text}</p>)}</details> : null}
+            <div className="batch-essay-content">{review.images.map((image, index) => <figure key={image.id}><img src={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${image.id}&variant=annotation`} alt={`学生作文原文第 ${index + 1} 页`} /><figcaption>原文第 {index + 1} 页</figcaption></figure>)}</div>
           </> : null}
         </section>
         <section className="batch-report-pane">
-          {review?.report ? <><label className="batch-student-name">学生姓名<input value={review.studentName} disabled={!isLegacyEvaluationReport(review.report)} onChange={(event) => { if (!isLegacyEvaluationReport(review.report)) return; setReview({ ...review, studentName: event.target.value }); setDirty(true); }} /></label><ReportEditor
+          {review?.report ? <BatchReviewReportEditor
             report={review.report}
             reviewId={review.id}
             ocr={review.ocr}
             images={review.images}
             disabled={saving || revisionSubmitting || review.reportStale || (isParagraphReportDraft(review.report) && review.ocr?.version !== 2)}
             onChange={(report) => { setReview({ ...review, report }); setDirty(true); }}
-            expectedSampleParagraphCount={isLegacyEvaluationReport(review.report) ? expectedSampleParagraphCount(review.config) : undefined}
-          /></> : <p className="muted">选择一篇作文开始审核</p>}
+          /> : <p className="muted">选择一篇作文开始审核</p>}
         </section>
         <footer className="batch-review-footer"><span>{paragraphReadiness && !paragraphReadiness.ready ? paragraphReadiness.message : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-footer-actions"><button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || saving || revisionSubmitting || sampleParagraphCountMismatch || Boolean(paragraphReadiness && !paragraphReadiness.ready)} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></footer>
       </div>}

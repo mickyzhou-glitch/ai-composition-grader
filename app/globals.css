@@ -159,10 +159,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-essay-content figure { margin: 0; }
 .batch-essay-content img { display: block; width: 100%; height: auto; min-height: 220px; object-fit: contain; background: white; border: 1px solid var(--line); }
 .batch-essay-content figcaption { margin-top: 5px; color: var(--muted); font-size: .8rem; text-align: center; }
-.batch-ocr { margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); background: var(--surface); }
-.batch-ocr p { white-space: pre-wrap; }
 .batch-report-pane { padding: 16px; background: var(--paper); }
-.batch-student-name { display: grid; gap: 6px; margin-bottom: 12px; font-weight: 700; }
 .batch-report-pane .report-editor { padding-bottom: 20px; }
 .batch-review-footer { grid-column: 2 / 4; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--surface); box-shadow: 0 -3px 10px rgb(40 34 28 / 7%); }
 .batch-review-footer span { color: var(--muted); font-size: .85rem; }
@@ -410,12 +407,22 @@ textarea { min-height: 100px; resize: vertical; }
 .report-editor { display: grid; gap: 14px; }
 .report-version-heading { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .report-version-heading h2 { margin: 0; color: #171717; font-size: 1.35rem; }
+.batch-report-heading .eyebrow { margin-bottom: 4px; }
 .paragraph-review-editor { min-width: 0; color: #171717; }
+.paragraph-review-total { display: flex; align-items: baseline; justify-content: flex-end; gap: 4px; padding: 2px 0 10px; color: var(--muted); font-size: .82rem; }
+.paragraph-review-total strong { color: var(--ink); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
 .paragraph-review-unit { min-width: 0; padding: 24px 0 30px; border-bottom: 1px solid var(--line); }
 .paragraph-review-unit:first-child { padding-top: 8px; }
 .paragraph-review-unit:last-child { border-bottom: 0; }
 .paragraph-review-unit h3 { margin: 0 0 14px; font-size: 1.15rem; }
+.paragraph-review-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.paragraph-review-heading h3 { margin: 0; }
+.paragraph-review-heading span { flex: 0 0 auto; color: var(--muted); font-size: .8rem; }
+.paragraph-review-heading strong { color: var(--ink); font-variant-numeric: tabular-nums; }
 .paragraph-review-unit h4 { margin: 24px 0 10px; font-size: 1rem; }
+.batch-legacy-note { margin: 0; padding: 10px 12px; border-left: 3px solid var(--gold); background: #fff8e1; color: #695000; font-size: .82rem; }
+.batch-legacy-paragraph > label { display: grid; min-width: 0; gap: 5px; color: #3d3d3d; font-size: .8rem; font-weight: 700; }
+.batch-legacy-paragraph > label textarea { width: 100%; min-height: 92px; resize: vertical; }
 .paragraph-crop-list { display: grid; min-width: 0; gap: 10px; }
 .paragraph-crop { display: grid; width: 100%; min-height: 150px; max-height: 340px; aspect-ratio: 16 / 5; margin: 0; overflow: hidden; border: 1px solid var(--line); background: #fff; }
 .paragraph-crop figcaption { padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .78rem; }

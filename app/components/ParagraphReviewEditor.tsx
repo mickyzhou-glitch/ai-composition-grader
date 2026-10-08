@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
+import { countHanCharacters } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
 import { buildRevisionRuns } from "@/src/revisions/revision-diff";
 import type { ReviewImageView } from "../lib/types";
@@ -18,6 +19,10 @@ interface ParagraphReviewEditorProps {
   onChange: (report: ParagraphEvaluationReport) => void;
   onRewriteParagraph?: (paragraphId: string, instruction?: string) => Promise<void>;
   rewritingParagraphId?: string | null;
+  showSourceCrops?: boolean;
+  showCharacterCounts?: boolean;
+  revisionHeading?: string;
+  revisionLabel?: string;
 }
 
 const emptySuggestion = { problem: "", advice: "", example: "" };
@@ -31,8 +36,20 @@ export function ParagraphReviewEditor({
   onChange,
   onRewriteParagraph,
   rewritingParagraphId = null,
+  showSourceCrops = true,
+  showCharacterCounts = false,
+  revisionHeading = "修改后段落",
+  revisionLabel = "完整修改稿",
 }: ParagraphReviewEditorProps) {
   const [instructions, setInstructions] = useState<Record<string, string>>({});
+  const paragraphs = [...ocr.paragraphs]
+    .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
+  const totalCharacters = paragraphs.reduce((total, paragraph) => {
+    const paragraphReview = report.paragraphReviews.find(
+      ({ paragraphId }) => paragraphId === paragraph.id,
+    );
+    return total + countHanCharacters(paragraphReview?.revisedText ?? "");
+  }, 0);
 
   function updateParagraph(
     paragraphId: string,
@@ -48,33 +65,39 @@ export function ParagraphReviewEditor({
 
   return (
     <div className="paragraph-review-editor">
-      {[...ocr.paragraphs]
-        .sort((left, right) => left.paragraphIndex - right.paragraphIndex)
-        .map((paragraph) => {
-          const paragraphReview = report.paragraphReviews.find(
-            ({ paragraphId }) => paragraphId === paragraph.id,
-          );
-          const paragraphNumber = paragraph.paragraphIndex + 1;
-          if (!paragraphReview) {
-            return <div className="paragraph-review-error" role="alert" key={paragraph.id}>
-              第 {paragraphNumber} 段缺少逐段批改
-            </div>;
-          }
-          const instruction = instructions[paragraph.id] ?? "";
-          const rewriting = rewritingParagraphId === paragraph.id;
-          return (
-            <section
-              className="paragraph-review-unit"
-              data-paragraph-id={paragraph.id}
-              key={paragraph.id}
-            >
-              <h3>【第 {paragraphNumber} 段】</h3>
-              <ParagraphCropPreview
+      {showCharacterCounts ? <div className="paragraph-review-total">
+        示范文总字数 <strong>{totalCharacters}</strong> 字
+      </div> : null}
+      {paragraphs.map((paragraph) => {
+        const paragraphReview = report.paragraphReviews.find(
+          ({ paragraphId }) => paragraphId === paragraph.id,
+        );
+        const paragraphNumber = paragraph.paragraphIndex + 1;
+        if (!paragraphReview) {
+          return <div className="paragraph-review-error" role="alert" key={paragraph.id}>
+            第 {paragraphNumber} 段缺少逐段批改
+          </div>;
+        }
+        const instruction = instructions[paragraph.id] ?? "";
+        const rewriting = rewritingParagraphId === paragraph.id;
+        return (
+          <section
+            className="paragraph-review-unit"
+            data-paragraph-id={paragraph.id}
+            key={paragraph.id}
+          >
+              <div className="paragraph-review-heading">
+                <h3>第 {paragraphNumber} 段</h3>
+                {showCharacterCounts ? <span>
+                  示范文 <strong>{countHanCharacters(paragraphReview.revisedText)}</strong> 字
+                </span> : null}
+              </div>
+              {showSourceCrops ? <ParagraphCropPreview
                 reviewId={reviewId}
                 paragraphNumber={paragraphNumber}
                 images={images}
                 segments={paragraph.segments}
-              />
+              /> : null}
 
               <h4>【修改建议】</h4>
               <div className="paragraph-suggestion-list">
@@ -142,11 +165,11 @@ export function ParagraphReviewEditor({
                 }))}
               >新增建议</button>
 
-              <h4>【修改后段落】</h4>
-              <label>完整修改稿
+              <h4>【{revisionHeading}】</h4>
+              <label>{revisionLabel}
                 <textarea
                   className="paragraph-revision-input"
-                  aria-label={`第 ${paragraphNumber} 段修改稿`}
+                  aria-label={`第 ${paragraphNumber} 段${revisionLabel}`}
                   value={paragraphReview.revisedText}
                   disabled={disabled || rewriting}
                   onChange={(event) => updateParagraph(paragraph.id, (current) => ({
@@ -181,9 +204,9 @@ export function ParagraphReviewEditor({
                   onClick={() => void onRewriteParagraph(paragraph.id, instruction.trim())}
                 >{rewriting ? "AI 正在生成…" : "按要求修改"}</button>
               </div> : null}
-            </section>
-          );
-        })}
+          </section>
+        );
+      })}
     </div>
   );
 }
