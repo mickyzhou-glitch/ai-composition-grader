@@ -92,14 +92,11 @@
   white-space: pre-wrap;
 }
 
-.inserted,
-.deleted {
-  color: #c91f32;
-}
-
-.deleted {
-  text-decoration: line-through;
-  text-decoration-thickness: 1px;
+.inserted {
+  color: #1f4e78;
+  text-decoration: underline;
+  text-decoration-thickness: 1.5px;
+  text-underline-offset: 2px;
 }
 
 @media screen {

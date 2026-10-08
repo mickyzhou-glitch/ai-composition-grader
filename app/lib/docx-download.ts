@@ -10,6 +10,7 @@ import {
   Paragraph,
   ShadingType,
   TextRun,
+  UnderlineType,
 } from "docx";
 
 import {
@@ -131,13 +132,16 @@ function suggestionParagraph(
 }
 
 function revisionTextRun(run: RevisionRun) {
-  const changed = run.kind === "inserted" || run.kind === "deleted";
+  const changed = run.kind === "inserted";
   return new TextRun({
     text: run.text,
     font: KAITI_FONT,
     size: points(DELIVERY_STYLE.fontPt.revision),
     color: changed ? DELIVERY_STYLE.colors.change : DELIVERY_STYLE.colors.text,
-    strike: run.kind === "deleted",
+    underline: changed ? {
+      type: UnderlineType.SINGLE,
+      color: DELIVERY_STYLE.colors.change,
+    } : undefined,
   });
 }
 
@@ -145,7 +149,9 @@ function revisionParagraph(block: Extract<DeliveryPageBlock, { kind: "revision-l
   return new Paragraph({
     spacing: { before: 0, after: 0, line: 320 },
     keepLines: true,
-    children: block.runs.map(revisionTextRun),
+    children: block.runs
+      .filter((run) => run.kind !== "deleted")
+      .map(revisionTextRun),
   });
 }
 

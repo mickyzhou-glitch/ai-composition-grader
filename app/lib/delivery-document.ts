@@ -6,7 +6,7 @@ import {
 } from "@/src/delivery/readiness";
 import { paragraphEvaluationReportSchema } from "@/src/domain/contracts";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import { buildRevisionRuns } from "@/src/revisions/revision-diff";
+import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 import {
   cropImageRegion,
   type BitmapDimensions,
@@ -136,7 +136,7 @@ export async function buildDeliveryDocument(
         paragraphNumber: paragraph.paragraphIndex + 1,
         crops,
         suggestions: paragraphReport.suggestions,
-        revisionRuns: buildRevisionRuns(paragraph.text, paragraphReport.revisedText),
+        revisionRuns: buildSentenceRevisionRuns(paragraph.text, paragraphReport.revisedText),
       });
     }
     return {

@@ -73,9 +73,15 @@ export function PrintReview({
                 </ol>;
               }
               return <p className={styles.revision} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
-                {block.runs.map((run, runIndex) => run.kind === "deleted"
-                  ? <del className={styles.deleted} data-run-kind={run.kind} key={runIndex}>{run.text}</del>
-                  : <span className={run.kind === "inserted" ? styles.inserted : undefined} data-run-kind={run.kind} key={runIndex}>{run.text}</span>)}
+                {block.runs
+                  .filter((run) => run.kind !== "deleted")
+                  .map((run, runIndex) => (
+                    <span
+                      className={run.kind === "inserted" ? styles.inserted : undefined}
+                      data-run-kind={run.kind}
+                      key={runIndex}
+                    >{run.text}</span>
+                  ))}
               </p>;
             })}
           </section>

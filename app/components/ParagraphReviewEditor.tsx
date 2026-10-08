@@ -5,10 +5,7 @@ import { useState } from "react";
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
 import { countTextCharactersIncludingPunctuation } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import {
-  buildRevisionRuns,
-  buildSentenceRevisionRuns,
-} from "@/src/revisions/revision-diff";
+import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 import type { ReviewImageView } from "../lib/types";
 import { ParagraphCropPreview } from "./ParagraphCropPreview";
 import { RevisionPreview } from "./RevisionPreview";
@@ -26,7 +23,6 @@ interface ParagraphReviewEditorProps {
   showCharacterCounts?: boolean;
   revisionHeading?: string;
   revisionLabel?: string;
-  revisionHighlight?: "characters" | "sentences";
 }
 
 const emptySuggestion = { problem: "", advice: "", example: "" };
@@ -44,7 +40,6 @@ export function ParagraphReviewEditor({
   showCharacterCounts = false,
   revisionHeading = "修改后段落",
   revisionLabel = "完整修改稿",
-  revisionHighlight = "characters",
 }: ParagraphReviewEditorProps) {
   const [instructions, setInstructions] = useState<Record<string, string>>({});
   const paragraphs = [...ocr.paragraphs]
@@ -184,10 +179,8 @@ export function ParagraphReviewEditor({
                 />
               </label>
               <RevisionPreview
-                runs={(revisionHighlight === "sentences"
-                  ? buildSentenceRevisionRuns
-                  : buildRevisionRuns)(paragraph.text, paragraphReview.revisedText)}
-                sentenceHighlight={revisionHighlight === "sentences"}
+                runs={buildSentenceRevisionRuns(paragraph.text, paragraphReview.revisedText)}
+                sentenceHighlight
               />
               {onRewriteParagraph ? <div className="paragraph-rewrite-actions">
                 <label>AI 修改要求（可选）
