@@ -8,6 +8,7 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   evaluationReportSchema,
+  isParagraphEvaluationReport,
   reviewStatusSchema,
   studentNameSchema,
   type Annotation,
@@ -708,11 +709,33 @@ export class ReviewRepository {
     const config = input.config
       ? assignmentConfigSchema.parse(input.config)
       : current.config;
+    const reportToSave = input.report !== undefined
+      ? input.report
+      : input.config !== undefined
+        ? null
+        : current.report;
+    const paragraphReport = isParagraphEvaluationReport(reportToSave);
+    const checkpoint = paragraphReport
+      ? this.getAnalysisSource(ownerId, id).checkpoint
+      : undefined;
+    if (
+      paragraphReport
+      && (
+        checkpoint === null
+        || checkpoint === undefined
+        || current.reportOcrRevision !== checkpoint.ocrRevision
+      )
+    ) {
+      throw new RevisionConflictError(id);
+    }
     const report =
       input.report !== undefined
         ? markReviewed
-          ? validateReport(input.report, { config })
-          : validateReport(input.report, { templateType: config.templateType })
+          ? validateReport(input.report, { config, ocr: checkpoint ?? undefined })
+          : validateReport(input.report, {
+              templateType: config.templateType,
+              ocr: checkpoint ?? undefined,
+            })
         : input.config !== undefined
           ? null
           : current.report;
@@ -738,6 +761,15 @@ export class ReviewRepository {
               : "ready_for_review"
           : current.status;
     const now = this.now();
+    const paragraphOcrGuards = paragraphReport && checkpoint
+      ? [
+          eq(reviews.imageRevision, checkpoint.sourceRevision),
+          sql`json_extract(${reviews.ocrCheckpoint}, '$.version') = 2`,
+          sql`json_extract(${reviews.ocrCheckpoint}, '$.sourceRevision') = ${checkpoint.sourceRevision}`,
+          sql`json_extract(${reviews.ocrCheckpoint}, '$.ocrRevision') = ${checkpoint.ocrRevision}`,
+          eq(reviews.reportOcrRevision, checkpoint.ocrRevision),
+        ]
+      : [];
 
     this.database.transaction((transaction) => {
       const update = transaction
@@ -760,7 +792,13 @@ export class ReviewRepository {
           pdfRevision: null,
           exportedAt: null,
         })
-        .where(and(eq(reviews.id, id), eq(reviews.ownerId, ownerId), isNull(reviews.deletingAt), eq(reviews.revision, input.expectedRevision)))
+        .where(and(
+          eq(reviews.id, id),
+          eq(reviews.ownerId, ownerId),
+          isNull(reviews.deletingAt),
+          eq(reviews.revision, input.expectedRevision),
+          ...paragraphOcrGuards,
+        ))
         .run();
       if (update.changes === 0) {
         const exists = transaction

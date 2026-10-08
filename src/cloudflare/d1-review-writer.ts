@@ -1,7 +1,13 @@
 import { z } from "zod";
 
 import { deliveryReadiness } from "../delivery/readiness";
-import { annotationSchema, assignmentConfigSchema, evaluationReportSchema, studentNameSchema } from "../domain/contracts";
+import {
+  annotationSchema,
+  assignmentConfigSchema,
+  evaluationReportSchema,
+  isParagraphEvaluationReport,
+  studentNameSchema,
+} from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import { ocrCheckpointSchema } from "../ocr/contracts";
 
@@ -43,16 +49,40 @@ export class D1ReviewWriter {
       report: evaluationReportSchema.optional(),
       annotations: z.array(annotationSchema).optional(),
     }).strict().refine((value) => value.studentName !== undefined || value.config !== undefined || value.report !== undefined || value.annotations !== undefined).parse(input);
-    const current = await this.database.prepare("SELECT student_name, config, report, status, revision, analysis_run_id FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ student_name: string; config: string; report: string | null; status: string; revision: number; analysis_run_id: string | null }>();
+    const current = await this.database.prepare("SELECT student_name, config, report, status, revision, analysis_run_id, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{
+      student_name: string;
+      config: string;
+      report: string | null;
+      status: string;
+      revision: number;
+      analysis_run_id: string | null;
+      image_revision: number;
+      ocr_checkpoint: string | null;
+      report_ocr_revision: number | null;
+    }>();
     if (!current) return null;
     if (current.revision !== parsed.expectedRevision || current.analysis_run_id !== null) {
       throw new RevisionConflictError();
     }
     const config = parsed.config ?? assignmentConfigSchema.parse(JSON.parse(current.config));
+    const paragraphReport = parsed.report !== undefined && isParagraphEvaluationReport(parsed.report);
+    const checkpoint = paragraphReport && current.ocr_checkpoint !== null
+      ? ocrCheckpointSchema.parse(JSON.parse(current.ocr_checkpoint))
+      : undefined;
+    if (
+      paragraphReport
+      && (
+        checkpoint === undefined
+        || checkpoint.sourceRevision !== current.image_revision
+        || checkpoint.ocrRevision !== current.report_ocr_revision
+      )
+    ) {
+      throw new RevisionConflictError();
+    }
     const report = parsed.config
       ? null
       : parsed.report !== undefined
-        ? validateReport(parsed.report, { templateType: config.templateType })
+        ? validateReport(parsed.report, { templateType: config.templateType, ocr: checkpoint })
         : current.report === null
           ? null
           : evaluationReportSchema.parse(JSON.parse(current.report));
@@ -66,7 +96,24 @@ export class D1ReviewWriter {
         pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
         AND analysis_run_id IS NULL
-    `).bind(parsed.studentName ?? current.student_name, JSON.stringify(config), report === null ? null : JSON.stringify(report), status, now, parsed.config !== undefined ? 1 : 0, parsed.config !== undefined ? 1 : 0, reviewId, ownerId, parsed.expectedRevision).run();
+        ${paragraphReport ? `
+        AND json_extract(ocr_checkpoint, '$.version') = 2
+        AND json_extract(ocr_checkpoint, '$.sourceRevision') = image_revision
+        AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
+        AND report_ocr_revision = ?` : ""}
+    `).bind(
+      parsed.studentName ?? current.student_name,
+      JSON.stringify(config),
+      report === null ? null : JSON.stringify(report),
+      status,
+      now,
+      parsed.config !== undefined ? 1 : 0,
+      parsed.config !== undefined ? 1 : 0,
+      reviewId,
+      ownerId,
+      parsed.expectedRevision,
+      ...(paragraphReport && checkpoint ? [checkpoint.ocrRevision, checkpoint.ocrRevision] : []),
+    ).run();
     if (updated.meta.changes === 0) throw new RevisionConflictError();
     if (annotations !== undefined) {
       await this.database.batch([
@@ -92,12 +139,32 @@ export class D1ReviewWriter {
       annotations: z.array(annotationSchema),
     }).strict().parse(input);
     const current = await this.database.prepare(
-      "SELECT config, revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
-    ).bind(reviewId, ownerId).first<{ config: string; revision: number }>();
+      "SELECT config, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
+    ).bind(reviewId, ownerId).first<{
+      config: string;
+      revision: number;
+      image_revision: number;
+      ocr_checkpoint: string | null;
+      report_ocr_revision: number | null;
+    }>();
     if (!current) return null;
     if (current.revision !== parsed.expectedRevision) throw new RevisionConflictError();
     const config = assignmentConfigSchema.parse(JSON.parse(current.config));
-    const report = validateReport(parsed.report, { config });
+    const paragraphReport = isParagraphEvaluationReport(parsed.report);
+    const checkpoint = paragraphReport && current.ocr_checkpoint !== null
+      ? ocrCheckpointSchema.parse(JSON.parse(current.ocr_checkpoint))
+      : undefined;
+    if (
+      paragraphReport
+      && (
+        checkpoint === undefined
+        || checkpoint.sourceRevision !== current.image_revision
+        || checkpoint.ocrRevision !== current.report_ocr_revision
+      )
+    ) {
+      throw new RevisionConflictError();
+    }
+    const report = validateReport(parsed.report, { config, ocr: checkpoint });
     const now = Date.now();
     const nextRevision = parsed.expectedRevision + 1;
     const eligibility = `
@@ -116,6 +183,11 @@ export class D1ReviewWriter {
         WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
           AND revision = ? AND report IS NOT NULL
           AND status IN ('ready_for_review', 'exported')
+          ${paragraphReport ? `
+          AND json_extract(ocr_checkpoint, '$.version') = 2
+          AND json_extract(ocr_checkpoint, '$.sourceRevision') = image_revision
+          AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
+          AND report_ocr_revision = ?` : ""}
       `).bind(
         parsed.studentName,
         JSON.stringify(report),
@@ -124,6 +196,7 @@ export class D1ReviewWriter {
         reviewId,
         ownerId,
         parsed.expectedRevision,
+        ...(paragraphReport && checkpoint ? [checkpoint.ocrRevision, checkpoint.ocrRevision] : []),
       ),
       this.database.prepare(`
         DELETE FROM annotations WHERE review_id = ? AND ${eligibility}
