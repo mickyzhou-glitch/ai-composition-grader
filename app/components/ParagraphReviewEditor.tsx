@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
-import { countHanCharacters } from "@/src/domain/sample-writing-requirements";
+import { countTextCharactersIncludingPunctuation } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
 import { buildRevisionRuns } from "@/src/revisions/revision-diff";
 import type { ReviewImageView } from "../lib/types";
@@ -48,7 +48,7 @@ export function ParagraphReviewEditor({
     const paragraphReview = report.paragraphReviews.find(
       ({ paragraphId }) => paragraphId === paragraph.id,
     );
-    return total + countHanCharacters(paragraphReview?.revisedText ?? "");
+    return total + countTextCharactersIncludingPunctuation(paragraphReview?.revisedText ?? "");
   }, 0);
 
   function updateParagraph(
@@ -66,7 +66,7 @@ export function ParagraphReviewEditor({
   return (
     <div className="paragraph-review-editor">
       {showCharacterCounts ? <div className="paragraph-review-total">
-        示范文总字数 <strong>{totalCharacters}</strong> 字
+        示范文总字数 <strong>{totalCharacters}</strong> 字（含标点）
       </div> : null}
       {paragraphs.map((paragraph) => {
         const paragraphReview = report.paragraphReviews.find(
@@ -89,7 +89,7 @@ export function ParagraphReviewEditor({
               <div className="paragraph-review-heading">
                 <h3>第 {paragraphNumber} 段</h3>
                 {showCharacterCounts ? <span>
-                  示范文 <strong>{countHanCharacters(paragraphReview.revisedText)}</strong> 字
+                  示范文 <strong>{countTextCharactersIncludingPunctuation(paragraphReview.revisedText)}</strong> 字（含标点）
                 </span> : null}
               </div>
               {showSourceCrops ? <ParagraphCropPreview

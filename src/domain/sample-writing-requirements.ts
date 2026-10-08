@@ -82,6 +82,10 @@ export function countHanCharacters(text: string): number {
   return text.match(/\p{Script=Han}/gu)?.length ?? 0;
 }
 
+export function countTextCharactersIncludingPunctuation(text: string): number {
+  return text.match(/[^\s]/gu)?.length ?? 0;
+}
+
 export function validateSampleWritingRequirements(
   paragraphs: SampleParagraphLike[],
   config: AssignmentConfig,

@@ -5,7 +5,7 @@ import {
   type EvaluationReport,
   type LegacyEvaluationReport,
 } from "@/src/domain/contracts";
-import { countHanCharacters } from "@/src/domain/sample-writing-requirements";
+import { countTextCharactersIncludingPunctuation } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
 import type { ReviewImageView } from "../lib/types";
 import { ParagraphReviewEditor } from "./ParagraphReviewEditor";
@@ -56,7 +56,7 @@ export function BatchReviewReportEditor({
   }
 
   const totalCharacters = report.sampleParagraphs.reduce(
-    (total, paragraph) => total + countHanCharacters(paragraph.text),
+    (total, paragraph) => total + countTextCharactersIncludingPunctuation(paragraph.text),
     0,
   );
   const updateSample = (
@@ -78,7 +78,7 @@ export function BatchReviewReportEditor({
         <h2>修改意见与示范文</h2>
       </header>
       <div className="paragraph-review-total">
-        示范文总字数 <strong>{totalCharacters}</strong> 字
+        示范文总字数 <strong>{totalCharacters}</strong> 字（含标点）
       </div>
       <p className="batch-legacy-note">
         这篇作文使用旧版报告，未保存逐字标色；重新分析后可显示红黑修改标记。
@@ -88,7 +88,7 @@ export function BatchReviewReportEditor({
           <section className="paragraph-review-unit batch-legacy-paragraph" key={index}>
             <div className="paragraph-review-heading">
               <h3>第 {index + 1} 段</h3>
-              <span>示范文 <strong>{countHanCharacters(sample.text)}</strong> 字</span>
+              <span>示范文 <strong>{countTextCharactersIncludingPunctuation(sample.text)}</strong> 字（含标点）</span>
             </div>
             <label>修改意见
               <textarea
