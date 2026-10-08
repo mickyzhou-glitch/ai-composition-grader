@@ -21,12 +21,55 @@ type MoveCandidate = {
 };
 
 const segmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
+const sentenceSegmenter = new Intl.Segmenter("zh-CN", { granularity: "sentence" });
+const sentenceTerminal = /[.!?。！？…](?:["'”’」』】）》〉）])*\s*$/u;
 const isNeutral = (value: string) => (
   /^(?:[\p{P}\p{Z}\s](?:[\uFE00-\uFE0F\u{E0100}-\u{E01EF}])*)+$/u.test(value)
 );
 
 function graphemes(value: string): string[] {
   return Array.from(segmenter.segment(value), ({ segment }) => segment);
+}
+
+function mergeShortSentenceFragments(units: string[]): string[] {
+  const merged: string[] = [];
+  let leading = "";
+
+  for (const unit of units) {
+    const text = leading + unit;
+    leading = "";
+    const visibleLength = graphemes(text).filter((value) => !/^\s+$/u.test(value)).length;
+    if (visibleLength > 1) {
+      merged.push(text);
+    } else if (merged.length > 0) {
+      merged[merged.length - 1] += text;
+    } else {
+      leading = text;
+    }
+  }
+
+  if (leading.length > 0) {
+    merged.push(leading);
+  }
+  return merged;
+}
+
+function sentences(value: string): string[] {
+  const result: string[] = [];
+  let pending = "";
+
+  for (const { segment } of sentenceSegmenter.segment(value)) {
+    pending += segment;
+    if (sentenceTerminal.test(pending)) {
+      result.push(pending);
+      pending = "";
+    }
+  }
+
+  if (pending.length > 0) {
+    result.push(pending);
+  }
+  return mergeShortSentenceFragments(result);
 }
 
 function countOccurrences(haystack: string[], needle: string[]): number {
@@ -210,5 +253,22 @@ export function buildRevisionRuns(source: string, revised: string): RevisionRun[
   }
 
   appendBoundary();
+  return runs;
+}
+
+export function buildSentenceRevisionRuns(source: string, revised: string): RevisionRun[] {
+  const runs: RevisionRun[] = [];
+
+  for (const change of diffArrays(sentences(source), sentences(revised))) {
+    if (change.removed) {
+      continue;
+    }
+    appendRun(
+      runs,
+      change.added ? "inserted" : "unchanged",
+      change.value.join(""),
+    );
+  }
+
   return runs;
 }

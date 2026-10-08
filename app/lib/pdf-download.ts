@@ -4,7 +4,7 @@ import {
   paragraphEvaluationReportSchema,
   type ParagraphSuggestion,
 } from "@/src/domain/contracts";
-import { diffArrays } from "diff";
+import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 
 import { apiFetch } from "./api";
 import type { ReviewImageView, ReviewView } from "./types";
@@ -85,7 +85,6 @@ type LoadedImage = {
 };
 
 const graphemeSegmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
-const sentenceSegmenter = new Intl.Segmenter("zh-CN", { granularity: "sentence" });
 
 export class ReviewPdfError extends Error {
   constructor(
@@ -119,24 +118,11 @@ function graphemes(value: string): string[] {
   return Array.from(graphemeSegmenter.segment(value), ({ segment }) => segment);
 }
 
-function sentences(value: string): string[] {
-  return Array.from(sentenceSegmenter.segment(value), ({ segment }) => segment);
-}
-
 function buildPdfRevisionRuns(source: string, revised: string): PdfRevisionRun[] {
-  const runs: PdfRevisionRun[] = [];
-  for (const change of diffArrays(sentences(source), sentences(revised))) {
-    if (change.removed) continue;
-    const text = change.value.join("");
-    if (text.length === 0) continue;
-    const changed = Boolean(change.added);
-    const previous = runs.at(-1);
-    if (previous?.changed === changed) {
-      previous.text += text;
-    } else {
-      runs.push({ text, changed });
-    }
-  }
+  const runs = buildSentenceRevisionRuns(source, revised).map((run) => ({
+    text: run.text,
+    changed: run.kind === "inserted",
+  }));
   if (runs.map((run) => run.text).join("") !== revised) {
     throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "示范文本未能完整排版，请重试");
   }

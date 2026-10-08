@@ -50,6 +50,7 @@ export function BatchReviewReportEditor({
           showCharacterCounts
           revisionHeading="示范文"
           revisionLabel="完整示范文"
+          revisionHighlight="sentences"
         />
       </div>
     );
