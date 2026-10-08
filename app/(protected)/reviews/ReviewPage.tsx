@@ -47,6 +47,8 @@ interface AnalysisJobView {
 
 type ReviewLoadResult = { ok: true } | { ok: false; error: unknown };
 
+const analysisStatusReconnectNotice = "任务状态暂时无法刷新，正在尝试重新连接。";
+
 const stageLabels: Record<AnalysisJobView["progressStage"], string> = {
   queued: "排队中",
   reading_images: "正在识别作文",
@@ -174,9 +176,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       );
       if (!isLatest()) return null;
       setAnalysisJob(result.job);
-      if (result.job) {
-        setNotice((current) => current.startsWith("AI 分析已提交：") ? "" : current);
-      }
+      setNotice((current) =>
+        current.startsWith("AI 分析已提交：") || current === analysisStatusReconnectNotice
+          ? ""
+          : current,
+      );
       return result.job;
     } finally {
       if (jobRequestTokenRef.current === token) jobRequestControllerRef.current = null;
@@ -313,9 +317,16 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       void loadReview(false);
       return;
     }
+    let polling = false;
     const timer = window.setInterval(() => {
-      void loadJob().catch(() => {
-        if (mountedRef.current) setNotice("任务状态暂时无法刷新，正在尝试重新连接。");
+      if (polling) return;
+      polling = true;
+      void loadJob().catch((caught) => {
+        if (mountedRef.current && !isAbortError(caught)) {
+          setNotice(analysisStatusReconnectNotice);
+        }
+      }).finally(() => {
+        polling = false;
       });
     }, 1500);
     return () => window.clearInterval(timer);
