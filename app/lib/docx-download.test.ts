@@ -88,6 +88,17 @@ async function unpack(document: DeliveryDocument) {
 }
 
 describe("Word 逐段批改文档", () => {
+  it("Word 包含五段完整范文且段号独立于原文", async () => {
+    const delivery = fixture();
+    const essay = ["开篇引入。", "抑的铺垫。", "扬的具体事件。", "真相。", "回扣感悟。"];
+    delivery.paragraphs.push(...essay.map((text, index) => ({ paragraphNumber: index + 3, essayParagraphNumber: index + 1, crops: [], suggestions: [], revisionRuns: [{ kind: "unchanged" as const, text }] })));
+    const { documentXml } = await unpack(delivery);
+    essay.forEach((text, index) => {
+      expect(documentXml).toContain(`【完整范文·第 ${index + 1} 段】`);
+      expect(documentXml).toContain(text);
+    });
+  });
+
   it("生成 A4 纵向、可编辑且使用真实编号的逐段内容", async () => {
     const delivery = fixture();
     const { blob, pages, documentXml, numberingXml } = await unpack(delivery);
@@ -107,8 +118,10 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).toContain("问题：开头略显概括。");
     expect(documentXml).toContain("动作：补充登台前的具体动作。");
     expect(documentXml).toContain("示例：手心的汗把稿纸浸出了一道浅痕。");
-    expect(documentXml).toContain('w:color w:val="C91F32"');
-    expect(documentXml).toContain("<w:strike");
+    expect(documentXml).toContain('w:color w:val="1F4E78"');
+    expect(documentXml).toContain('<w:u w:val="single"');
+    expect(documentXml).not.toContain("<w:strike");
+    expect(documentXml).not.toContain("慢慢走");
     expect(documentXml).toMatch(/w:eastAsia="(?:楷体|KaiTi)"/u);
   });
 

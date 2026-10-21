@@ -29,6 +29,7 @@ export interface ReviewView {
   id: string;
   status: ReviewStatus;
   studentName: string;
+  className?: string;
   config: AssignmentConfig;
   report: EvaluationReport | null;
   revision: number;

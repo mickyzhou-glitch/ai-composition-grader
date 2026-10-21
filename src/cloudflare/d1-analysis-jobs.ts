@@ -3,6 +3,10 @@ import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
 import type { AnalysisJobMode } from "./cloud-analysis-pipeline";
 
+// A full run has at most three sequential 180-second AI requests (OCR,
+// review, and one repair). Leave a minute for storage and validation.
+export const MAX_CLOUD_ANALYSIS_RUN_MS = 10 * 60_000;
+
 const stages = new Set(["queued", "reading_images", "saving_ocr", "generating_review", "mapping_annotations", "validating_result", "saving_result"]);
 const statuses = new Set(["queued", "running", "succeeded", "failed", "canceled"]);
 
@@ -14,6 +18,7 @@ interface JobRow {
   progress_stage: string;
   error_code: string | null;
   created_at: number;
+  started_at?: number | null;
   finished_at: number | null;
 }
 
@@ -31,6 +36,12 @@ function view(row: JobRow) {
   if (!statuses.has(row.status) || !stages.has(row.progress_stage)) throw new TypeError("Invalid analysis job");
   const failedMessage = row.error_code === "AI_SETTINGS_INCOMPLETE"
     ? "请联系管理员检查 AI 服务设置后再试"
+    : row.error_code === "ANALYSIS_TIMEOUT"
+      ? "分析超时或已中断，请重新分析"
+    : row.error_code?.startsWith("AI_INVALID_RESPONSE_rewritten_essay_chars_")
+      ? "AI 生成的范文未满足指定字数，请重新生成整篇批改"
+    : row.error_code?.startsWith("AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_")
+      ? "AI 生成的范文未满足指定段数，请重新生成整篇批改"
     : row.error_code === "AI_INVALID_RESPONSE" || row.error_code?.startsWith("AI_INVALID_RESPONSE_")
       ? "AI 返回格式异常，请重新分析"
     : row.error_code === "AI_UPSTREAM_HTTP_400"
@@ -54,6 +65,33 @@ function view(row: JobRow) {
 export class D1AnalysisJobs {
   constructor(private readonly database: D1Database) {}
 
+  async recoverExpired(
+    now = Date.now(),
+    scope?: { ownerId: string; reviewId: string },
+  ): Promise<number> {
+    const expired = `analysis_jobs.status = 'running'
+      AND COALESCE(analysis_jobs.started_at, analysis_jobs.created_at) <= ?
+      ${scope ? "AND analysis_jobs.owner_id = ? AND analysis_jobs.review_id = ?" : ""}`;
+    const bindings = [now - MAX_CLOUD_ANALYSIS_RUN_MS, ...(scope ? [scope.ownerId, scope.reviewId] : [])];
+    // D1 batch is atomic. Only release the review still owned by this job;
+    // reports, OCR, annotations, and review revisions stay untouched.
+    const results = await this.database.batch([
+      this.database.prepare(`
+        UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ?
+        WHERE status = 'analyzing' AND EXISTS (
+          SELECT 1 FROM analysis_jobs WHERE ${expired}
+            AND analysis_jobs.id = reviews.analysis_run_id
+            AND analysis_jobs.review_id = reviews.id AND analysis_jobs.owner_id = reviews.owner_id
+        )
+      `).bind(now, ...bindings),
+      this.database.prepare(`
+        UPDATE analysis_jobs SET status = 'failed', error_code = 'ANALYSIS_TIMEOUT',
+          lease_expires_at = NULL, finished_at = ? WHERE ${expired}
+      `).bind(now, ...bindings),
+    ]);
+    return results[1]?.meta.changes ?? 0;
+  }
+
   async enqueue(
     ownerId: string,
     reviewId: string,
@@ -62,6 +100,7 @@ export class D1AnalysisJobs {
     const options = normalizeEnqueueInput(input);
     const guidance = options.teacherGuidance;
     const mode = options.mode;
+    const existing = await this.active(ownerId, reviewId);
     const review = await this.database.prepare(`
       SELECT reviews.id, reviews.revision, reviews.image_revision, reviews.ocr_checkpoint,
         reviews.status, reviews.teacher_reviewed_at,
@@ -78,7 +117,6 @@ export class D1AnalysisJobs {
       image_count: number;
     }>();
     if (!review) return { job: null, newlyQueued: false };
-    const existing = await this.active(ownerId, reviewId);
     if (existing) return { job: existing, newlyQueued: false };
     if (review.image_count < 1 || review.image_count > 4) throw new Error("IMAGES_REQUIRED");
     if (mode === "content_only") {
@@ -159,20 +197,30 @@ export class D1AnalysisJobs {
   }
 
   private async active(ownerId: string, reviewId: string): Promise<unknown | null> {
-    const row = await this.database.prepare(`
-      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, finished_at
+    const query = this.database.prepare(`
+      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, started_at, finished_at
       FROM analysis_jobs
       WHERE owner_id = ? AND review_id = ? AND status IN ('queued', 'running')
       ORDER BY created_at DESC, id DESC LIMIT 1
-    `).bind(ownerId, reviewId).first<JobRow>();
+    `).bind(ownerId, reviewId);
+    let row = await query.first<JobRow>();
+    if (row && isExpired(row)) {
+      await this.recoverExpired(Date.now(), { ownerId, reviewId });
+      row = await query.first<JobRow>();
+    }
     return row ? view(row) : null;
   }
 
   async latest(ownerId: string, reviewId: string): Promise<unknown | null> {
-    const row = await this.database.prepare(`
-      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, finished_at FROM analysis_jobs
+    const query = this.database.prepare(`
+      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, started_at, finished_at FROM analysis_jobs
       WHERE owner_id = ? AND review_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
-    `).bind(ownerId, reviewId).first<JobRow>();
+    `).bind(ownerId, reviewId);
+    let row = await query.first<JobRow>();
+    if (row && isExpired(row)) {
+      await this.recoverExpired(Date.now(), { ownerId, reviewId });
+      row = await query.first<JobRow>();
+    }
     return row ? view(row) : null;
   }
 
@@ -181,6 +229,11 @@ export class D1AnalysisJobs {
     if (!row) throw new Error("JOB_NOT_FOUND");
     return view(row);
   }
+}
+
+function isExpired(row: JobRow): boolean {
+  return row.status === "running"
+    && (row.started_at ?? row.created_at) <= Date.now() - MAX_CLOUD_ANALYSIS_RUN_MS;
 }
 
 function normalizeEnqueueInput(input: unknown): { mode: AnalysisJobMode; teacherGuidance: string | null } {

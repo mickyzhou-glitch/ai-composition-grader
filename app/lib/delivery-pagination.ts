@@ -19,7 +19,7 @@ export type DeliveryTextMeasurer = (
 ) => number;
 
 export type DeliveryPageBlock =
-  | { kind: "paragraph-heading"; paragraphNumber: number; continued: boolean; heightMm: number }
+  | { kind: "paragraph-heading"; paragraphNumber: number; essayParagraphNumber?: number; continued: boolean; heightMm: number }
   | { kind: "crop"; cropIndex: number; widthMm: number; heightMm: number }
   | { kind: "suggestion-heading"; continued: boolean; heightMm: number }
   | { kind: "suggestion"; suggestionIndex: number; heightMm: number }
@@ -181,13 +181,16 @@ function completeParagraphBlocks(
   measureText: DeliveryTextMeasurer,
 ): DeliveryPageBlock[] {
   const revisionLines = wrapRevisionRuns(paragraph.revisionRuns, measureText);
+  const heading: DeliveryPageBlock = {
+    kind: "paragraph-heading",
+    paragraphNumber: paragraph.paragraphNumber,
+    ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
+    continued: false,
+    heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
+  };
+  if (paragraph.essayParagraphNumber) return [heading, revisionBlock(revisionLines)];
   return [
-    {
-      kind: "paragraph-heading",
-      paragraphNumber: paragraph.paragraphNumber,
-      continued: false,
-      heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
-    },
+    heading,
     ...paragraph.crops.map((_, index) => cropBlock(paragraph, index)),
     { kind: "suggestion-heading", continued: false, heightMm: SECTION_HEADING_HEIGHT_MM },
     ...paragraph.suggestions.map((_, index) => suggestionBlock(paragraph, index, measureText)),
@@ -221,11 +224,12 @@ export function paginateDeliveryDocument(
     page.remainingHeightMm = Math.max(0, CONTENT_HEIGHT_MM - page.usedHeightMm);
   };
   const fits = (heightMm: number) => heightMm <= page.remainingHeightMm + EPSILON;
-  const continueParagraph = (paragraphNumber: number) => {
+  const continueParagraph = (paragraph: DeliveryParagraph) => {
     createPage();
     add({
       kind: "paragraph-heading",
-      paragraphNumber,
+      paragraphNumber: paragraph.paragraphNumber,
+      ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
       continued: true,
       heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
     });
@@ -249,6 +253,7 @@ export function paginateDeliveryDocument(
     const heading: DeliveryPageBlock = {
       kind: "paragraph-heading",
       paragraphNumber: paragraph.paragraphNumber,
+      ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
       continued: false,
       heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
     };
@@ -259,47 +264,48 @@ export function paginateDeliveryDocument(
     }
     add(heading);
     for (const crop of crops) {
-      if (!fits(crop.heightMm)) continueParagraph(paragraph.paragraphNumber);
+      if (!fits(crop.heightMm)) continueParagraph(paragraph);
       add(crop);
     }
 
-    const suggestions = paragraph.suggestions.map((_, index) => (
-      suggestionBlock(paragraph, index, measureText)
-    ));
-    const firstSuggestion = suggestions[0];
-    if (!fits(SECTION_HEADING_HEIGHT_MM + (firstSuggestion?.heightMm ?? 0))) {
-      continueParagraph(paragraph.paragraphNumber);
-    }
-    add({ kind: "suggestion-heading", continued: false, heightMm: SECTION_HEADING_HEIGHT_MM });
-    for (let index = 0; index < suggestions.length; index += 1) {
-      const suggestion = suggestions[index];
-      if (!fits(suggestion.heightMm)) {
-        continueParagraph(paragraph.paragraphNumber);
-        add({ kind: "suggestion-heading", continued: true, heightMm: SECTION_HEADING_HEIGHT_MM });
+    if (!paragraph.essayParagraphNumber) {
+      const suggestions = paragraph.suggestions.map((_, index) => (
+        suggestionBlock(paragraph, index, measureText)
+      ));
+      const firstSuggestion = suggestions[0];
+      if (!fits(SECTION_HEADING_HEIGHT_MM + (firstSuggestion?.heightMm ?? 0))) {
+        continueParagraph(paragraph);
       }
-      add(suggestion);
+      add({ kind: "suggestion-heading", continued: false, heightMm: SECTION_HEADING_HEIGHT_MM });
+      for (let index = 0; index < suggestions.length; index += 1) {
+        const suggestion = suggestions[index];
+        if (!fits(suggestion.heightMm)) {
+          continueParagraph(paragraph);
+          add({ kind: "suggestion-heading", continued: true, heightMm: SECTION_HEADING_HEIGHT_MM });
+        }
+        add(suggestion);
+      }
     }
-
     const revisionLines = wrapRevisionRuns(paragraph.revisionRuns, measureText);
     const requiredRevisionLines = Math.min(2, revisionLines.length);
-    const requiredRevisionHeight = SECTION_HEADING_HEIGHT_MM
+    const requiredRevisionHeight = (paragraph.essayParagraphNumber ? 0 : SECTION_HEADING_HEIGHT_MM)
       + requiredRevisionLines * REVISION_LINE_HEIGHT_MM;
-    if (!fits(requiredRevisionHeight)) continueParagraph(paragraph.paragraphNumber);
-    add({ kind: "revision-heading", continued: false, heightMm: SECTION_HEADING_HEIGHT_MM });
+    if (!fits(requiredRevisionHeight)) continueParagraph(paragraph);
+    if (!paragraph.essayParagraphNumber) add({ kind: "revision-heading", continued: false, heightMm: SECTION_HEADING_HEIGHT_MM });
     let revisionIndex = 0;
     while (revisionIndex < revisionLines.length) {
       let lineCapacity = Math.floor((page.remainingHeightMm + EPSILON) / REVISION_LINE_HEIGHT_MM);
       if (lineCapacity === 0) {
-        continueParagraph(paragraph.paragraphNumber);
-        add({ kind: "revision-heading", continued: true, heightMm: SECTION_HEADING_HEIGHT_MM });
+        continueParagraph(paragraph);
+        if (!paragraph.essayParagraphNumber) add({ kind: "revision-heading", continued: true, heightMm: SECTION_HEADING_HEIGHT_MM });
         lineCapacity = Math.floor((page.remainingHeightMm + EPSILON) / REVISION_LINE_HEIGHT_MM);
       }
       const count = Math.min(lineCapacity, revisionLines.length - revisionIndex);
       add(revisionBlock(revisionLines.slice(revisionIndex, revisionIndex + count)));
       revisionIndex += count;
       if (revisionIndex < revisionLines.length) {
-        continueParagraph(paragraph.paragraphNumber);
-        add({ kind: "revision-heading", continued: true, heightMm: SECTION_HEADING_HEIGHT_MM });
+        continueParagraph(paragraph);
+        if (!paragraph.essayParagraphNumber) add({ kind: "revision-heading", continued: true, heightMm: SECTION_HEADING_HEIGHT_MM });
       }
     }
   }

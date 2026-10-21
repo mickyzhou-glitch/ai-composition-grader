@@ -109,6 +109,7 @@ describe("D1ReviewReader", () => {
       bind: vi.fn(() => ({
         all: vi.fn().mockResolvedValue({ results: [{
           id: "ready-1",
+          class_name: "六（1）班",
           student_name: "张小明",
           config,
           status: "ready_for_review",
@@ -121,6 +122,7 @@ describe("D1ReviewReader", () => {
     await expect(new D1ReviewReader({ prepare } as unknown as D1Database).queue("teacher-1"))
       .resolves.toEqual([{
         id: "ready-1",
+        className: "六（1）班",
         studentName: "张小明",
         title: "我的老师",
         status: "ready_for_review",

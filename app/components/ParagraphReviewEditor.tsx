@@ -44,7 +44,9 @@ export function ParagraphReviewEditor({
   const [instructions, setInstructions] = useState<Record<string, string>>({});
   const paragraphs = [...ocr.paragraphs]
     .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
-  const totalCharacters = paragraphs.reduce((total, paragraph) => {
+  const totalCharacters = report.rewrittenEssay
+    ? report.rewrittenEssay.reduce((total, text) => total + countTextCharactersIncludingPunctuation(text), 0)
+    : paragraphs.reduce((total, paragraph) => {
     const paragraphReview = report.paragraphReviews.find(
       ({ paragraphId }) => paragraphId === paragraph.id,
     );
@@ -68,6 +70,21 @@ export function ParagraphReviewEditor({
       {showCharacterCounts ? <div className="paragraph-review-total">
         示范文总字数 <strong>{totalCharacters}</strong> 字（含标点）
       </div> : null}
+      {report.rewrittenEssay ? <section className="paragraph-review-unit" aria-label="完整范文">
+        <div className="paragraph-review-heading">
+          <h3>按要求重写的完整范文</h3>
+          <span>共 {report.rewrittenEssay.length} 段 · {totalCharacters} 字（含标点）</span>
+        </div>
+        {report.rewrittenEssay.map((text, index) => <label key={index}>第 {index + 1} 段
+          <textarea
+            className="paragraph-revision-input"
+            aria-label={`完整范文第 ${index + 1} 段`}
+            value={text}
+            disabled={disabled}
+            onChange={(event) => onChange({ ...report, rewrittenEssay: report.rewrittenEssay!.map((current, i) => i === index ? event.target.value : current) })}
+          />
+        </label>)}
+      </section> : null}
       {paragraphs.map((paragraph) => {
         const paragraphReview = report.paragraphReviews.find(
           ({ paragraphId }) => paragraphId === paragraph.id,

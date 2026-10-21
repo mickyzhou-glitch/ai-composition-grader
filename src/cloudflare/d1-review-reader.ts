@@ -13,6 +13,7 @@ interface ReviewRow {
   id: string;
   status: string;
   student_name: string;
+  class_name: string;
   config: string;
   report: string | null;
   revision: number;
@@ -62,9 +63,17 @@ function date(value: number | null): string | null {
 export class D1ReviewReader {
   constructor(private readonly database: D1Database) {}
 
+  async classes(ownerId: string): Promise<string[]> {
+    const { results = [] } = await this.database.prepare(`
+      SELECT DISTINCT class_name FROM reviews
+      WHERE owner_id = ? AND deleting_at IS NULL AND class_name <> '' ORDER BY class_name
+    `).bind(ownerId).all<{ class_name: string }>();
+    return results.map((row) => row.class_name);
+  }
+
   async list(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
-      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
       FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
     `).bind(ownerId).all<ReviewRow>();
     return Promise.all(results.map((review) => this.hydrate(ownerId, review)));
@@ -72,7 +81,7 @@ export class D1ReviewReader {
 
   async queue(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
-      SELECT id, student_name, config, status, revision, created_at
+      SELECT id, student_name, class_name, config, status, revision, created_at
       FROM reviews
       WHERE owner_id = ?
         AND deleting_at IS NULL
@@ -84,10 +93,10 @@ export class D1ReviewReader {
           OR report_ocr_revision = json_extract(ocr_checkpoint, '$.ocrRevision')
         )
       ORDER BY created_at ASC, id ASC
-    `).bind(ownerId).all<Pick<ReviewRow, "id" | "student_name" | "config" | "status" | "revision" | "created_at">>();
+    `).bind(ownerId).all<Pick<ReviewRow, "id" | "student_name" | "class_name" | "config" | "status" | "revision" | "created_at">>();
     return results.map((review) => ({
       id: review.id,
-      studentName: review.student_name,
+      studentName: review.student_name, className: review.class_name ?? "",
       title: assignmentConfigSchema.parse(JSON.parse(review.config)).title,
       status: reviewStatusSchema.parse(review.status),
       revision: review.revision,
@@ -160,7 +169,7 @@ export class D1ReviewReader {
 
   async get(ownerId: string, reviewId: string): Promise<unknown | null> {
     const row = await this.database.prepare(`
-      SELECT id, status, student_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
       FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
     `).bind(reviewId, ownerId).first<ReviewRow>();
     return row ? this.hydrate(ownerId, row) : null;
@@ -228,7 +237,7 @@ export class D1ReviewReader {
     );
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
     return {
-      id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, config, report,
+      id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, className: review.class_name ?? "", config, report,
       revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at),
       teacherReviewedAt: date(review.teacher_reviewed_at), expiresAt: date(review.expires_at),
       images, annotations, ocr, reportStale, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,

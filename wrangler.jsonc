@@ -12,6 +12,8 @@
   "vars": {
     "APP_ORIGIN": "https://ai-composition-grader.mickyzhou7.workers.dev"
   },
+  "triggers": { "crons": ["* * * * *"] },
+  "observability": { "enabled": true },
   "d1_databases": [{
     "binding": "DB",
     "database_name": "ai-composition-grader",
@@ -24,6 +26,11 @@
       { "binding": "ANALYSIS_QUEUE", "queue": "ai-composition-grader-analysis" },
       { "binding": "ANALYSIS_DLQ", "queue": "ai-composition-grader-analysis-dlq" }
     ],
-    "consumers": [{ "queue": "ai-composition-grader-analysis", "dead_letter_queue": "ai-composition-grader-analysis-dlq" }]
+    "consumers": [{
+      "queue": "ai-composition-grader-analysis",
+      "dead_letter_queue": "ai-composition-grader-analysis-dlq",
+      "max_batch_size": 1,
+      "max_batch_timeout": 1
+    }]
   }
 }

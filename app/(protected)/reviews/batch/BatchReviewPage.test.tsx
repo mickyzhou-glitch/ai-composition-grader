@@ -102,7 +102,7 @@ function queueItem(id: string, studentName: string, revision: number) {
 }
 
 function mockReviewApi(
-  queue: ReturnType<typeof queueItem>[],
+  queue: (ReturnType<typeof queueItem> & { className?: string })[],
   options: {
     rejectTeacherReview?: boolean;
     currentReport?: typeof report | typeof paragraphReport;
@@ -138,6 +138,38 @@ function mockReviewApi(
 }
 
 describe("BatchReviewPage", () => {
+  it("preserves unsaved edits when class filtering keeps the current review visible", async () => {
+    mockReviewApi([
+      { ...queueItem("review-1", "张小明", 1), className: "六（1）班" },
+      { ...queueItem("review-2", "李安然", 2), className: "六（2）班" },
+    ], { currentReport: paragraphReport });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+    const problem = await screen.findByRole("textbox", { name: "第 1 段第 1 条问题描述" });
+    await user.clear(problem);
+    await user.type(problem, "需要补充声音描写");
+    await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（1）班");
+    expect(screen.getByRole("textbox", { name: "第 1 段第 1 条问题描述" })).toHaveValue("需要补充声音描写");
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（2）班");
+    expect(confirm).toHaveBeenCalled();
+    expect(screen.getByLabelText("班级筛选")).toHaveValue("class:六（1）班");
+  });
+  it("filters the review queue by class and keeps the selection after name search", async () => {
+    mockReviewApi([
+      { ...queueItem("review-1", "张小明", 1), className: "六（1）班" },
+      { ...queueItem("review-2", "李安然", 2), className: "六（2）班" },
+    ]);
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+    await screen.findByRole("heading", { name: "张小明" });
+    await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（2）班");
+    expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /张小明/ })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText("搜索待审核学生姓名"), "张");
+    expect(screen.getByLabelText("班级筛选")).toHaveValue("class:六（2）班");
+    expect(screen.queryByRole("button", { name: /张小明|李安然/ })).not.toBeInTheDocument();
+  });
   afterEach(() => {
     cleanup();
     vi.useRealTimers();
@@ -151,9 +183,9 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
 
-    expect(await screen.findByRole("heading", { name: "逐段修改" })).toBeVisible();
-    expect(screen.getByTestId("page-crop-1")).toBeVisible();
-    const revised = screen.getByLabelText("第 1 段修改稿");
+    expect(await screen.findByRole("heading", { name: "修改意见与示范文" })).toBeVisible();
+    expect(screen.queryByTestId("page-crop-1")).not.toBeInTheDocument();
+    const revised = screen.getByLabelText("第 1 段完整示范文");
     await user.clear(revised);
     await user.type(revised, "我听见急促的呼吸声，终于走上台。");
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
@@ -243,13 +275,14 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
 
-    const name = await screen.findByRole("textbox", { name: "学生姓名" });
-    await user.type(name, "同学");
+    const suggestion = (await screen.findAllByRole("textbox", { name: "修改意见" }))[0];
+    await user.type(suggestion, "补充听觉细节");
     await user.click(screen.getByRole("button", { name: "不合适" }));
 
     expect(confirm).toHaveBeenCalledWith("当前修改尚未审核保存，确认切换作文？");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "张小明同学" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
+    expect(suggestion).toHaveValue("补充动作补充听觉细节");
   });
 
   it("does not add a successfully returned review to reviewed or export collections", async () => {
@@ -383,14 +416,14 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
 
-    const name = await screen.findByRole("textbox", { name: "学生姓名" });
-    await user.clear(name);
-    await user.type(name, "张小明（六班）");
+    const suggestion = (await screen.findAllByRole("textbox", { name: "修改意见" }))[0];
+    await user.clear(suggestion);
+    await user.type(suggestion, "补充听觉细节");
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
 
     expect(await screen.findByText("保存失败，请重试")).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "学生姓名" })).toHaveValue("张小明（六班）");
-    expect(screen.getByRole("heading", { name: "张小明（六班）" })).toBeVisible();
+    expect(suggestion).toHaveValue("补充听觉细节");
+    expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
   });
 
   it("asks for confirmation before switching away from unsaved edits", async () => {
@@ -402,12 +435,13 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
 
-    const name = await screen.findByRole("textbox", { name: "学生姓名" });
-    await user.type(name, "同学");
+    const suggestion = (await screen.findAllByRole("textbox", { name: "修改意见" }))[0];
+    await user.type(suggestion, "补充听觉细节");
     await user.click(screen.getByRole("button", { name: /李安然/u }));
 
     expect(confirm).toHaveBeenCalledWith("当前修改尚未审核保存，确认切换作文？");
-    expect(screen.getByRole("heading", { name: "张小明同学" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
+    expect(suggestion).toHaveValue("补充动作补充听觉细节");
   });
 
   it("continues within the student-name search results after review", async () => {
@@ -449,7 +483,7 @@ describe("BatchReviewPage", () => {
     render(<BatchReviewPage />);
 
     await screen.findByRole("heading", { name: "张小明" });
-    expect(screen.getByText("当前为 3 段，题目要求 5 段，请先使用 AI 全文重新生成。")).toBeVisible();
+    expect(screen.getByText("示范作文段落数不符合题目要求。")).toBeVisible();
     expect(screen.getByRole("button", { name: "审核通过并进入下一篇" })).toBeDisabled();
     expect(screen.getByRole("link", { name: "前往单篇复核" })).toHaveAttribute(
       "href",

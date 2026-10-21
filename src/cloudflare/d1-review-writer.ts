@@ -7,6 +7,7 @@ import {
   evaluationReportSchema,
   isParagraphEvaluationReport,
   studentNameSchema,
+  classNameSchema,
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import { ocrCheckpointSchema } from "../ocr/contracts";
@@ -14,16 +15,17 @@ import { ocrCheckpointSchema } from "../ocr/contracts";
 export class D1ReviewWriter {
   constructor(private readonly database: D1Database) {}
 
-  async create(ownerId: string, input: { config: unknown; studentName?: unknown }): Promise<{ id: string; revision: number }> {
+  async create(ownerId: string, input: { config: unknown; studentName?: unknown; className?: unknown }): Promise<{ id: string; revision: number }> {
     const config = assignmentConfigSchema.parse(input.config);
     const studentName = studentNameSchema.parse(input.studentName ?? "");
+    const className = classNameSchema.parse(input.className ?? "");
     const id = crypto.randomUUID();
     const now = Date.now();
     const statements: D1PreparedStatement[] = [
       this.database.prepare(`
-        INSERT INTO reviews (id, owner_id, status, student_name, config, report, revision, analysis_run_id, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at)
-        VALUES (?, ?, 'draft', ?, ?, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
-      `).bind(id, ownerId, studentName, JSON.stringify(config), now, now),
+        INSERT INTO reviews (id, owner_id, status, student_name, config, report, revision, analysis_run_id, pdf_filename, pdf_path, pdf_revision, exported_at, expires_at, deleting_at, privacy_consent_version, privacy_consented_at, created_at, updated_at, class_name)
+        VALUES (?, ?, 'draft', ?, ?, NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?, ?)
+      `).bind(id, ownerId, studentName, JSON.stringify(config), now, now, className),
     ];
     if (config.templateType === "custom") {
       statements.push(this.database.prepare(`
@@ -45,10 +47,11 @@ export class D1ReviewWriter {
     const parsed = z.object({
       expectedRevision: z.number().int().nonnegative(),
       studentName: studentNameSchema.optional(),
+      className: classNameSchema.optional(),
       config: assignmentConfigSchema.optional(),
       report: evaluationReportSchema.optional(),
       annotations: z.array(annotationSchema).optional(),
-    }).strict().refine((value) => value.studentName !== undefined || value.config !== undefined || value.report !== undefined || value.annotations !== undefined).parse(input);
+    }).strict().refine((value) => value.className !== undefined || value.studentName !== undefined || value.config !== undefined || value.report !== undefined || value.annotations !== undefined).parse(input);
     const current = await this.database.prepare("SELECT student_name, config, report, status, revision, analysis_run_id, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{
       student_name: string;
       config: string;
@@ -93,7 +96,8 @@ export class D1ReviewWriter {
       UPDATE reviews SET student_name = ?, config = ?, report = ?, status = ?, revision = revision + 1, updated_at = ?,
         analysis_run_id = CASE WHEN ? THEN NULL ELSE analysis_run_id END,
         teacher_reviewed_at = CASE WHEN ? THEN NULL ELSE teacher_reviewed_at END,
-        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
+        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL,
+        class_name = COALESCE(?, class_name)
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
         AND analysis_run_id IS NULL
         ${paragraphReport ? `
@@ -109,6 +113,7 @@ export class D1ReviewWriter {
       now,
       parsed.config !== undefined ? 1 : 0,
       parsed.config !== undefined ? 1 : 0,
+      parsed.className ?? null,
       reviewId,
       ownerId,
       parsed.expectedRevision,
@@ -135,6 +140,7 @@ export class D1ReviewWriter {
     const parsed = z.object({
       expectedRevision: z.number().int().nonnegative(),
       studentName: studentNameSchema,
+      className: classNameSchema.optional(),
       report: evaluationReportSchema,
       annotations: z.array(annotationSchema),
     }).strict().parse(input);
@@ -176,7 +182,7 @@ export class D1ReviewWriter {
     `;
     const statements: D1PreparedStatement[] = [
       this.database.prepare(`
-        UPDATE reviews SET student_name = ?, report = ?, status = 'ready_for_review',
+        UPDATE reviews SET student_name = ?, class_name = COALESCE(?, class_name), report = ?, status = 'ready_for_review',
           revision = revision + 1, teacher_reviewed_at = ?, updated_at = ?,
           analysis_run_id = NULL,
           pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL
@@ -190,6 +196,7 @@ export class D1ReviewWriter {
           AND report_ocr_revision = ?` : ""}
       `).bind(
         parsed.studentName,
+        parsed.className ?? null,
         JSON.stringify(report),
         now,
         now,

@@ -70,6 +70,14 @@ const checkpoint = {
 };
 
 describe("D1ReviewWriter", () => {
+  it("persists a trimmed class on creation and rejects oversized class names", async () => {
+    const bind = vi.fn().mockReturnValue({});
+    const database = { prepare: vi.fn().mockReturnValue({ bind }), batch: vi.fn().mockResolvedValue([]) } as unknown as D1Database;
+    await new D1ReviewWriter(database).create("teacher-1", { config, className: " 六（1）班 " });
+    expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("class_name"));
+    expect(bind.mock.calls[0]).toContain("六（1）班");
+    await expect(new D1ReviewWriter(database).create("teacher-1", { config, className: "班".repeat(51) })).rejects.toThrow();
+  });
   it("creates a draft and saves a custom assignment in one D1 batch", async () => {
     const batch = vi.fn().mockResolvedValue([]);
     const database = {

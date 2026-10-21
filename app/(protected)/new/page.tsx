@@ -1,16 +1,17 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
   type AssignmentConfig,
-  type NormalizedCrop,
 } from "@/src/domain/contracts";
+import { ClassInput } from "../../components/ClassInput";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
+import { AssignmentGuidancePanel } from "../../components/AssignmentGuidancePanel";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { apiFetch, errorMessage } from "../../lib/api";
 import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
@@ -37,38 +38,19 @@ const customConfig: AssignmentConfig = {
   sampleParagraphCount: 5,
 };
 
-interface CropEdges { left: number; top: number; right: number; bottom: number }
 interface PendingImage {
   key: string;
   file: File;
   previewUrl: string;
   rotation: 0 | 90 | 180 | 270;
-  crop: CropEdges;
 }
 
 interface UploadedImage { id: number; position: number }
 interface ReviewSession { id: string; revision: number }
 interface ImageMutationResult { images: UploadedImage[]; revision: number }
-interface AssignmentGuidance {
-  writingRequirements: string;
-  structureRequirements: string;
-  scoringFocus: string;
-}
-
 interface SavedAssignment {
   id: string;
   config: AssignmentConfig;
-}
-
-function asCrop(edges: CropEdges): NormalizedCrop | null {
-  const { left, top, right, bottom } = edges;
-  if (left === 0 && top === 0 && right === 0 && bottom === 0) return null;
-  return {
-    x: left / 100,
-    y: top / 100,
-    width: (100 - left - right) / 100,
-    height: (100 - top - bottom) / 100,
-  };
 }
 
 function validateConfig(config: AssignmentConfig): string {
@@ -86,13 +68,20 @@ export default function NewReviewPage() {
   const [step, setStep] = useState(1);
   const [config, setConfig] = useState<AssignmentConfig>(presetConfig);
   const [studentName, setStudentName] = useState("");
+  const [className, setClassName] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState("");
+  const [documentName, setDocumentName] = useState("");
+  const previewRef = useRef<PendingImage[]>([]);
+  const mountedRef = useRef(true);
   const [images, setImages] = useState<PendingImage[]>([]);
   const [review, setReview] = useState<ReviewSession | null>(null);
+  const savedInputRef = useRef<{ config: AssignmentConfig; studentName: string; className: string } | null>(null);
   const [uploaded, setUploaded] = useState<UploadedImage[] | null>(null);
   const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [guidanceBusy, setGuidanceBusy] = useState(false);
+  const [startingAnalysis, setStartingAnalysis] = useState(false);
   const [savedAssignments, setSavedAssignments] = useState<SavedAssignment[]>([]);
   const [savedAssignmentsLoaded, setSavedAssignmentsLoaded] = useState(false);
   const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
@@ -112,33 +101,27 @@ export default function NewReviewPage() {
     return () => { active = false; };
   }, []);
 
-  function updateConfig<K extends keyof AssignmentConfig>(key: K, value: AssignmentConfig[K]) {
-    setConfig((current) => ({ ...current, [key]: value }));
+  useEffect(() => { previewRef.current = images; }, [images]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; previewRef.current.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl)); };
+  }, []);
+
+  async function chooseDocument(file?: File) {
+    if (!file || importing) return;
+    setImporting(true); setError(""); setImportProgress("正在读取文档…");
+    try {
+      const { importDocument } = await import("../../lib/document-import");
+      const pages = await importDocument(file, (message) => { if (mountedRef.current) setImportProgress(message); });
+      if (!mountedRef.current) return;
+      chooseFiles(pages);
+      setDocumentName(file.name);
+    } catch (caught) { if (mountedRef.current) setError(errorMessage(caught)); }
+    finally { if (mountedRef.current) { setImporting(false); setImportProgress(""); } }
   }
 
-  async function generateGuidance() {
-    if (!config.title.trim()) {
-      setError("请先填写作文题目");
-      return;
-    }
-    setGuidanceBusy(true);
-    setError("");
-    try {
-      const guidance = await apiFetch<AssignmentGuidance>("/api/assignment-guidance", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          title: config.title,
-          grade: config.grade,
-          targetCharacters: config.targetCharacters,
-        }),
-      });
-      setConfig((current) => ({ ...current, ...guidance }));
-    } catch (caught) {
-      setError(`${errorMessage(caught)}。请检查 AI 设置后重试。`);
-    } finally {
-      setGuidanceBusy(false);
-    }
+  function updateConfig<K extends keyof AssignmentConfig>(key: K, value: AssignmentConfig[K]) {
+    setConfig((current) => ({ ...current, [key]: value }));
   }
 
   async function deleteSavedAssignment(id: string) {
@@ -161,12 +144,12 @@ export default function NewReviewPage() {
       return;
     }
     images.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
+    setDocumentName("");
     setImages(files.map((file, index) => ({
       key: `${file.name}-${file.lastModified}-${index}`,
       file,
       previewUrl: URL.createObjectURL(file),
       rotation: 0,
-      crop: { left: 0, top: 0, right: 0, bottom: 0 },
     })));
     setUploaded(null);
   }
@@ -187,7 +170,6 @@ export default function NewReviewPage() {
       file,
       previewUrl: URL.createObjectURL(file),
       rotation: 0,
-      crop: { left: 0, top: 0, right: 0, bottom: 0 },
     }]);
     setUploaded(null);
   }
@@ -215,18 +197,20 @@ export default function NewReviewPage() {
   }
 
   async function submit() {
+    if (busy) return;
     setBusy(true);
     setError("");
+    let submittingAnalysis = false;
     try {
       let currentReview = review;
       if (!currentReview) {
         currentReview = await apiFetch<ReviewSession>("/api/reviews", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ config, studentName }),
+          body: JSON.stringify({ config, studentName, className }),
         });
         setReview(currentReview);
-      } else {
+      } else if (savedInputRef.current?.config !== config || savedInputRef.current?.studentName !== studentName || savedInputRef.current?.className !== className) {
         currentReview = await apiFetch<ReviewSession>(`/api/reviews/${encodeURIComponent(currentReview.id)}`, {
           method: "PATCH",
           headers: { "content-type": "application/json" },
@@ -234,49 +218,43 @@ export default function NewReviewPage() {
             expectedRevision: currentReview.revision,
             config,
             studentName,
+            className,
           }),
         });
         setReview(currentReview);
       }
-      let serverImages = uploaded;
-      if (!serverImages) {
+      savedInputRef.current = { config, studentName, className };
+      if (!uploaded) {
         const form = new FormData();
         form.append("expectedRevision", String(currentReview.revision));
         form.append("privacyConfirmed", String(privacyConfirmed));
         form.append("privacyNoticeVersion", PRIVACY_NOTICE_VERSION);
-        const prepared = await Promise.all(images.map(async (image) => prepareImageForCloudUpload({ file: image.file, rotation: image.rotation, crop: asCrop(image.crop) })));
+        const prepared = await Promise.all(images.map(async (image) => prepareImageForCloudUpload({ file: image.file, rotation: image.rotation, crop: null })));
         prepared.forEach(({ file }) => form.append("images", file));
         form.append("imageMeta", JSON.stringify(prepared.map(({ width, height }) => ({ width, height }))));
         const uploadResult = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
           method: "POST",
           body: form,
         });
-        serverImages = [...uploadResult.images].sort((a, b) => a.position - b.position);
-        setUploaded(serverImages);
+        setUploaded([...uploadResult.images].sort((a, b) => a.position - b.position));
         currentReview = { ...currentReview, revision: uploadResult.revision };
         setReview(currentReview);
-        router.push(`/reviews?id=${encodeURIComponent(currentReview.id)}`);
-        return;
       }
-      const transformed = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
-        method: "PATCH",
+      submittingAnalysis = true;
+      setStartingAnalysis(true);
+      await apiFetch(`/api/reviews/${encodeURIComponent(currentReview.id)}/analyze`, {
+        method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          expectedRevision: currentReview.revision,
-          images: images.map((image, position) => ({
-            id: serverImages[position].id,
-            position,
-            rotation: image.rotation,
-            crop: asCrop(image.crop),
-          })),
-        }),
+        body: JSON.stringify({ mode: "full" }),
       });
-      setReview({ ...currentReview, revision: transformed.revision });
       router.push(`/reviews?id=${encodeURIComponent(currentReview.id)}`);
     } catch (caught) {
-      setError(`${errorMessage(caught)}。已保留当前内容，可直接重试。`);
+      setError(submittingAnalysis
+        ? `${errorMessage(caught)}。作文已保存，尚未确认分析已启动，可直接重试。`
+        : `${errorMessage(caught)}。已保留当前内容，可直接重试。`);
     } finally {
       setBusy(false);
+      setStartingAnalysis(false);
     }
   }
 
@@ -290,9 +268,9 @@ export default function NewReviewPage() {
     <div className="app-shell">
       <AppHeader compact />
       <main className="flow-page">
-        <div className="page-title"><p className="eyebrow">新建批改</p><h1>把作文铺到案头</h1><p>三步完成题目设定、图片整理与提交。</p></div>
+        <div className="page-title"><p className="eyebrow">新建批改</p><h1>把作文铺到案头</h1><p>三步完成题目设定、作文上传与提交。</p></div>
         <ol className="stepper" aria-label="新建进度">
-          {["题目", "作文图片", "确认"].map((label, index) => (
+          {["题目", "作文上传", "确认"].map((label, index) => (
             <li key={label} aria-current={step === index + 1 ? "step" : undefined} className={step >= index + 1 ? "stepper-active" : ""}><span>{index + 1}</span>{label}</li>
           ))}
         </ol>
@@ -330,7 +308,7 @@ export default function NewReviewPage() {
                 <label>作文题目<input value={config.title} onChange={(event) => updateConfig("title", event.target.value)} /></label>
                 <label>适用年级<input value={config.grade} onChange={(event) => updateConfig("grade", event.target.value)} /></label>
                 <label>目标字数<input aria-label="目标字数" type="number" min={1} value={config.targetCharacters} onChange={(event) => updateConfig("targetCharacters", Number(event.target.value))} /></label>
-                <div className="wide ai-guidance-action"><div><b>先由 AI 拟定要求</b><small>根据题目、年级和目标字数生成初稿；生成后可继续手动修改。</small></div><AsyncButton className="button button--quiet" type="button" busy={guidanceBusy} busyLabel="AI 正在拟定…" disabled={!config.title.trim()} onClick={() => void generateGuidance()}>AI 生成要求</AsyncButton></div>
+                <AssignmentGuidancePanel config={config} onGenerated={(guidance) => setConfig((current) => ({ ...current, ...guidance }))} onError={setError} />
                 <label className="wide">写作要求<textarea value={config.writingRequirements} onChange={(event) => updateConfig("writingRequirements", event.target.value)} /></label>
                 <label className="wide">结构要求<textarea value={config.structureRequirements} onChange={(event) => updateConfig("structureRequirements", event.target.value)} /></label>
                 <label className="wide">评分侧重<textarea value={config.scoringFocus} onChange={(event) => updateConfig("scoringFocus", event.target.value)} /></label>
@@ -342,12 +320,17 @@ export default function NewReviewPage() {
 
         {step === 2 ? (
           <section className="paper-card flow-card" aria-labelledby="upload-heading">
-            <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">整理作文图片</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
+            <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">上传作文</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
+            {importing ? <p role="status" className="document-import-notice">{importProgress}</p> : null}
+            <fieldset className="upload-workspace" disabled={importing}>
+            <ClassInput value={className} onChange={setClassName} />
             <label className="upload-student-name">学生姓名<input aria-label="学生姓名" maxLength={50} placeholder="请输入学生姓名" value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label>
             <div className="upload-choices">
               <label className="upload-zone upload-zone--camera">使用手机相机拍照<input className="visually-hidden" aria-label="使用手机相机拍照" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { addCameraFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /><span>拍摄一页后可继续拍下一页</span><small>将优先打开后置相机</small></label>
               <label className="upload-zone">从相册或文件选择<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP，单张不超过 20MB</small></label>
             </div>
+            <label className="upload-zone document-upload">直接上传 Word 或 PDF<input className="visually-hidden" aria-label="选择作文文档" type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => { void chooseDocument(event.target.files?.[0]); event.currentTarget.value = ""; }} /><span>每份文档对应一篇作文，最多 {MAX_REVIEW_IMAGES} 页、20MB</span><small>Word 会重新排版，PDF 按原页显示。导入后请逐页检查预览。</small></label>
+            {documentName ? <p className="document-import-notice">已导入：{documentName}，共 {images.length} 页。重新选文件会替换当前作文。</p> : null}
             <div className="image-sort-list">
               {images.map((image, index) => (
                 <article className="image-sort-card" key={image.key}>
@@ -361,27 +344,22 @@ export default function NewReviewPage() {
                       <button type="button" aria-label={`旋转 ${image.file.name}`} onClick={() => updateImage(index, { rotation: ((image.rotation + 90) % 360) as PendingImage["rotation"] })}>旋转 90°</button>
                       <button type="button" aria-label={`删除 ${image.file.name}`} onClick={() => removeImage(index)}>删除</button>
                     </div>
-                    <fieldset className="crop-controls"><legend>裁剪边界（百分比）</legend>
-                      {(["left", "top", "right", "bottom"] as const).map((edge) => {
-                        const labels = { left: "左", top: "上", right: "右", bottom: "下" };
-                        return <label key={edge}>{labels[edge]}<input aria-label={`${image.file.name} 裁剪${labels[edge]}边界（%）`} type="number" min={0} max={49} value={image.crop[edge]} onChange={(event) => updateImage(index, { crop: { ...image.crop, [edge]: Math.max(0, Math.min(49, Number(event.target.value))) } })} /></label>;
-                      })}
-                    </fieldset>
                   </div>
                 </article>
               ))}
             </div>
             <div className="form-actions"><button className="button button--quiet" type="button" onClick={() => setStep(1)}>上一步</button><button className="button button--primary" type="button" disabled={images.length < 1} onClick={() => { setError(""); setStep(3); }}>下一步：确认提交</button></div>
+            </fieldset>
           </section>
         ) : null}
 
         {step === 3 ? (
           <section className="paper-card flow-card" aria-labelledby="confirm-heading">
             <p className="eyebrow">第三步</p><h2 id="confirm-heading">确认批改内容</h2>
-            <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span><span>学生姓名</span><b>{studentName.trim() || "未填写"}</b></div>
-            <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°{asCrop(image.crop) ? " · 已裁剪" : ""}</small></li>)}</ol>
-            <div className="privacy-note"><b>真实作文上传说明</b><p>请勿在图片中保留学生姓名、学号、班级、学校等无关身份信息；本次图片仅用于作文批改，并会发送到教师配置的第三方 AI 服务识别和分析。</p><p>作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除；第三方 AI 服务的数据处理以其自身规则为准。</p><label><input aria-label="确认真实作文上传说明" type="checkbox" checked={privacyConfirmed} onChange={(event) => setPrivacyConfirmed(event.target.checked)} /> 我确认已获得上传和使用该作文的必要授权。</label></div>
-            <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel="正在建立批改…" disabled={!privacyConfirmed} onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
+            <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span><span>学生姓名</span><b>{studentName.trim() || "未填写"}</b><span>班级</span><b>{className.trim() || "未分类"}</b></div>
+            <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°</small></li>)}</ol>
+            <div className="privacy-note"><b>真实作文上传说明</b><p>请勿在图片或文档中保留学生姓名、学号、班级、学校等无关身份信息；本次图片仅用于作文批改，并会发送到教师配置的第三方 AI 服务识别和分析。</p><p>作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除；第三方 AI 服务的数据处理以其自身规则为准。</p><label><input aria-label="确认真实作文上传说明" type="checkbox" checked={privacyConfirmed} onChange={(event) => setPrivacyConfirmed(event.target.checked)} /> 我确认已获得上传和使用该作文的必要授权。</label></div>
+            <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel={startingAnalysis ? "正在启动 AI 分析…" : "正在建立批改…"} disabled={!privacyConfirmed} onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
           </section>
         ) : null}
       </main>

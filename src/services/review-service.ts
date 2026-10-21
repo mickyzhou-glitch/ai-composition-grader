@@ -204,13 +204,14 @@ export class ReviewService {
     ownerId: string,
     config: AssignmentConfig,
     studentName = "",
+    className = "",
   ): Promise<ReviewRecord> {
     await this.recovery;
     const id = this.createId();
     return this.fileStore.withReviewLock(ownerId, id, async () => {
       await this.fileStore.createReview(ownerId, id);
       try {
-        const review = this.repository.create(ownerId, { id, config, studentName });
+        const review = this.repository.create(ownerId, { id, config, studentName, className });
         if (config.templateType === "custom") this.repository.saveCustomAssignment(ownerId, config);
         return review;
       } catch (error) {

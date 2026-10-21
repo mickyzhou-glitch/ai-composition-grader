@@ -7,7 +7,7 @@ function sectionHeading(
   block: Extract<DeliveryPageBlock, { kind: "paragraph-heading" | "suggestion-heading" | "revision-heading" }>,
 ) {
   if (block.kind === "paragraph-heading") {
-    return `【第 ${block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`;
+    return `【${block.essayParagraphNumber ? "完整范文·" : ""}第 ${block.essayParagraphNumber ?? block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`;
   }
   const title = block.kind === "suggestion-heading" ? "修改建议" : "修改后段落";
   return `【${title}${block.continued ? "（续）" : ""}】`;

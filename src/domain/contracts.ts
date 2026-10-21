@@ -42,6 +42,8 @@ export const reviewStatusSchema = z.enum([
 ]);
 export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
 
+export const classNameSchema = z.string().trim().max(50);
+
 export const studentNameSchema = z.string().trim().max(50);
 export const MAX_REVIEW_IMAGES = 4;
 
@@ -226,6 +228,8 @@ export const paragraphEvaluationReportSchema = reportContentBaseSchema.extend({
   grade: compositionGradeSchema,
   diagnostics: diagnosticsSchema,
   paragraphReviews: z.array(paragraphReviewSchema).min(1),
+  // Optional only for persisted reports created before whole-essay rewriting.
+  rewrittenEssay: z.array(z.string().trim().min(1).regex(/^[^\r\n]+$/u)).min(1).max(10).optional(),
 }).strict();
 export type ParagraphEvaluationReport = z.infer<typeof paragraphEvaluationReportSchema>;
 

@@ -6,7 +6,7 @@ import sharp from "sharp";
 
 const reviewId = "review-delivery";
 const expectedFilenames = {
-  pdf: "作文批改-我终于明白了-唐敦林.pdf",
+  pdf: "唐敦林我终于明白了.pdf",
   docx: "作文批改-我终于明白了-唐敦林.docx",
 } as const;
 

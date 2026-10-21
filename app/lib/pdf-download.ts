@@ -242,10 +242,10 @@ function paragraphRuns(paragraph: PdfParagraph): RichTextRun[] {
   return runs;
 }
 
-async function loadExportKaiti(pages: PdfPage[]) {
+async function loadExportKaiti(pages: PdfPage[], rewrittenEssay: string[] = []) {
   const text = pages.flatMap(({ paragraphs }) => (
     paragraphs.flatMap((paragraph) => paragraphRuns(paragraph).map((run) => run.text))
-  )).join("");
+  )).join("") + rewrittenEssay.join("") + (rewrittenEssay.length ? "按要求重写的完整范文（续）" : "");
   await Promise.all([
     window.document.fonts.load(`400 16px ${KAITI_FONT_FACE}`, text),
     window.document.fonts.load(`700 16px ${KAITI_FONT_FACE}`, text),
@@ -512,6 +512,43 @@ async function drawPdfPage(
   }
 }
 
+function drawRewrittenEssayPages(paragraphs: string[]): HTMLCanvasElement[] {
+  const canvases: HTMLCanvasElement[] = [];
+  const fontPt = 14;
+  const lineHeight = 24;
+  const margin = 32;
+  let page!: CanvasPage;
+  let y = 0;
+  const nextPage = () => {
+    page = createCanvasPage();
+    paintPageBackground(page.context);
+    setKaitiFont(page.context, 18, 700);
+    page.context.fillStyle = TEXT_COLOR;
+    page.context.fillText(`按要求重写的完整范文${canvases.length ? "（续）" : ""}`, margin, margin);
+    y = margin + 40;
+    canvases.push(page.canvas);
+  };
+  nextPage();
+  paragraphs.forEach((text) => {
+    const lines = wrapRichText(page.context, [{ text: `　　${text}`, color: TEXT_COLOR, weight: 400, underline: false }], PDF_WIDTH - margin * 2, fontPt);
+    // Keep a paragraph together when possible; long paragraphs may continue on a new page.
+    if (y + lines.length * lineHeight > PDF_HEIGHT - margin && lines.length * lineHeight <= PDF_HEIGHT - margin * 2 - 40) nextPage();
+    for (const line of lines) {
+      if (y + lineHeight > PDF_HEIGHT - margin) nextPage();
+      let x = margin;
+      for (const fragment of line.fragments) {
+        setKaitiFont(page.context, fontPt, fragment.weight);
+        page.context.fillStyle = fragment.color;
+        page.context.fillText(fragment.text, x, y);
+        x += fragment.width;
+      }
+      y += lineHeight;
+    }
+    y += 12;
+  });
+  return canvases;
+}
+
 export async function createReviewPdf(review: ReviewView): Promise<Blob> {
   if (!review.report || review.images.length === 0) {
     throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "批改尚未完成，暂不能导出 PDF");
@@ -524,7 +561,8 @@ export async function createReviewPdf(review: ReviewView): Promise<Blob> {
   }
 
   const pages = buildPdfPages(review);
-  await loadExportKaiti(pages);
+  const rewrittenEssay = paragraphEvaluationReportSchema.parse(review.report).rewrittenEssay ?? [];
+  await loadExportKaiti(pages, rewrittenEssay);
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4", compress: true });
   pdf.setProperties({ title: reviewPdfTitle(review) });
@@ -541,6 +579,12 @@ export async function createReviewPdf(review: ReviewView): Promise<Blob> {
       undefined,
       "FAST",
     );
+  }
+  if (rewrittenEssay.length) {
+    for (const canvas of drawRewrittenEssayPages(rewrittenEssay)) {
+      pdf.addPage("a4", "landscape");
+      pdf.addImage(canvas.toDataURL("image/jpeg", 0.97), "JPEG", 0, 0, PDF_WIDTH, PDF_HEIGHT, undefined, "FAST");
+    }
   }
   return pdf.output("blob");
 }

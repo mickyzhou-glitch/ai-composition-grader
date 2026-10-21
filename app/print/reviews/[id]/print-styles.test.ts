@@ -16,11 +16,11 @@ describe("PDF 打印样式", () => {
     expect(css).toMatch(/\.sheet\s*{[^}]*width:\s*174mm;/);
   });
 
-  it("使用浅橙建议、楷体修改稿与红色新增删除语义", () => {
+  it("使用浅橙建议、楷体修改稿与蓝色划线标注", () => {
     expect(css).toMatch(/\.suggestions\s*{[^}]*background:\s*#fff0bd;/);
     expect(css).toMatch(/\.revision\s*{[^}]*font-family:\s*"LXGW WenKai", STKaiti, KaiTi, serif;[^}]*font-size:\s*11\.5pt;[^}]*color:\s*#171717;/);
-    expect(css).toMatch(/\.inserted,\s*\n\.deleted\s*{[^}]*color:\s*#c91f32;/);
-    expect(css).toMatch(/\.deleted\s*{[^}]*text-decoration:\s*line-through;/);
+    expect(css).toMatch(/\.inserted\s*{[^}]*color:\s*#1f4e78;[^}]*text-decoration:\s*underline;/);
+    expect(css).not.toMatch(/\.deleted\s*{|text-decoration:\s*line-through;/);
     expect(css).not.toMatch(/--blue|#255ab1/u);
   });
 });

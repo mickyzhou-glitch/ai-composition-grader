@@ -5,6 +5,8 @@ import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { D1Reanalysis, D1ReanalysisBatchError } from "../src/cloudflare/d1-reanalysis";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
+import { AiAdapterError } from "../src/ai/openai-review-adapter";
+import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
 
 function workerEnv(assetResponse: () => Response, database?: unknown) {
   return {
@@ -124,6 +126,27 @@ describe("Cloudflare Worker", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+  it("课本导入拒绝无效图片并返回 400", async () => {
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/assignment-guidance", {
+      method: "POST", headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({ title: "", grade: "六年级", targetCharacters: 600, textbookImages: ["https://example.test/book.jpg"] }),
+    }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "VALIDATION_ERROR" } });
+  });
+
+  it("课本识别失败时保留明确的识别错误供教师补填", async () => {
+    vi.spyOn(AssignmentGuidanceAdapter.prototype, "generate").mockRejectedValue(
+      new AiAdapterError("AI_INVALID_RESPONSE", "未能从课本图片识别作文题目，请补填题目", 502),
+    );
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/assignment-guidance", {
+      method: "POST", headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({ title: "", grade: "六年级", targetCharacters: 600, textbookImages: ["data:image/png;base64,eA=="] }),
+    }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "AI_INVALID_RESPONSE", message: expect.stringContaining("补填题目") } });
+  });
+
   it("单段重写路由只把 OCR 段落文字和当前草稿发送给内容模型", async () => {
     const get = vi.spyOn(D1ReviewReader.prototype, "get")
       .mockResolvedValue(paragraphReviewView as never);
@@ -817,6 +840,7 @@ describe("Cloudflare Worker", () => {
     await expect(response.json()).resolves.toEqual({ ok: true, data: [{
       id: "review-1",
       studentName: "张小明",
+      className: "",
       title: "为自己鼓掌",
       status: "ready_for_review",
       revision: 3,
@@ -834,7 +858,7 @@ describe("Cloudflare Worker", () => {
           sql.includes("FROM sessions INNER JOIN users") ? {
             id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
             expires_at: Date.now() + 60_000,
-          } : sql.includes("SELECT config, revision FROM reviews") ? {
+          } : sql.includes("SELECT config, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews") ? {
             config: JSON.stringify(reviewConfig), revision: 3,
           } : sql.includes("FROM reviews WHERE id") ? {
             id: "review-1", status: "ready_for_review", student_name: "张小明",

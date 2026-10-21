@@ -187,7 +187,7 @@ describe("双格式导出编排", () => {
 
     expect(reviewFilename(item, "docx")).toBe("作文批改-我终于明白了-唐敦林.docx");
     expect(reviewFilename({ ...item, studentName: "", config: { ...item.config, title: "A/B:*?" } }, "pdf"))
-      .toBe("作文批改-A B-未填写学生姓名.pdf");
+      .toBe("未填写学生姓名A B.pdf");
     expect(archiveFilename("pdf")).toBe("作文批改批量导出-PDF.zip");
     expect(archiveFilename("docx")).toBe("作文批改批量导出-Word.zip");
   });
@@ -266,8 +266,8 @@ describe("双格式导出编排", () => {
     const archiveBlob = exportMocks.triggerDownload.mock.calls[0][0] as Blob;
     const archive = await JSZip.loadAsync(await archiveBlob.arrayBuffer());
     expect(Object.keys(archive.files)).toEqual([
-      "作文批改-我终于明白了-唐敦林.pdf",
-      "作文批改-我终于明白了-唐敦林-2.pdf",
+      "唐敦林我终于明白了.pdf",
+      "唐敦林我终于明白了-2.pdf",
     ]);
   });
 

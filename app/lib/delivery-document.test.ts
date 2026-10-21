@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { buildRevisionRuns } from "@/src/revisions/revision-diff";
+import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 import { DELIVERY_STYLE } from "@/src/delivery/contracts";
 import { buildDeliveryDocument, DeliveryBuildError } from "./delivery-document";
 
@@ -84,10 +84,20 @@ function dependencies(failPage?: number) {
 }
 
 describe("buildDeliveryDocument", () => {
+  it("导出包含独立五段完整范文且不伪造原文裁图", async () => {
+    const rewrittenEssay = ["一。", "二。", "三。", "四。", "五。"];
+    const document = await buildDeliveryDocument({ ...review, report: { ...report, rewrittenEssay } }, dependencies());
+    expect(document.paragraphs).toHaveLength(7);
+    expect(document.paragraphs.slice(2)).toEqual(rewrittenEssay.map((text, index) => ({
+      paragraphNumber: index + 3, essayParagraphNumber: index + 1,
+      crops: [], suggestions: [], revisionRuns: [{ kind: "unchanged", text }],
+    })));
+  });
+
   it("shares the fixed A4 delivery style", () => {
     expect(DELIVERY_STYLE).toEqual({
       page: { widthMm: 210, heightMm: 297, marginXmm: 18, marginYmm: 16 },
-      colors: { text: "171717", change: "C91F32", suggestion: "FFF0BD" },
+      colors: { text: "171717", change: "1F4E78", suggestion: "FFF0BD" },
       fontPt: { title: 16, section: 11, suggestion: 10.5, revision: 11.5 },
     });
   });
@@ -102,7 +112,7 @@ describe("buildDeliveryDocument", () => {
       paragraphNumber: 1,
       crops: [{ pageIndex: 0 }, { pageIndex: 1 }],
       suggestions: report.paragraphReviews[0].suggestions,
-      revisionRuns: buildRevisionRuns("第一段原文。", "第一段修改稿。"),
+      revisionRuns: buildSentenceRevisionRuns("第一段原文。", "第一段修改稿。"),
     });
     expect(deps.fetchImage).toHaveBeenCalledTimes(2);
     expect(deps.fetchImage).toHaveBeenCalledWith("/api/reviews/review-1/files?imageId=11&variant=ai");

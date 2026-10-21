@@ -13,6 +13,12 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     ".wrangler/**",
+    ".worktrees/**",
+    "public/pdfjs/**",
+    "tmp/**",
+    "output/**",
+    "playwright-report/**",
+    "test-results/**",
     "next-env.d.ts",
   ]),
 ]);

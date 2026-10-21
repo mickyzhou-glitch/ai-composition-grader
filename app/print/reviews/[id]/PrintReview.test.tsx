@@ -22,7 +22,7 @@ const document: DeliveryDocument = {
 };
 
 describe("A4 打印稿", () => {
-  it("按共享分页顺序输出裁图、建议和红黑修订", () => {
+  it("按共享分页顺序输出裁图、建议和修改稿并隐藏删除内容", () => {
     const { container } = render(
       <PrintReview document={document} cropSources={[["blob:paragraph-1"]]} />,
     );
@@ -36,7 +36,8 @@ describe("A4 打印稿", () => {
     expect(sheet).toHaveTextContent("【修改建议】");
     expect(sheet).toHaveTextContent("动作略快");
     expect(sheet).toHaveTextContent("【修改后段落】");
-    expect(container.querySelector('[data-run-kind="deleted"]')).toHaveTextContent("慢慢");
+    expect(container.querySelector('[data-run-kind="deleted"]')).toBeNull();
+    expect(sheet).not.toHaveTextContent("慢慢");
     expect(container.querySelector('[data-run-kind="inserted"]')).toHaveTextContent("终于");
     expect(container.querySelector('[data-page-kind="feedback"]')).toBeNull();
   });

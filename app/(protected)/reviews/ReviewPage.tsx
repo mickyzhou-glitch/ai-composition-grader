@@ -18,9 +18,9 @@ import {
 import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
+import { ClassInput } from "../../components/ClassInput";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { ExportMenu } from "../../components/ExportMenu";
-import { ParentFeedbackEditor } from "../../components/ParentFeedbackEditor";
 import { OcrTextEditor } from "../../components/OcrTextEditor";
 import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
 import { ReportEditor, type FeedbackSection } from "../../components/ReportEditor";
@@ -118,6 +118,7 @@ function isParagraphReportDraft(
 export function ReviewPage({ reviewId }: { reviewId: string }) {
   const [review, setReview] = useState<ReviewView | null>(null);
   const [studentName, setStudentName] = useState("");
+  const [className, setClassName] = useState("");
   const [teacherGuidance, setTeacherGuidance] = useState("");
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
@@ -157,6 +158,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   const applyReview = useCallback((loaded: ReviewView) => {
     setReview(loaded);
     setStudentName(loaded.studentName);
+    setClassName(loaded.className ?? "");
     setReport(loaded.report);
     setAnnotations(loaded.annotations ?? []);
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
@@ -396,6 +398,15 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setNotice("");
   }
 
+  function changeClassName(next: string) {
+    if (!editableReport) return;
+    if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
+    invalidateLoad();
+    setClassName(next);
+    setDirty(true);
+    setNotice("");
+  }
+
   async function rewriteSample(index: number, instruction?: string) {
     if (
       !review
@@ -553,6 +564,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         body: JSON.stringify({
           expectedRevision: review.revision,
           studentName,
+          ...(className !== (review.className ?? "") ? { className } : {}),
           report,
           annotations,
         }),
@@ -668,6 +680,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             body: JSON.stringify({
               expectedRevision: review.revision,
               studentName,
+              ...(className !== (review.className ?? "") ? { className } : {}),
               report,
               annotations,
             }),
@@ -734,7 +747,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       <main className="review-page">
         <header className="review-heading">
           <div className="review-title-block">
-            <div className="history-meta"><StatusBadge status={reviewDisplayStatus(review)} /><span>{review.config.grade}</span></div>
+            <div className="history-meta"><StatusBadge status={reviewDisplayStatus(review)} /><span>{review.config.grade}</span><ClassInput className="class-field review-class-field" label="班级" value={className} disabled={busy !== null || analysisActive || !editableReport} onChange={changeClassName} /></div>
             <h1>{review.config.title}</h1>
             <label className="student-name-field">
               <span>学生姓名</span>
@@ -750,7 +763,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
           </div>
           <div className="review-actions">
-            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive || Boolean(report && !editableLegacyReport)} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
+            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>{editableLegacyReport ? "完整重新分析" : "重新分析"}</AsyncButton>
             {editableParagraphReport ? <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成整篇批改</AsyncButton> : null}
             {review.status !== "needs_better_images" ? replacementControl() : null}
@@ -798,46 +811,6 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           <button type="button" role="tab" aria-selected={activeView === "ocr"} aria-controls="review-ocr-panel" disabled={!review.ocr} onClick={() => setActiveView("ocr")}>识别原文</button>
         </div>
         <section id="review-report-panel" role="tabpanel" aria-label="批改报告" hidden={activeView !== "report"}>
-          {report ? (
-            <ParentFeedbackEditor
-              feedbacks={report.parentFeedbacks ?? []}
-              savedFeedbacks={review.report?.parentFeedbacks ?? []}
-              disabled={busy !== null || analysisActive || !editableReport}
-              onChange={(parentFeedbacks) => {
-                if (editableParagraphReport && isParagraphReportDraft(report)) {
-                  if (parentFeedbacks.length === 0) {
-                    const nextFeedbacks: ParagraphEvaluationReport["parentFeedbacks"] = [];
-                    changeReport({ ...report, parentFeedbacks: nextFeedbacks });
-                  } else if (
-                    parentFeedbacks.length === 3
-                    && parentFeedbacks[0].style === "warm"
-                    && parentFeedbacks[1].style === "professional"
-                    && parentFeedbacks[2].style === "concise"
-                  ) {
-                    const nextFeedbacks: ParagraphEvaluationReport["parentFeedbacks"] = [
-                      parentFeedbacks[0],
-                      parentFeedbacks[1],
-                      parentFeedbacks[2],
-                    ];
-                    changeReport({
-                      ...report,
-                      parentFeedbacks: nextFeedbacks,
-                    });
-                  }
-                } else if (editableLegacyReport) {
-                  changeReport({ ...report, parentFeedbacks });
-                }
-              }}
-              onCopySuccess={() => {
-                setError("");
-                setNotice("家长反馈已复制");
-              }}
-              onCopyError={() => {
-                setNotice("");
-                setError("无法自动复制，请选中文本后手动复制。");
-              }}
-            />
-          ) : null}
           <div className="review-grid" role="region" aria-label="作文复核工作区">
           <div className="photo-pane">
             {review.images.length > 1 ? <div className="page-tabs" role="tablist" aria-label="作文页码">{review.images.map((image, index) => <button role="tab" aria-selected={activePage === index} key={image.id} onClick={() => setActivePage(index)}>第 {index + 1} 页</button>)}</div> : null}
@@ -860,7 +833,12 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
               onRewriteAllSamples={isLegacyEvaluationReport(report) ? rewriteAllSamples : undefined}
               rewritingAllSamples={busy === "rewrite-all-samples"}
               expectedSampleParagraphCount={isLegacyEvaluationReport(report) ? expectedSampleParagraphCount(review.config) : undefined}
-            /> : <div className="analysis-guide"><span className="empty-seal" aria-hidden="true">析</span><h2>先让 AI 细读作文</h2><p>分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。</p><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null || analysisActive} onClick={() => void analyze()}>开始 AI 分析</AsyncButton></div>}
+            /> : <div className="analysis-guide">
+              <span className="empty-seal" aria-hidden="true">析</span>
+              <h2>{analysisActive ? "AI 正在细读作文" : "先让 AI 细读作文"}</h2>
+              <p>{analysisActive ? "分析已开始，完成后会自动显示批改结果。你可以稍后从历史记录返回查看。" : "分析后会生成逐页红批、四维诊断、等级评定和可直接参考的示范段落。所有内容都由你最终复核。"}</p>
+              {!analysisActive ? <AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={review.images.length === 0 || busy !== null} onClick={() => void analyze()}>开始 AI 分析</AsyncButton> : null}
+            </div>}
           </div>
           </div>
         </section>

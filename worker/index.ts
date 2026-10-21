@@ -4,7 +4,7 @@ import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-r
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
-import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
+import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "../src/cloudflare/d1-analysis-jobs";
 import {
   D1Reanalysis,
   D1ReanalysisBatchError,
@@ -295,9 +295,15 @@ export default {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
         return Response.json({ ok: true, data: await new AssignmentGuidanceAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient }).generate(await request.json()) });
-      } catch {
+      } catch (error) {
+        if (error instanceof ZodError || error instanceof SyntaxError) return apiError("VALIDATION_ERROR", "请检查题目、年级、字数和课本图片（最多 4 张 JPG、PNG 或 WebP）", 400);
+        if (error instanceof AiAdapterError) return apiError(error.code, error.message, error.status);
         return apiError("AI_REQUEST_FAILED", "AI 服务请求失败，请检查设置后重试", 502);
       }
+    }
+    if (url.pathname === "/api/classes" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).classes(user.id) }, { headers: { "cache-control": "no-store" } });
     }
     if (url.pathname === "/api/reviews" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
@@ -688,31 +694,52 @@ export default {
     }
     return secureResponse(await env.ASSETS.fetch(request), url.pathname);
   },
+  async scheduled(_controller: ScheduledController, env: WorkerEnv): Promise<void> {
+    const recovered = await new D1AnalysisJobs(env.DB).recoverExpired();
+    if (recovered > 0) console.info(JSON.stringify({ event: "analysis_timeout_recovery", recovered }));
+  },
   async queue(batch: MessageBatch<{ jobId: string }>, env: WorkerEnv): Promise<void> {
     for (const message of batch.messages) {
       const job = await env.DB.prepare(`
         SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id,
-          analysis_jobs.mode, analysis_jobs.teacher_guidance, reviews.config,
+          analysis_jobs.mode, analysis_jobs.teacher_guidance, analysis_jobs.status,
+          analysis_jobs.created_at, analysis_jobs.started_at, reviews.config,
           reviews.student_name, reviews.image_revision
         FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id
-        WHERE analysis_jobs.id = ? AND analysis_jobs.status = 'queued'
+        WHERE analysis_jobs.id = ? AND analysis_jobs.status IN ('queued', 'running')
       `).bind(message.body.jobId).first<{
         id: string;
         review_id: string;
         owner_id: string;
         mode: "full" | "content_only";
+        status: "queued" | "running";
+        created_at: number;
+        started_at: number | null;
         teacher_guidance: string | null;
         config: string;
         student_name: string;
         image_revision: number;
       }>();
       if (!job) { message.ack(); continue; }
+      if (job.status === "running") {
+        if ((job.started_at ?? job.created_at) <= Date.now() - MAX_CLOUD_ANALYSIS_RUN_MS) {
+          await new D1AnalysisJobs(env.DB).recoverExpired(Date.now(), { ownerId: job.owner_id, reviewId: job.review_id });
+          message.ack();
+        } else {
+          // An interrupted consumer may be redelivered before its deadline.
+          // Keep the message available without executing the same job twice.
+          message.retry({ delaySeconds: 60 });
+        }
+        continue;
+      }
+      const startedAt = Date.now();
       try {
         const claim = await env.DB.prepare(`
           UPDATE analysis_jobs SET status = 'running', started_at = ?
           WHERE id = ? AND status = 'queued'
         `).bind(Date.now(), job.id).run();
-        if (claim.meta.changes !== 1) { message.ack(); continue; }
+        if (claim.meta.changes !== 1) { message.retry({ delaySeconds: 60 }); continue; }
+        console.info(JSON.stringify({ event: "analysis_started", jobId: job.id }));
         const settings = createWorkerAiSettingsSource(env);
         const vision = new VisionOcrAdapter(settings, { clientFactory: createWorkerOpenAIClient });
         const content = new CompositionReviewAdapter(settings, { clientFactory: createWorkerOpenAIClient });
@@ -743,13 +770,14 @@ export default {
           },
           recognize: (imageUrls) => vision.recognize({ imageUrls }),
           saveRecognized: (ownerId, reviewId, sourceRevision, result) =>
-            ocr.saveRecognized(ownerId, reviewId, sourceRevision, result),
+            ocr.saveRecognized(ownerId, reviewId, sourceRevision, result, job.id),
           analyzeText: (input) => content.analyzeText(input),
           updateStage: async (jobId, stage) => {
             const result = await env.DB.prepare(
               "UPDATE analysis_jobs SET progress_stage = ? WHERE id = ? AND status = 'running'",
             ).bind(stage, jobId).run();
             if (result.meta.changes !== 1) throw new CloudAnalysisConflictError("ANALYSIS_CONFLICT");
+            console.info(JSON.stringify({ event: "analysis_stage", jobId, stage, elapsedMs: Date.now() - startedAt }));
           },
           saveResult: async (currentJob, result) => {
             await savePipelineResult(env.DB, currentJob, result);
@@ -759,6 +787,7 @@ export default {
           },
         });
         await pipeline.run(pipelineJob);
+        console.info(JSON.stringify({ event: "analysis_completed", jobId: job.id, elapsedMs: Date.now() - startedAt }));
       } catch (error) {
         const code = error instanceof AiAdapterError && error.upstreamStatus
           ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
@@ -771,6 +800,7 @@ export default {
           env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
           env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").bind(code, now, job.id),
         ]);
+        console.warn(JSON.stringify({ event: "analysis_failed", jobId: job.id, code, elapsedMs: Date.now() - startedAt }));
       }
       message.ack();
     }

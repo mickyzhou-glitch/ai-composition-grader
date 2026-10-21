@@ -16,6 +16,7 @@ export interface DeliveryCrop {
 
 export interface DeliveryParagraph {
   paragraphNumber: number;
+  essayParagraphNumber?: number;
   crops: DeliveryCrop[];
   suggestions: ParagraphSuggestion[];
   revisionRuns: RevisionRun[];

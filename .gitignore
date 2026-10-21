@@ -55,3 +55,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# PDF.js assets copied from the installed package before dev/build
+/public/pdfjs/

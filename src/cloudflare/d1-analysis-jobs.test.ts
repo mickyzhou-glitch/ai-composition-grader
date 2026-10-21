@@ -3,13 +3,17 @@ import { describe, expect, it, vi } from "vitest";
 import { D1AnalysisJobs } from "./d1-analysis-jobs";
 
 describe("D1AnalysisJobs", () => {
-  it("把带校验详情的 AI_INVALID_RESPONSE 说明为返回格式异常", async () => {
+  it.each([
+    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "AI 返回格式异常，请重新分析"],
+    ["AI_INVALID_RESPONSE_rewritten_essay_chars_3_min_180_actual_170", "AI 生成的范文未满足指定字数，请重新生成整篇批改"],
+    ["AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_expected_5", "AI 生成的范文未满足指定段数，请重新生成整篇批改"],
+  ])("准确说明生成失败原因：%s", async (errorCode, message) => {
     const database = {
       prepare: vi.fn(() => ({
         bind: vi.fn(() => ({
           first: vi.fn().mockResolvedValue({
             id: "job-1", review_id: "review-1", status: "failed", progress_stage: "reading_images",
-            error_code: "AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type",
+            error_code: errorCode,
             created_at: 1_700_000_000_000, finished_at: 1_700_000_000_100,
           }),
         })),
@@ -17,7 +21,7 @@ describe("D1AnalysisJobs", () => {
     } as unknown as D1Database;
 
     await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
-      message: "AI 返回格式异常，请重新分析",
+      message,
     });
   });
 
@@ -84,7 +88,7 @@ describe("D1AnalysisJobs", () => {
           } : {
             id: "job-1", review_id: "review-1", mode: "full", status: "running",
             progress_stage: "generating_review", error_code: null,
-            created_at: 1_700_000_000_000, finished_at: null,
+            created_at: 1_700_000_000_000, started_at: Date.now(), finished_at: null,
           }),
         })),
       })),
@@ -192,7 +196,7 @@ describe("D1AnalysisJobs", () => {
               return activeReads === 1 ? null : {
                 id: "job-race", review_id: "review-1", mode: "full", status: "running",
                 progress_stage: "reading_images", error_code: null,
-                created_at: 1_700_000_000_001, finished_at: null,
+                created_at: 1_700_000_000_001, started_at: Date.now(), finished_at: null,
               };
             }
             return null;
@@ -416,7 +420,7 @@ describe("D1AnalysisJobs", () => {
           first: vi.fn().mockResolvedValue({
             id: "job-1", review_id: "review-1", mode: "full", status: "running",
             progress_stage: "mapping_annotations", error_code: null,
-            created_at: 1_700_000_000_000, finished_at: null,
+            created_at: 1_700_000_000_000, started_at: Date.now(), finished_at: null,
           }),
         })),
       })),

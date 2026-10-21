@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const appBaseUrl = process.env.PARENT_FEEDBACK_E2E_BASE_URL ?? "http://127.0.0.1:3001";
+const appBaseUrl = process.env.PARENT_FEEDBACK_E2E_BASE_URL ?? "";
 
 const parentFeedbacks = [
   { style: "warm", title: "亲切详细", content: "家长您好，孩子这次作文选材真实，第三段可以补清事情的起因。" },
@@ -98,24 +98,14 @@ for (const viewport of [
   { name: "桌面端", width: 1440, height: 1000 },
   { name: "390px 移动端", width: 390, height: 844 },
 ]) {
-  test(`${viewport.name}完整展示家长反馈且不溢出`, async ({ page }) => {
+  test(`${viewport.name}移除家长反馈后复核区正常显示且不溢出`, async ({ page }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await mockReviewApis(page);
     await page.goto(`${appBaseUrl}/reviews?id=review-1`);
 
-    const panel = page.getByRole("region", { name: "给家长的反馈" });
-    const workspace = page.getByRole("region", { name: "作文复核工作区" });
-    await expect(panel).toBeVisible();
-    await expect(page.getByRole("tab", { name: "亲切详细" })).toHaveAttribute("aria-selected", "true");
-    await expect(page.getByLabel("亲切详细家长反馈")).toBeVisible();
-
+    await expect(page.getByRole("region", { name: "作文复核工作区" })).toBeVisible();
+    await expect(page.getByRole("region", { name: "给家长的反馈" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "复制反馈" })).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-
-    const panelBox = await panel.boundingBox();
-    const workspaceBox = await workspace.boundingBox();
-    expect(panelBox).not.toBeNull();
-    expect(workspaceBox).not.toBeNull();
-    expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(workspaceBox!.y);
-    expect(Math.abs(panelBox!.width - workspaceBox!.width)).toBeLessThanOrEqual(1);
   });
 }

@@ -224,7 +224,7 @@ describe("最终交付的本机安全默认值", () => {
   });
 
   it("内容模型运行时请求递归扫描不到图片、链接、定位和 OCR 内部结构", async () => {
-    const create = vi.fn(async () => ({
+    const create = vi.fn(async (_input: unknown) => ({
       choices: [{ message: { content: "{}" } }],
     }));
     const adapter = new CompositionReviewAdapter({

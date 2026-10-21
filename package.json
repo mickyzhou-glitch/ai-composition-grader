@@ -24,7 +24,9 @@
     "cf:deploy": "wrangler deploy",
     "cf:audit-migration": "tsx scripts/cloudflare-migration-audit.mts",
     "cf:export-data": "tsx scripts/cloudflare-export-data.mts",
-    "cf:upload-r2": "tsx scripts/cloudflare-upload-r2.mts"
+    "cf:upload-r2": "tsx scripts/cloudflare-upload-r2.mts",
+    "prebuild": "node scripts/prepare-pdf-assets.mjs",
+    "predev": "node scripts/prepare-pdf-assets.mjs"
   },
   "dependencies": {
     "argon2": "^0.45.0",
@@ -36,8 +38,10 @@
     "jspdf": "^4.2.1",
     "jszip": "^3.10.1",
     "lxgw-wenkai-webfont": "^1.7.0",
+    "mammoth": "^1.13.0",
     "next": "16.2.10",
     "openai": "^6.48.0",
+    "pdfjs-dist": "^6.4.299",
     "playwright": "^1.61.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",

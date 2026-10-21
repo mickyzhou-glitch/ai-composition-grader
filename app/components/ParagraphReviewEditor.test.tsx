@@ -46,7 +46,20 @@ const report = {
 };
 
 describe("ParagraphReviewEditor", () => {
-  it("每段严格按裁图、建议、修改稿顺序展示并即时更新红黑预览", () => {
+  it("完整范文按目标五段展示并保存，与原文点评段数独立", () => {
+    const rewrittenEssay = ["开篇。", "抑的铺垫。", "扬的事件详写。", "真相。", "结尾。"];
+    const onChange = vi.fn();
+    render(<ParagraphReviewEditor reviewId="review-1" report={{ ...report, rewrittenEssay }} ocr={ocr} images={[]} disabled={false} onChange={onChange} showCharacterCounts />);
+    expect(screen.getByRole("heading", { name: "按要求重写的完整范文" })).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/完整范文第 \d 段/u)).toHaveLength(5);
+    fireEvent.change(screen.getByLabelText("完整范文第 3 段"), { target: { value: "扬的事件补充细节。" } });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      rewrittenEssay: [rewrittenEssay[0], rewrittenEssay[1], "扬的事件补充细节。", rewrittenEssay[3], rewrittenEssay[4]],
+      paragraphReviews: report.paragraphReviews,
+    }));
+  });
+
+  it("每段严格按裁图、建议、修改稿顺序展示并即时更新整句标色预览", () => {
     const onChange = vi.fn();
     const { container } = render(<ParagraphReviewEditor
       reviewId="review-1"
@@ -59,16 +72,17 @@ describe("ParagraphReviewEditor", () => {
 
     const paragraph = container.querySelector("[data-paragraph-id='paragraph-1']")!;
     const text = paragraph.textContent ?? "";
-    expect(text.indexOf("【第 1 段】")).toBeLessThan(text.indexOf("原文裁图 1"));
+    expect(text.indexOf("第 1 段")).toBeLessThan(text.indexOf("原文裁图 1"));
     expect(text.indexOf("原文裁图 1")).toBeLessThan(text.indexOf("【修改建议】"));
     expect(text.indexOf("【修改建议】")).toBeLessThan(text.indexOf("【修改后段落】"));
     expect(screen.getByLabelText("第 1 段第 1 条问题描述")).toHaveValue("描写普通");
     expect(screen.getByLabelText("第 1 段第 1 条修改动作")).toHaveValue("补充程度");
     expect(screen.getByLabelText("第 1 段第 1 条修改示例")).toHaveValue("我非常高兴。");
-    expect(screen.getByText("很").tagName).toBe("DEL");
-    expect(screen.getByText("非常")).toHaveStyle({ color: "#C91F32" });
+    expect(paragraph.querySelector("del")).toBeNull();
+    expect(screen.getByLabelText("示范文整句标色预览")).toHaveTextContent("我非常高兴！");
+    expect(paragraph.querySelector(".revision-preview__changed-sentence")).toHaveStyle({ color: "#1F4E78" });
 
-    fireEvent.change(screen.getByLabelText("第 1 段修改稿"), {
+    fireEvent.change(screen.getByLabelText("第 1 段完整修改稿"), {
       target: { value: "我很高兴。" },
     });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({

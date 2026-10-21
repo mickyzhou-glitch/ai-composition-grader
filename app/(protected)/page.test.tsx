@@ -41,6 +41,23 @@ const review = {
   pdfFilename: null,
 };
 
+it("combines exact class filtering with student search, including legacy records", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ ok: true, data: [
+    { ...review, id: "class-1", studentName: "张同学", className: "六（1）班" },
+    { ...review, id: "class-2", studentName: "张同学", className: "六（2）班" },
+    { ...review, id: "legacy", studentName: "李同学" },
+  ] }));
+  const user = userEvent.setup();
+  render(<Home />);
+  await screen.findByText("班级：六（1）班");
+  await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（1）班");
+  expect(screen.queryByText("班级：六（2）班")).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText("搜索学生姓名"), "李");
+  expect(screen.queryByText("班级：六（1）班")).not.toBeInTheDocument();
+  await user.selectOptions(screen.getByLabelText("班级筛选"), "class:");
+  expect(screen.getByText("班级：未分类")).toBeInTheDocument();
+});
+
 const exportableReview = {
   ...review,
   revision: 1,

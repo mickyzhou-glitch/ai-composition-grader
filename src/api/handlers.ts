@@ -10,6 +10,7 @@ import {
   paragraphReviewSchema,
   PRIVACY_NOTICE_VERSION,
   studentNameSchema,
+  classNameSchema,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
 import type { PdfService } from "../pdf/pdf-service";
@@ -24,6 +25,7 @@ import type { ReviewService } from "../services/review-service";
 import { reviewImageVariants, type ReviewImageVariant } from "../services/review-service";
 import type { AnalysisJobService } from "../jobs/analysis-job-service";
 import type { AssignmentGuidance, AssignmentGuidanceInput } from "../ai/assignment-guidance-adapter";
+import { assignmentGuidanceInputSchema } from "../domain/assignment-guidance";
 import {
   batchReanalysisCommitInputSchema,
   batchReanalysisPreviewInputSchema,
@@ -83,6 +85,7 @@ function reviewDto(review: {
   id: string;
   status: unknown;
   studentName: string;
+  className?: string;
   config: unknown;
   report: unknown;
   revision: number;
@@ -108,6 +111,7 @@ function reviewDto(review: {
     id: review.id,
     status: review.status,
     studentName: review.studentName,
+    className: review.className ?? "",
     config: review.config,
     report: review.report,
     revision: review.revision,
@@ -332,12 +336,6 @@ const settingsTestSchema = settingsWriteSchema.extend({
   apiKey: z.string().min(1).optional(),
 });
 
-const assignmentGuidanceSchema = z.object({
-  title: z.string().trim().min(1).max(120),
-  grade: z.string().trim().min(1).max(120),
-  targetCharacters: z.number().int().positive().max(3_000),
-}).strict();
-
 interface SettingsRouteService {
   get(): Promise<SettingsView | null>;
   testCandidate(
@@ -415,7 +413,7 @@ export function createAssignmentGuidanceRouteHandlers(dependencies: {
   return {
     async POST(request: Request) {
       try {
-        const input = assignmentGuidanceSchema.parse(await readJson(request));
+        const input = assignmentGuidanceInputSchema.parse(await readJson(request));
         return ok(await dependencies.generate(input));
       } catch (error) {
         return failure(error);
@@ -501,12 +499,14 @@ const createReviewSchema = z
   .object({
     config: assignmentConfigSchema,
     studentName: studentNameSchema.optional(),
+    className: classNameSchema.optional(),
   })
   .strict();
 const updateReviewSchema = z
   .object({
     expectedRevision: z.number().int().nonnegative(),
     studentName: studentNameSchema.optional(),
+    className: classNameSchema.optional(),
     config: assignmentConfigSchema.optional(),
     report: evaluationReportSchema.optional(),
     annotations: z.array(annotationSchema).optional(),
@@ -516,6 +516,7 @@ const updateReviewSchema = z
     (input) =>
       input.config !== undefined ||
       input.studentName !== undefined ||
+      input.className !== undefined ||
       input.report !== undefined ||
       input.annotations !== undefined,
     {
@@ -557,6 +558,7 @@ export function createReviewsRouteHandlers(dependencies: {
               dependencies.ownerId,
               input.config,
               input.studentName,
+              input.className,
             ),
           ),
           201,
@@ -646,6 +648,7 @@ export function createReviewOcrRouteHandlers(dependencies: {
 const completeTeacherReviewSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   studentName: studentNameSchema,
+  className: classNameSchema.optional(),
   report: evaluationReportSchema,
   annotations: z.array(annotationSchema),
 }).strict();
@@ -670,6 +673,7 @@ export function createTeacherReviewQueueRouteHandlers(dependencies: {
         return ok(dependencies.reviewService.listTeacherReviewQueue(dependencies.ownerId).map((review) => ({
           id: review.id,
           studentName: review.studentName,
+          className: review.className ?? "",
           title: review.config.title,
           status: review.status,
           revision: review.revision,

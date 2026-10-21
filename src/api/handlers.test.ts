@@ -292,6 +292,30 @@ describe("settings route handlers", () => {
 });
 
 describe("assignment guidance route handlers", () => {
+  it("接收课本图片并允许由图片识别题目", async () => {
+    const generate = vi.fn(async () => ({
+      title: "我的拿手好戏", writingRequirements: "写清楚。", structureRequirements: "详略得当。", scoringFocus: "具体。",
+    }));
+    const input = { title: "", grade: "六年级", targetCharacters: 600, textbookImages: ["data:image/png;base64,eA=="] };
+    const response = await createAssignmentGuidanceRouteHandlers({ generate }).POST(
+      jsonRequest("http://localhost/api/assignment-guidance", "POST", input),
+    );
+    expect(response.status).toBe(200);
+    expect(generate).toHaveBeenCalledWith(input);
+  });
+
+  it("拒绝无图无题目和远程图片地址", async () => {
+    const generate = vi.fn();
+    const handlers = createAssignmentGuidanceRouteHandlers({ generate });
+    for (const textbookImages of [[], ["https://example.test/book.jpg"]]) {
+      const response = await handlers.POST(jsonRequest("http://localhost/api/assignment-guidance", "POST", {
+        title: "", grade: "六年级", targetCharacters: 600, textbookImages,
+      }));
+      expect(response.status).toBe(400);
+    }
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it("校验输入并返回 AI 生成的可编辑要求", async () => {
     const generate = vi.fn(async () => ({
       writingRequirements: "写清一件具体的事。",

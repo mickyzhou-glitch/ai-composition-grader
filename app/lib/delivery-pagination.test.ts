@@ -41,6 +41,17 @@ function documentWith(...paragraphs: DeliveryParagraph[]): DeliveryDocument {
 }
 
 describe("交付文档分页", () => {
+  it("完整范文跨页时保留范文段号并完整输出，不生成空点评标题", () => {
+    const text = "这是一段需要完整保留的范文。".repeat(350);
+    const essay = { ...paragraph(4, { crops: [], suggestionCount: 0, revisionText: text }), essayParagraphNumber: 1 };
+    const pages = paginateDeliveryDocument(documentWith(essay), { measureText });
+    expect(pages.length).toBeGreaterThan(1);
+    const blocks = pages.flatMap((page) => page.blocks);
+    expect(blocks.filter((block) => block.kind === "paragraph-heading").every((block) => block.essayParagraphNumber === 1)).toBe(true);
+    expect(blocks.some((block) => block.kind === "suggestion-heading" || block.kind === "revision-heading")).toBe(false);
+    expect(blocks.flatMap((block) => block.kind === "revision-lines" ? block.runs.map((run) => run.text) : []).join("").replaceAll("\n", "")).toBe(text);
+  });
+
   it("让文档标题跟随首图，并让建议和修改稿标题跟随必要内容", () => {
     const pages = paginateDeliveryDocument(documentWith(paragraph(1)), { measureText });
 

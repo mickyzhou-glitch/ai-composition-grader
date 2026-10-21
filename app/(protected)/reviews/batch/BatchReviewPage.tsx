@@ -12,6 +12,8 @@ import {
   type ParagraphEvaluationReport,
 } from "@/src/domain/contracts";
 import { deliveryReadiness } from "@/src/delivery/readiness";
+import { ClassFilter } from "../../../components/ClassFilter";
+import { filterReviewsByClass } from "../../../lib/classification";
 import { AppHeader } from "../../../components/AppHeader";
 import { BatchReviewReportEditor } from "../../../components/BatchReviewReportEditor";
 import { ErrorBanner } from "../../../components/ErrorBanner";
@@ -26,6 +28,7 @@ import type { PublicAnalysisJobView, RevisionRequestResult, ReviewView } from ".
 export interface ReviewQueueItemView {
   id: string;
   studentName: string;
+  className?: string;
   title: string;
   status: ReviewView["status"];
   revision: number;
@@ -54,6 +57,7 @@ export function BatchReviewPage() {
   const [reviewed, setReviewed] = useState<ReviewView[]>([]);
   const [selectedExportIds, setSelectedExportIds] = useState<Set<string>>(() => new Set());
   const [search, setSearch] = useState("");
+  const [classFilter, setClassFilter] = useState<string | null>(null);
   const [view, setView] = useState<"review" | "export">("review");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -69,10 +73,11 @@ export function BatchReviewPage() {
   const requestsRef = useRef(new Map<string, { controller: AbortController; promise: Promise<ReviewView> }>());
   const revisionButtonRef = useRef<HTMLButtonElement>(null);
 
-  const visibleQueue = useMemo(() => filterReviewsByStudentName(queue, search), [queue, search]);
+  const visibleQueue = useMemo(() => filterReviewsByStudentName(filterReviewsByClass(queue, classFilter), search), [queue, search, classFilter]);
+  const activeItem = useMemo(() => queue.find(({ id }) => id === activeId), [queue, activeId]);
   const exportableReviewed = useMemo(
-    () => reviewed.filter((item) => exportEligibility(item).eligible),
-    [reviewed],
+    () => filterReviewsByClass(reviewed, classFilter).filter((item) => exportEligibility(item).eligible),
+    [reviewed, classFilter],
   );
   const selectedExportable = useMemo(
     () => exportableReviewed.filter(({ id }) => selectedExportIds.has(id)),
@@ -135,21 +140,25 @@ export function BatchReviewPage() {
   }, []);
 
   useEffect(() => {
+    if (!activeItem) return;
+    let active = true;
+    const current = activeItem;
+    const cached = cacheRef.current.get(cacheKey(current.id, current.revision));
+    if (cached) { setReview(cached); setDirty(false); }
+    void loadDetail(current).then((loaded) => {
+      if (active && loaded.id === activeId) { setReview(loaded); setDirty(false); }
+    }).catch((caught) => { if (active && !(caught instanceof DOMException && caught.name === "AbortError")) setError(errorMessage(caught)); });
+    return () => { active = false; };
+  }, [activeId, activeItem, loadDetail]);
+
+  useEffect(() => {
     if (!activeId) return;
     const ids = visibleQueue.map(({ id }) => id);
     const windowIds = reviewPrefetchWindow(ids, activeId);
-    const items = windowIds.map((id) => visibleQueue.find((item) => item.id === id)!).filter(Boolean);
-    let active = true;
-    const current = items[0];
-    if (current) {
-      const cached = cacheRef.current.get(cacheKey(current.id, current.revision));
-      if (cached) { setReview(cached); setDirty(false); }
-      void loadDetail(current).then((loaded) => {
-        if (active && loaded.id === activeId) { setReview(loaded); setDirty(false); }
-      }).catch((caught) => { if (active && !(caught instanceof DOMException && caught.name === "AbortError")) setError(errorMessage(caught)); });
-    }
-    items.slice(1).forEach((item) => { void loadDetail(item).catch(() => undefined); });
-    return () => { active = false; };
+    windowIds.slice(1).forEach((id) => {
+      const item = visibleQueue.find((candidate) => candidate.id === id);
+      if (item) void loadDetail(item).catch(() => undefined);
+    });
   }, [activeId, loadDetail, visibleQueue]);
 
   useEffect(() => {
@@ -204,8 +213,8 @@ export function BatchReviewPage() {
     setActiveId(id);
   }
 
-  function updateSearch(value: string) {
-    const nextVisible = filterReviewsByStudentName(queue, value);
+  function updateSearch(value: string, nextClass = classFilter) {
+    const nextVisible = filterReviewsByStudentName(filterReviewsByClass(queue, nextClass), value);
     if (activeId && !nextVisible.some(({ id }) => id === activeId)) {
       if (dirty && !window.confirm("当前修改尚未审核保存，确认切换作文？")) return;
       const next = nextVisible[0] ?? null;
@@ -214,6 +223,8 @@ export function BatchReviewPage() {
       setDirty(false);
     }
     setSearch(value);
+    if (nextClass !== classFilter) setSelectedExportIds(new Set());
+    setClassFilter(nextClass);
   }
 
   function advanceAfterQueueRemoval(reviewId: string) {
@@ -332,17 +343,19 @@ export function BatchReviewPage() {
       {error ? <ErrorBanner message={error} /> : null}
       {revisionNotice ? <div className="revision-job-notice" role="status">{revisionNotice}</div> : null}
       {view === "export" ? <section className="batch-export-view">
+        <ClassFilter items={[...queue, ...reviewed]} value={classFilter} onChange={(value) => updateSearch(search, value)} />
         <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><div className="batch-export-action-buttons"><div className="batch-export-command"><span>导出所选作文</span><ExportMenu ariaLabel="导出所选作文" disabled={selectedExportable.length === 0 || exporting} disabledReason={selectedExportIds.size > 0 && selectedExportable.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={exporting} onExport={exportSelected} /></div><div className="batch-export-command"><span>一键导出已复核（{exportableReviewed.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={exportableReviewed.length === 0 || exporting} busy={exporting} onExport={exportAllReviewed} /></div></div></div>
-        <ReviewExportList reviews={reviewed} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setReview(target); setActiveId(id); setView("review"); } }} />
+        <ReviewExportList reviews={filterReviewsByClass(reviewed, classFilter)} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setReview(target); setActiveId(id); setView("review"); } }} />
       </section> : <div className="batch-review-layout">
         <aside className="batch-queue" aria-label="待审核作文队列">
+          <ClassFilter items={[...queue, ...reviewed]} value={classFilter} onChange={(value) => updateSearch(search, value)} />
           <label>搜索学生姓名<input type="search" aria-label="搜索待审核学生姓名" value={search} onChange={(event) => updateSearch(event.target.value)} /></label>
           <p className="muted">待审核 {queue.length} 篇</p>
-          <div className="batch-queue-list">{visibleQueue.map((item, index) => <button type="button" className={item.id === activeId ? "is-active" : ""} key={item.id} onClick={() => choose(item.id)}><span>{index + 1}</span><b>{item.studentName || "未填写学生"}</b><small>{item.title}</small></button>)}</div>
+          <div className="batch-queue-list">{visibleQueue.map((item, index) => <button type="button" className={item.id === activeId ? "is-active" : ""} key={item.id} onClick={() => choose(item.id)}><span>{index + 1}</span><b>{item.studentName || "未填写学生"}</b><small>{item.className || "未分类"} · {item.title}</small></button>)}</div>
         </aside>
         <section className="batch-essay-pane">
           {loading || (activeId && !review) ? <p className="loading-note" role="status">正在展开作文与批改报告…</p> : !activeId ? <div className="batch-empty"><h2>待审核队列已完成</h2><p>可以前往待导出清单核对并导出作文。</p></div> : review ? <>
-            <div className="batch-pane-heading"><div><p className="eyebrow">当前学生</p><h2>{review.studentName || "未填写学生"}</h2></div><span>{review.config.title}</span></div>
+            <div className="batch-pane-heading"><div><p className="eyebrow">当前学生</p><h2>{review.studentName || "未填写学生"}</h2></div><span>{review.className || "未分类"} · {review.config.title}</span></div>
             <div className="batch-essay-content">{review.images.map((image, index) => <figure key={image.id}><img src={`/api/reviews/${encodeURIComponent(review.id)}/files?imageId=${image.id}&variant=annotation`} alt={`学生作文原文第 ${index + 1} 页`} /><figcaption>原文第 {index + 1} 页</figcaption></figure>)}</div>
           </> : null}
         </section>

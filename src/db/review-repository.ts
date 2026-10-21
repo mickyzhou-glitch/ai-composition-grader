@@ -11,6 +11,7 @@ import {
   isParagraphEvaluationReport,
   reviewStatusSchema,
   studentNameSchema,
+  classNameSchema,
   type Annotation,
   type AiReviewEnvelope,
   type AssignmentConfig,
@@ -60,6 +61,7 @@ export interface ReviewRecord {
   ownerId: string;
   status: ReviewStatus;
   studentName: string;
+  className?: string;
   config: AssignmentConfig;
   report: EvaluationReport | null;
   reportOcrRevision?: number | null;
@@ -93,6 +95,7 @@ export interface RetentionCandidate {
 export interface CreateReviewInput {
   id: string;
   studentName?: string;
+  className?: string;
   config: AssignmentConfig;
   status?: ReviewStatus;
   images?: ReviewImageInput[];
@@ -101,6 +104,7 @@ export interface CreateReviewInput {
 export interface TeacherReviewEdits {
   expectedRevision: number;
   studentName?: string;
+  className?: string;
   config?: AssignmentConfig;
   report?: EvaluationReport;
   annotations?: Annotation[];
@@ -236,6 +240,7 @@ export class ReviewRepository {
   create(ownerId: string, input: CreateReviewInput): ReviewRecord {
     const config = assignmentConfigSchema.parse(input.config);
     const studentName = studentNameSchema.parse(input.studentName ?? "");
+    const className = classNameSchema.parse(input.className ?? "");
     const status = reviewStatusSchema.parse(input.status ?? "draft");
     const images = (input.images ?? []).map(validateImage);
     const now = this.now();
@@ -245,6 +250,7 @@ export class ReviewRepository {
         id: input.id,
         ownerId,
         studentName,
+        className,
         config,
         status,
         report: null,
@@ -336,6 +342,7 @@ export class ReviewRepository {
         ownerId: reviews.ownerId,
         status: reviews.status,
         studentName: reviews.studentName,
+        className: reviews.className,
         revision: reviews.revision,
         imageRevision: reviews.imageRevision,
         ocrCheckpoint: reviews.ocrCheckpoint,
@@ -706,6 +713,7 @@ export class ReviewRepository {
       input.studentName !== undefined
         ? studentNameSchema.parse(input.studentName)
         : current.studentName;
+    const className = input.className === undefined ? current.className ?? "" : classNameSchema.parse(input.className);
     const config = input.config
       ? assignmentConfigSchema.parse(input.config)
       : current.config;
@@ -776,6 +784,7 @@ export class ReviewRepository {
         .update(reviews)
         .set({
           studentName,
+          className,
           config,
           report,
           status,

@@ -1,4 +1,4 @@
-import type { DeliveryDocument } from "@/src/delivery/contracts";
+import type { DeliveryDocument, DeliveryParagraph } from "@/src/delivery/contracts";
 import {
   deliveryReadiness,
   type DeliveryReadinessCode,
@@ -107,7 +107,7 @@ export async function buildDeliveryDocument(
   };
 
   try {
-    const paragraphs = [];
+    const paragraphs: DeliveryParagraph[] = [];
     for (const paragraph of [...review.ocr.paragraphs].sort(
       (left, right) => left.paragraphIndex - right.paragraphIndex,
     )) {
@@ -139,6 +139,12 @@ export async function buildDeliveryDocument(
         revisionRuns: buildSentenceRevisionRuns(paragraph.text, paragraphReport.revisedText),
       });
     }
+    const sourceCount = paragraphs.length;
+    report.rewrittenEssay?.forEach((text, index) => paragraphs.push({
+      paragraphNumber: sourceCount + index + 1,
+      essayParagraphNumber: index + 1,
+      crops: [], suggestions: [], revisionRuns: [{ kind: "unchanged", text }],
+    }));
     return {
       title: review.config.title,
       studentName: review.studentName,

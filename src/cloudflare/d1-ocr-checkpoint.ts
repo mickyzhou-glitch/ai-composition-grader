@@ -35,6 +35,7 @@ export class D1OcrCheckpointRepository {
     reviewId: string,
     sourceRevision: number,
     result: VisionOcrResult,
+    analysisRunId?: string,
   ): Promise<OcrCheckpointV2> {
     const checkpoint = createOcrCheckpointV2({
       sourceRevision,
@@ -44,7 +45,13 @@ export class D1OcrCheckpointRepository {
     const update = await this.database.prepare(`
       UPDATE reviews SET ocr_checkpoint = ?, report_ocr_revision = NULL
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND image_revision = ?
-    `).bind(JSON.stringify(checkpoint), reviewId, ownerId, sourceRevision).run();
+        ${analysisRunId === undefined ? "" : `AND analysis_run_id = ? AND EXISTS (
+          SELECT 1 FROM analysis_jobs WHERE id = ? AND status = 'running'
+        )`}
+    `).bind(
+      JSON.stringify(checkpoint), reviewId, ownerId, sourceRevision,
+      ...(analysisRunId === undefined ? [] : [analysisRunId, analysisRunId]),
+    ).run();
     if (update.meta.changes === 0) throw new OcrCheckpointError("IMAGE_REVISION_CONFLICT", 409);
     return checkpoint;
   }

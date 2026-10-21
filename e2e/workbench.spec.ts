@@ -1,6 +1,22 @@
 import { expect, test, type Page } from "@playwright/test";
 import sharp from "sharp";
 
+test.beforeEach(async ({ page }) => {
+  if (!process.env.E2E_BASE_URL) return;
+  // The cloud homepage redirects HTML navigations before mocked auth APIs run.
+  // Fetch its public static shell while keeping production session checks intact.
+  await page.route((url) => url.pathname === "/", async (route) => {
+    if (!route.request().isNavigationRequest()) {
+      await route.continue();
+      return;
+    }
+    const response = await route.fetch({
+      headers: { ...route.request().headers(), accept: "*/*" },
+    });
+    await route.fulfill({ response });
+  });
+});
+
 const parentFeedbacks = [
   { style: "warm", title: "亲切详细", content: "家长您好，孩子这次作文选材真实。" },
   { style: "professional", title: "专业清晰", content: "本次作文选材切题，建议补足细节。" },
@@ -182,6 +198,81 @@ const paragraphReview = {
     ],
   },
 };
+
+test("完整范文按五段展示、编辑和保存，保留原文两段点评", async ({ page }) => {
+  const rewrittenEssay = ["开篇引入。", "抑的铺垫。", "扬的具体事件。", "真相。", "结尾感悟。"];
+  let savedBody: { report?: { rewrittenEssay?: string[]; paragraphReviews?: unknown[] } } | undefined;
+  const loaded = { ...paragraphReview, report: { ...paragraphReview.report, rewrittenEssay } };
+  await page.route("**/api/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    let data: unknown;
+    if (pathname === "/api/auth/me") data = { id: "teacher-1", username: "teacher", role: "teacher", mustChangePassword: false };
+    else if (pathname === "/api/reviews/review-dual-model") {
+      if (route.request().method() === "PATCH") savedBody = route.request().postDataJSON();
+      data = savedBody ? { ...loaded, ...savedBody, revision: 2 } : loaded;
+    } else if (pathname.endsWith("/analyze/status")) data = { job: null };
+    else if (pathname.endsWith("/files")) {
+      await route.fulfill({ contentType: "image/png", body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64") });
+      return;
+    } else { await route.abort("failed"); return; }
+    await route.fulfill({ contentType: "application/json", body: json(data) });
+  });
+  await page.goto("/reviews?id=review-dual-model");
+  await expect(page.getByRole("heading", { name: "按要求重写的完整范文" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: /完整范文第 \d 段/u })).toHaveCount(5);
+  await page.getByRole("textbox", { name: "完整范文第 3 段" }).fill("扬的事件要详写，用细节支撑转变。");
+  await page.getByRole("button", { name: "保存复核", exact: true }).click();
+  await expect.poll(() => savedBody?.report?.rewrittenEssay?.[2]).toBe("扬的事件要详写，用细节支撑转变。");
+  expect(savedBody?.report?.paragraphReviews).toHaveLength(2);
+  await expect(page.getByText("复核内容已保存", { exact: true })).toBeVisible();
+});
+
+for (const action of [
+  { button: "重新分析", mode: "full" },
+  { button: "重新生成整篇批改", mode: "content_only" },
+]) {
+  test(`新版报告老师补充观点可输入并随 ${action.mode} 提交`, async ({ page }) => {
+    let analyzeBody: unknown;
+    const queuedJob = {
+      id: "job-guidance", reviewId: "review-dual-model", status: "queued",
+      progressStage: "queued", message: null, createdAt: new Date().toISOString(), finishedAt: null,
+    };
+    await page.route("**/api/**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      const data = pathname === "/api/auth/me"
+        ? { id: "teacher-1", username: "teacher", role: "teacher", mustChangePassword: false }
+        : pathname === "/api/reviews/review-dual-model"
+          ? paragraphReview
+          : pathname === "/api/reviews/review-dual-model/analyze/status"
+            ? { job: analyzeBody ? queuedJob : null }
+            : null;
+      if (data) {
+        await route.fulfill({ contentType: "application/json", body: json(data) });
+      } else if (pathname === "/api/reviews/review-dual-model/analyze") {
+        analyzeBody = route.request().postDataJSON();
+        await route.fulfill({ contentType: "application/json", body: json(queuedJob) });
+      } else if (pathname === "/api/reviews/review-dual-model/files") {
+        await route.fulfill({ contentType: "image/png", body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64",
+        ) });
+      } else {
+        await route.abort("failed");
+      }
+    });
+
+    await page.goto("/reviews?id=review-dual-model");
+    const guidance = page.getByRole("textbox", { name: "老师补充观点" });
+    await expect(guidance).toBeEnabled();
+    await guidance.fill("请重点核对结尾是否由正文细节支撑");
+    await page.getByRole("button", { name: action.button, exact: true }).click();
+    await expect.poll(() => analyzeBody).toEqual({
+      mode: action.mode,
+      teacherGuidance: "请重点核对结尾是否由正文细节支撑",
+    });
+    await expect(guidance).toBeDisabled();
+    await expect(page.getByText("AI 分析已提交：排队中")).toBeVisible();
+  });
+}
 
 function batchReview(id: string, studentName: string, revision: number) {
   return {
@@ -435,7 +526,7 @@ for (const viewport of [
 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await expect(page.getByRole("button", { name: "审核通过并进入下一篇" })).toBeVisible();
-    const compositionImage = page.getByRole("img", { name: "作文第 1 页" });
+    const compositionImage = page.getByRole("img", { name: "学生作文原文第 1 页" });
     await expect(compositionImage).toBeVisible();
     await expect.poll(() => compositionImage.evaluate((image: HTMLImageElement) => (
       image.complete && image.naturalWidth >= 800 && image.naturalHeight >= 1100

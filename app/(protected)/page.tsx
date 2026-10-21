@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ClassFilter } from "../components/ClassFilter";
+import { filterReviewsByClass } from "../lib/classification";
 import { AppHeader } from "../components/AppHeader";
 import { BatchReanalysisDialog } from "../components/BatchReanalysisDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -31,6 +33,7 @@ export default function Home() {
   const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(() => new Set());
   const [batchExporting, setBatchExporting] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
+  const [classFilter, setClassFilter] = useState<string | null>(null);
   const [reanalysisOpen, setReanalysisOpen] = useState(false);
   const [reanalysisLoading, setReanalysisLoading] = useState(false);
   const [reanalysisSubmitting, setReanalysisSubmitting] = useState(false);
@@ -64,8 +67,8 @@ export default function Home() {
     [reviews],
   );
   const reviewedPendingExport = useMemo(
-    () => reviewedPending.filter((item) => exportEligibility(item).eligible),
-    [reviewedPending],
+    () => filterReviewsByClass(reviewedPending, classFilter).filter((item) => exportEligibility(item).eligible),
+    [reviewedPending, classFilter],
   );
   const stats = useMemo(() => ({
     draft: reviews.filter(({ status }) => status === "draft").length,
@@ -76,8 +79,8 @@ export default function Home() {
     exported: reviews.filter(({ status }) => status === "exported").length,
   }), [reviews, reviewedPending.length]);
   const visibleReviews = useMemo(
-    () => filterReviewsByStudentName(reviews, studentSearch),
-    [reviews, studentSearch],
+    () => filterReviewsByStudentName(filterReviewsByClass(reviews, classFilter), studentSearch),
+    [reviews, studentSearch, classFilter],
   );
   const selectedVisibleCount = visibleReviews.filter(({ id }) => selectedReviewIds.has(id)).length;
   const hiddenSelectedCount = selectedReviewIds.size - selectedVisibleCount;
@@ -262,6 +265,7 @@ export default function Home() {
             <span className="muted">共 {reviews.length} 篇</span>
           </div>
           <div className="history-tools">
+            <ClassFilter items={reviews} value={classFilter} onChange={setClassFilter} />
             <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></label>
             <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
           </div>
@@ -296,7 +300,7 @@ export default function Home() {
                 <div className="history-main">
                   <div className="history-meta">
                     <StatusBadge status={reviewDisplayStatus(review)} />
-                    <span>学生：{review.studentName || "未填写"}</span>
+                    <span>学生：{review.studentName || "未填写"}</span><span>班级：{review.className || "未分类"}</span>
                     <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
                   </div>
                   <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
