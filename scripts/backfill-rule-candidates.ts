@@ -43,6 +43,75 @@ export interface BackfillTitlePlan {
  * 只读收集历史意见：已存档的意见（不含已生效的长期规则）、旧任务里的退回说明、作文上的退回意见。
  * 按 owner + 同名题目分组，归纳成候选规则（只生成待审批，不自动通过）。
  */
+/** 一眼可见的通用要求（结构、段落、字数、开头结尾、名言、详略等）。 */
+const GENERAL_OPINION = /结构|五段|段|名人名言|名言|欲扬先抑|抑|扬|字数|开头|结尾|框架|详略|铺垫|引入|语言/u;
+/** 针对单篇的具体内容：人物、真实姓名、指定情节或引用原句。 */
+const SPECIFIC_OPINION = /[“"「][^”"」]{2,}[”"」]|爷爷|奶奶|阿姨|叔叔|父亲|母亲|爸爸|妈妈|老师是|金老师|主角|姓名|改为|改成|换成|这个事情|这件事/u;
+
+export function isGeneralOpinion(text: string): boolean {
+  return GENERAL_OPINION.test(text) && !SPECIFIC_OPINION.test(text);
+}
+
+/** 拆成单句要求，便于合并相近意见。 */
+export function opinionClauses(text: string): string[] {
+  return splitOpinionLines(text).flatMap((line) => line.split(/[；;]/u)).map((item) => item.trim().replace(/[，,。]$/u, "")).filter(Boolean);
+}
+
+/** 从任务里的老师补充意见取出两栏：只取本次提交部分，不含后面附带的长期规则清单。 */
+export function revisionSections(guidance: string): { common: string; content: string } {
+  const submission = guidance.split(/\n\n以下是这位老师存档的长期批改要求/u)[0] ?? "";
+  const common = submission.match(/\[结构问题 \/ 共性问题\]\n([\s\S]*?)(?=\n\[内容建议\]|$)/u)?.[1] ?? "";
+  const content = submission.match(/\[内容建议\]\n([\s\S]*)$/u)?.[1] ?? "";
+  return { common: common.trim(), content: content.trim() };
+}
+
+/**
+ * --since：只收界点之后的意见。第一栏（结构 / 共性问题）全部收；
+ * 第二栏和退回意见只收明显通用的句子。按 owner + 同名题目合并相近意见。
+ */
+export async function planBackfillSince(execute: Execute, since: number, titles?: string[]): Promise<BackfillTitlePlan[]> {
+  const wanted = titles?.length ? new Set(titles.map(normalizeAssignmentTitle)) : null;
+  const buckets = new Map<string, { ownerId: string; title: string; opinions: RuleSourceOpinion[] }>();
+  const add = (ownerId: string, title: string, opinion: RuleSourceOpinion) => {
+    if (!title || (wanted && !wanted.has(title))) return;
+    const key = `${ownerId}\u0000${title}`;
+    if (!buckets.has(key)) buckets.set(key, { ownerId, title, opinions: [] });
+    buckets.get(key)!.opinions.push(opinion);
+  };
+  const sinceSql = String(Math.trunc(since));
+  for (const row of execute(`SELECT j.owner_id, j.review_id, j.teacher_guidance, r.student_name, r.config FROM analysis_jobs j INNER JOIN reviews r ON r.id = j.review_id WHERE j.teacher_guidance IS NOT NULL AND j.created_at >= ${sinceSql} ORDER BY j.created_at, j.id`).rows) {
+    const title = opinionSourceTitle(jsonValue(row.config));
+    const { common, content } = revisionSections(str(row.teacher_guidance));
+    const base = { reviewId: str(row.review_id) || null, studentName: str(row.student_name), kind: "history" as const };
+    opinionClauses(common).forEach((text) => add(str(row.owner_id), title, { ...base, text }));
+    opinionClauses(content).filter(isGeneralOpinion).forEach((text) => add(str(row.owner_id), title, { ...base, text }));
+  }
+  for (const row of execute(`SELECT id, owner_id, student_name, config, rejection_reason, rejection_change_request FROM reviews WHERE deleting_at IS NULL AND updated_at >= ${sinceSql} AND (rejection_reason IS NOT NULL OR rejection_change_request IS NOT NULL)`).rows) {
+    const title = opinionSourceTitle(jsonValue(row.config));
+    opinionClauses(rejectionOpinionText(str(row.rejection_reason), str(row.rejection_change_request)))
+      .filter(isGeneralOpinion)
+      .forEach((text) => add(str(row.owner_id), title, { text, reviewId: str(row.id), studentName: str(row.student_name), kind: "rejection" }));
+  }
+  return finishPlans(execute, [...buckets.values()]);
+}
+
+async function finishPlans(execute: Execute, buckets: Array<{ ownerId: string; title: string; opinions: RuleSourceOpinion[] }>): Promise<BackfillTitlePlan[]> {
+  const pendingRows = execute("SELECT id, owner_id, source_title, rule_text, sources FROM grading_rule_candidates WHERE status = 'pending'").rows;
+  const standingRows = execute("SELECT id, owner_id, source_title, change_request FROM grading_opinions WHERE scope = 'standing'").rows;
+  const plans: BackfillTitlePlan[] = [];
+  for (const { ownerId, title, opinions } of buckets) {
+    const existing: ExistingRule[] = [
+      ...pendingRows.filter((row) => str(row.owner_id) === ownerId && normalizeAssignmentTitle(str(row.source_title)) === title)
+        .map((row) => ({ id: str(row.id), ruleText: str(row.rule_text), status: "pending" as const, sources: (jsonValue(row.sources) as RuleSourceOpinion[]) ?? [] })),
+      ...standingRows.filter((row) => str(row.owner_id) === ownerId && normalizeAssignmentTitle(str(row.source_title)) === title)
+        .flatMap((row) => opinionClauses(str(row.change_request)).map((text) => ({ id: str(row.id), ruleText: text, status: "approved" as const, sources: [] }))),
+    ];
+    const plan = await planRuleCandidates({ title, opinions, existing });
+    plans.push({ ownerId, title, inspected: opinions.length, create: plan.create, skipped: plan.skipped.length + plan.merge.reduce((sum, item) => sum + item.sources.length, 0) });
+  }
+  return plans.sort((a, b) => a.title.localeCompare(b.title));
+}
+
 export async function planBackfill(execute: Execute, titles: string[] = DEFAULT_TITLES): Promise<BackfillTitlePlan[]> {
   const wanted = new Set(titles.map(normalizeAssignmentTitle));
   const buckets = new Map<string, { ownerId: string; title: string; opinions: RuleSourceOpinion[]; jobIds: Set<string> }>();
@@ -113,14 +182,19 @@ if (isDirectRun()) {
   const dryRun = args.includes("--dry-run");
   const remote = args.includes("--d1");
   const titles = args.flatMap((arg, index) => arg === "--title" && args[index + 1] ? [args[index + 1]!] : []);
-  const unknown = args.filter((arg, index) => !["--dry-run", "--d1", "--title"].includes(arg) && args[index - 1] !== "--title");
-  if (!remote || unknown.length) {
-    process.stderr.write("用法：npm run backfill:rule-candidates -- --d1 [--dry-run] [--title 题目 ...]\n只生成待审批的候选规则，不自动通过。--dry-run 只打印计划不写入。默认题目：这件事打动了我、为自己鼓掌。\n");
+  const sinceIndex = args.indexOf("--since");
+  const sinceRaw = sinceIndex >= 0 ? args[sinceIndex + 1] ?? "" : "";
+  const since = sinceRaw ? (/^\d+$/u.test(sinceRaw) ? Number(sinceRaw) : Date.parse(sinceRaw)) : null;
+  const unknown = args.filter((arg, index) => !["--dry-run", "--d1", "--title", "--since"].includes(arg) && !["--title", "--since"].includes(args[index - 1] ?? ""));
+  if (!remote || unknown.length || (sinceIndex >= 0 && !Number.isFinite(since))) {
+    process.stderr.write("用法：npm run backfill:rule-candidates -- --d1 [--dry-run] [--since 2026-10-22T20:34:47+08:00] [--title 题目 ...]\n--since 只收界点之后的意见：第一栏全部收，其它只收明显通用的句子；不指定 --title 时包含所有题目。\n只生成待审批的候选规则，不自动通过。--dry-run 只打印计划不写入。默认题目：这件事打动了我、为自己鼓掌。\n");
     process.exitCode = 2;
   } else {
     void (async () => {
       try {
-        const plans = await planBackfill(executeRemoteD1, titles.length ? titles : DEFAULT_TITLES);
+        const plans = since !== null
+          ? await planBackfillSince(executeRemoteD1, since, titles)
+          : await planBackfill(executeRemoteD1, titles.length ? titles : DEFAULT_TITLES);
         const statements = backfillInsertStatements(plans);
         const summary = plans.map((plan) => ({ title: plan.title, inspected: plan.inspected, candidates: plan.create.length, skipped: plan.skipped, rules: plan.create.map((item) => ({ rule: item.ruleText, sources: item.sources.length })) }));
         if (!dryRun) statements.forEach((statement) => executeRemoteD1(statement));
