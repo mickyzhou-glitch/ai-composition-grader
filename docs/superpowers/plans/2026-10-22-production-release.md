@@ -114,3 +114,13 @@
 - Node 24，`npm run build` 后 `npx wrangler deploy`，一次成功；未动数据库
 - 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、`/pdfjs/pdf.worker.min.mjs` 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
 - 已登录审核流程未在本次人工执行
+
+## 本日第七次发布：内容模型结果容错与「审核失败」筛选
+
+- 源码：`main@71d2dbd`，发布前工作区干净
+- 新 Worker 版本：`a7fd38b7-ee74-4c86-80d8-84907fd76167`（100% 流量）
+- 上一版本（回滚用）：`0dd827f8-4a79-45e0-80b8-9e40dd2574c5`
+- 改动：JSON 清洗、截断调高上限重试、缺批注按空、结构段范围程序重分配、失败提示写明原因；历史列表新增「审核失败」筛选并从待复核排除
+- Node 24，`npm run build` 后 `npx wrangler deploy`，一次成功；未写数据库，未代点重新分析
+- 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、`/pdfjs/pdf.worker.min.mjs` 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
+- 当前失败 5 篇（只读查询）：施翊婵、梁艺卓（珍贵的礼物，report 多余字段）；逯益帆（周日D，缺批注数组）；姬嘉言、张天乐（周五E，段落范围不对）
