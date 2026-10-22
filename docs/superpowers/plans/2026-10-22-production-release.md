@@ -65,3 +65,32 @@
 - `/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、PDF worker 均 200
 - `/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
 - 已登录主流程与 PDF/Word 实际导出未在本次人工执行
+
+## 发布后数据修复（2026-10-22 20:18–20:36）
+
+### 补回迁移 0009 级联删除的数据
+
+- 根因：0009 用 `PRAGMA foreign_keys = OFF` 重建 `reviews`，D1 不认该 PRAGMA，`DROP TABLE reviews` 触发 `ON DELETE CASCADE`，清空 `review_images`（98 行）、`annotations`（184 行）、`analysis_jobs`（152 行，含 36 条 teacher_guidance）。导出报「第 N 页图片不存在」由 `src/delivery/readiness.ts` 的页图检查触发。与统一作文脚本无关（脚本只 UPDATE reviews）。
+- R2 图片对象 128 个逐个核对，全部仍在。
+- 修复前备份：`backups/d1-prod-before-restore-20261022-201841.sql`
+- 从发布前备份按主键 `INSERT OR IGNORE` 补回三张表共 434 行（`backups/restore-20261022-201841.sql`），未覆盖现有行，报告未变。
+- 验证：19 篇已审核作文所需页图齐全；sync dry-run 19 篇逐字一致。
+- 防再犯：提交 `f317886`，0009 重建前保存子表、重建后放回；新增 `test/d1-migrations.test.ts`。
+- 历史意见预览（`--d1`，只读）：「这件事打动了我」21 条、「为自己鼓掌」2 条，未写入。
+
+### 作文状态统一为待审核（用户要求）
+
+- 备份：`backups/d1-prod-before-status-reset-20261022-203447.sql`
+- 19 篇（已导出 9、已复核未导出 10）改为 `ready_for_review`、清空 `teacher_reviewed_at`、修订号 +1、清空 PDF 缓存与导出时间；报告、范文、OCR、图片未动。
+- 未改：分析失败 4 篇；原本待审核 23 篇。改后待审核 42 篇、失败 4 篇，均在批量审核队列条件内。
+- 执行：`backups/status-reset-20261022-203447.sql`；回滚：`backups/status-reset-rollback-20261022-203447.sql`（逐篇原状态，仅恢复修订号未再变化的行）
+
+## 本日第四次发布：Word 完整范文换行修复
+
+- 源码：`main@573df68`，发布前工作区干净
+- 新 Worker 版本：`47975967-2bdf-46e8-b1fd-095385ded6f1`（100% 流量）
+- 上一版本（回滚用）：`44c5d1c2-5920-4801-b7d8-d38e3e6373a9`
+- 改动：Word 完整范文每个自然段一个段落、首行缩进两字、段内无硬换行，由 Word/WPS 自动排版；右侧框「改后全段」正文去掉换行。PDF 不变。
+- Node 24.19.0，`npm run build` 后 `npx wrangler deploy`，一次成功；本次未动数据库
+- 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、PDF worker 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
+- 已登录在 WPS 打开实际导出未在本次执行；样例见 Mac 桌面 `样例-范文换行修复.docx`
