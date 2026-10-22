@@ -1,6 +1,15 @@
 -- SQLite cannot alter a CHECK constraint in place. Rebuild reviews so
 -- status can be 'rejected' (审核不通过) and keep the archived return notes.
-PRAGMA foreign_keys = OFF;
+--
+-- D1 ignores PRAGMA foreign_keys = OFF, so DROP TABLE reviews fires
+-- ON DELETE CASCADE and empties review_images, annotations and analysis_jobs.
+-- 2026-10-22 production lost those rows this way. Copy every child table first
+-- and put the rows back after the rebuild.
+PRAGMA defer_foreign_keys = true;
+
+CREATE TABLE keep_0009_review_images AS SELECT * FROM review_images;
+CREATE TABLE keep_0009_annotations AS SELECT * FROM annotations;
+CREATE TABLE keep_0009_analysis_jobs AS SELECT * FROM analysis_jobs;
 
 CREATE TABLE reviews_rejected_migration (
   id TEXT PRIMARY KEY NOT NULL,
@@ -52,4 +61,11 @@ CREATE INDEX IF NOT EXISTS reviews_owner_teacher_reviewed_idx ON reviews(owner_i
 CREATE INDEX IF NOT EXISTS reviews_owner_deleting_at_idx ON reviews(owner_id, deleting_at);
 CREATE INDEX IF NOT EXISTS reviews_expires_deleting_at_idx ON reviews(expires_at, deleting_at);
 
-PRAGMA foreign_keys = ON;
+INSERT OR IGNORE INTO review_images SELECT * FROM keep_0009_review_images;
+INSERT OR IGNORE INTO annotations SELECT * FROM keep_0009_annotations;
+INSERT OR IGNORE INTO analysis_jobs SELECT * FROM keep_0009_analysis_jobs;
+DROP TABLE keep_0009_review_images;
+DROP TABLE keep_0009_annotations;
+DROP TABLE keep_0009_analysis_jobs;
+
+PRAGMA defer_foreign_keys = false;

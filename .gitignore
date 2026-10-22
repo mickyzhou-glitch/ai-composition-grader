@@ -58,3 +58,6 @@ next-env.d.ts
 
 # PDF.js assets copied from the installed package before dev/build
 /public/pdfjs/
+
+# 本机发布备份（含学生数据，不入库）
+backups/
