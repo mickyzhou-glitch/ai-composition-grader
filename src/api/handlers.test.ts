@@ -1144,8 +1144,8 @@ describe("review route handlers", () => {
 describe("reanalysis route handlers", () => {
   const revisionInput = {
     expectedRevision: 3,
-    reason: "结尾没有扣题",
-    changeRequest: "重新分析结尾并保留有效细节",
+    commonIssue: "结尾没有扣题",
+    contentSuggestion: "重新分析结尾并保留有效细节",
   };
   const commitItem = {
     reviewId: "review-1",
@@ -1320,7 +1320,6 @@ describe("reanalysis route handlers", () => {
       response = await revisionHandlers.POST(
         jsonRequest("http://localhost", "POST", {
           expectedRevision: revisionInput.expectedRevision,
-          reason: revisionInput.reason,
         }),
         { params: Promise.resolve({ id: "review-1" }) },
       );

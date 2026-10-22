@@ -114,6 +114,7 @@ export const gradingOpinions = sqliteTable(
     changeRequest: text("change_request").notNull().default(""),
     paragraphLabel: text("paragraph_label"),
     category: text("category").notNull().default("其他"),
+    scope: text("scope").$type<"standing" | "essay">().notNull().default("essay"),
     sourceReviewId: text("source_review_id"),
     sourceJobId: text("source_job_id"),
     sourceStudentName: text("source_student_name").notNull().default(""),

@@ -34,7 +34,7 @@ export function AppHeader({ compact = false, userRole }: { compact?: boolean; us
         <span>青藤未来作文批改助手</span>
       </Link>
       <nav className="header-actions" aria-label="主要操作">
-        <Link className="button button--quiet" href="/opinions">批改意见存档</Link>
+        <Link className="button button--quiet" href="/opinions">长期批改规则</Link>
         <Link className="button button--primary" href="/new">新建作文批改</Link>
         {role === "admin" ? <Link className="button button--quiet" href="/settings">设置</Link> : null}
         <AsyncButton

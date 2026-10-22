@@ -59,8 +59,7 @@ const editOcrParagraphsSchema = z.object({
 }).strict();
 
 const gradingOpinionUpdateSchema = z.object({
-  reason: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
-  changeRequest: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
+  text: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
   category: z.enum(OPINION_CATEGORIES).optional(),
 }).strict();
 

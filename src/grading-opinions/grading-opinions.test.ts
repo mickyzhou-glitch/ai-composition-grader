@@ -95,7 +95,7 @@ describe("批改意见存档", () => {
     `).run(id, NOW.valueOf());
   }
 
-  it("提交后台修改会分开存档两项文字，完全不能用不写入长期存档", () => {
+  it("第一框成为长期规则，第二框只留在当前作文，完全不能用都不写入", () => {
     setup();
     insertReview("review-1");
 
@@ -108,20 +108,29 @@ describe("批改意见存档", () => {
 
     reanalysis.requestRevision(OWNER, "review-1", {
       expectedRevision: 2,
-      reason: "第2段太空",
-      changeRequest: "写具体",
+      commonIssue: "第2段太空就收成一段",
+      contentSuggestion: "写具体心理",
     });
-    expect(opinions.list(OWNER)).toMatchObject([{
-      reason: "第2段太空",
-      changeRequest: "写具体",
-      paragraphLabel: "第2段",
-      category: "结构",
-      sourceReviewId: "review-1",
-      sourceJobId: "job-reanalysis",
-      sourceStudentName: "小明",
-      sourceClassName: "六1班",
-      sourceTitle: "我终于明白了",
-    }]);
+    expect(opinions.list(OWNER)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        scope: "standing",
+        changeRequest: "第2段太空就收成一段",
+        paragraphLabel: "第2段",
+        category: "结构",
+        sourceReviewId: "review-1",
+        sourceJobId: "job-reanalysis",
+        sourceStudentName: "小明",
+        sourceClassName: "六1班",
+        sourceTitle: "我终于明白了",
+      }),
+      expect.objectContaining({
+        scope: "essay",
+        changeRequest: "写具体心理",
+        category: "内容",
+        sourceReviewId: "review-1",
+        sourceJobId: "job-reanalysis",
+      }),
+    ]));
   });
 
   it("删掉作文或重新分析后意见还在，并注入这位老师之后的全部批改", () => {
@@ -129,18 +138,17 @@ describe("批改意见存档", () => {
     insertReview("review-1");
     reanalysis.requestRevision(OWNER, "review-1", {
       expectedRevision: 1,
-      reason: "结构散",
-      changeRequest: "严格五段",
+      commonIssue: "严格五段",
+      contentSuggestion: "写具体心理",
     });
     opened.sqlite.prepare("UPDATE reviews SET report = '{\"saved\":true}' WHERE id = 'review-1'").run();
-    expect(opinions.list(OWNER)).toHaveLength(1);
+    expect(opinions.list(OWNER)).toHaveLength(2);
 
     opened.sqlite.prepare("DELETE FROM reviews WHERE id = 'review-1'").run();
-    expect(opinions.list(OWNER)).toMatchObject([{
-      body: "为什么不合适：结构散\n应该怎么改：严格五段",
-      sourceStudentName: "小明",
-      sourceTitle: "我终于明白了",
-    }]);
+    expect(opinions.list(OWNER)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ scope: "standing", changeRequest: "严格五段", sourceStudentName: "小明", sourceTitle: "我终于明白了" }),
+      expect.objectContaining({ scope: "essay", changeRequest: "写具体心理" }),
+    ]));
 
     insertReview("review-2");
     jobs.createOrGet(OWNER, "review-2", "这次多看心理");
@@ -148,8 +156,8 @@ describe("批改意见存档", () => {
       .get() as { teacherGuidance: string };
     expect(stored.teacherGuidance).toContain("这次多看心理");
     expect(stored.teacherGuidance).toContain(STANDING_GUIDANCE_HEADER);
-    expect(stored.teacherGuidance).toContain("为什么不合适：结构散");
-    expect(stored.teacherGuidance).toContain("应该怎么改：严格五段");
+    expect(stored.teacherGuidance).toContain("严格五段");
+    expect(stored.teacherGuidance).not.toContain("写具体心理");
 
     insertReview("review-other", OTHER);
     jobs.createOrGet(OTHER, "review-other");
@@ -162,8 +170,8 @@ describe("批改意见存档", () => {
     insertReview("review-1");
     opinions.insert({
       ownerId: OWNER,
-      reason: "离题",
-      changeRequest: "扣住题目",
+      text: "扣住题目",
+      scope: "standing",
       sourceReviewId: "review-1",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
@@ -172,8 +180,18 @@ describe("批改意见存档", () => {
     });
     opinions.insert({
       ownerId: OWNER,
-      reason: "离题",
-      changeRequest: "扣住题目",
+      text: "扣住题目",
+      scope: "standing",
+      sourceReviewId: "review-1",
+      sourceStudentName: "小明",
+      sourceClassName: "六1班",
+      sourceTitle: "我终于明白了",
+      createdAt: NOW,
+    });
+    opinions.insert({
+      ownerId: OWNER,
+      text: "只改这篇的心理",
+      scope: "essay",
       sourceReviewId: "review-1",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
@@ -186,13 +204,15 @@ describe("批改意见存档", () => {
     ).get() as { teacherGuidance: string | null };
     jobs.createOrGet(OWNER, "review-2");
     expect(queued().teacherGuidance.match(/扣住题目/gu)).toHaveLength(1);
+    expect(queued().teacherGuidance).not.toContain("只改这篇的心理");
 
     opened.sqlite.prepare("UPDATE analysis_jobs SET status = 'succeeded' WHERE review_id = 'review-2'").run();
     for (const opinion of opinions.list(OWNER)) opinions.delete(OWNER, opinion.id);
+    expect(opinions.list(OWNER).some((opinion) => opinion.scope === "essay")).toBe(true);
     const kept = opinions.insert({
       ownerId: OWNER,
-      reason: "语言生硬",
-      changeRequest: "开头保留原句，只润色",
+      text: "开头保留原句，只润色",
+      scope: "standing",
       sourceReviewId: "review-1",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
@@ -215,8 +235,18 @@ describe("批改意见存档", () => {
     insertReview("review-1");
     opinions.insert({
       ownerId: OWNER,
-      reason: "情感转变太快",
-      changeRequest: "先抑后扬",
+      text: "先抑后扬",
+      scope: "standing",
+      sourceReviewId: "review-1",
+      sourceStudentName: "小明",
+      sourceClassName: "六1班",
+      sourceTitle: "我终于明白了",
+      createdAt: NOW,
+    });
+    opinions.insert({
+      ownerId: OWNER,
+      text: "这篇补一个动作",
+      scope: "essay",
       sourceReviewId: "review-1",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
@@ -240,9 +270,9 @@ describe("批改意见存档", () => {
       "SELECT teacher_guidance AS teacherGuidance FROM analysis_jobs WHERE review_id = 'review-1'",
     ).get() as { teacherGuidance: string };
     expect(job.teacherGuidance).toContain(STANDING_GUIDANCE_HEADER);
-    expect(job.teacherGuidance).toContain("为什么不合适：情感转变太快");
-    expect(job.teacherGuidance).toContain("应该怎么改：先抑后扬");
-    expect(opinions.list(OWNER)).toHaveLength(1);
+    expect(job.teacherGuidance).toContain("先抑后扬");
+    expect(job.teacherGuidance).not.toContain("这篇补一个动作");
+    expect(opinions.list(OWNER)).toHaveLength(2);
   });
 
   it("另一位老师不能改或删除这条存档", async () => {
@@ -255,29 +285,29 @@ describe("批改意见存档", () => {
     `).run();
     sqlite.prepare(`
       INSERT INTO grading_opinions (
-        id, owner_id, body, reason, change_request, category, source_review_id,
+        id, owner_id, body, reason, change_request, category, scope, source_review_id,
         source_student_name, source_class_name, source_title, created_at, updated_at
-      ) VALUES ('opinion-1', 'teacher-a', '为什么不合适：太空\n应该怎么改：用名言开头', '太空', '用名言开头', '结构', 'review-1', '小明', '六1班', '我终于明白了', 10, 10)
+      ) VALUES ('opinion-1', 'teacher-a', '用名言开头', '', '用名言开头', '结构', 'standing', 'review-1', '小明', '六1班', '我终于明白了', 10, 10)
     `).run();
     const archive = new D1GradingOpinions(d1From(sqlite));
 
     await expect(archive.list("teacher-b")).resolves.toEqual([]);
-    await expect(archive.update("teacher-b", "opinion-1", { reason: "改掉", changeRequest: "重写" })).resolves.toBeNull();
+    await expect(archive.update("teacher-b", "opinion-1", { text: "重写" })).resolves.toBeNull();
     await expect(archive.delete("teacher-b", "opinion-1")).resolves.toBe(false);
     await expect(archive.list("teacher-a")).resolves.toMatchObject([{
       id: "opinion-1",
-      reason: "太空",
-      changeRequest: "用名言开头",
+      text: "用名言开头",
+      scope: "standing",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
       sourceTitle: "我终于明白了",
     }]);
-    await expect(archive.update("teacher-a", "opinion-1", { reason: "结构散", changeRequest: "改为五段", category: "结构" })).resolves.toMatchObject({
-      reason: "结构散",
-      changeRequest: "改为五段",
+    await expect(archive.update("teacher-a", "opinion-1", { text: "改为五段", category: "结构" })).resolves.toMatchObject({
+      text: "改为五段",
+      scope: "standing",
       category: "结构",
     });
-    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a")).resolves.toMatchObject([{ changeRequest: "改为五段" }]);
+    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a")).resolves.toMatchObject([{ text: "改为五段" }]);
     await expect(archive.delete("teacher-a", "opinion-1")).resolves.toBe(true);
     sqlite.close();
   });

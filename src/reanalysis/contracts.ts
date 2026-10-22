@@ -6,11 +6,16 @@ export const MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS = 1_100;
 
 const safeIdSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u);
 
+const revisionFieldSchema = z.string().trim().max(MAX_REVISION_FIELD_CHARS).optional().default("");
+
 export const revisionRequestInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
-  reason: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
-  changeRequest: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
-}).strict();
+  commonIssue: revisionFieldSchema,
+  contentSuggestion: revisionFieldSchema,
+}).strict().refine(
+  (value) => value.commonIssue.length > 0 || value.contentSuggestion.length > 0,
+  { message: "至少填写结构问题或内容建议" },
+);
 
 export const rejectReviewInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -70,9 +75,14 @@ export function normalizeAssignmentTitle(value: string): string {
   return value.trim();
 }
 
-export function formatRevisionTeacherGuidance(reason: string, changeRequest: string): string {
-  const parsed = revisionRequestInputSchema.parse({ expectedRevision: 0, reason, changeRequest });
-  return `[不合适原因]\n${parsed.reason}\n[修改要求]\n${parsed.changeRequest}`;
+export function formatRevisionTeacherGuidance(commonIssue: string, contentSuggestion: string): string {
+  const issue = commonIssue.trim();
+  const suggestion = contentSuggestion.trim();
+  const parts: string[] = [];
+  if (issue) parts.push(`[结构问题 / 共性问题]\n${issue}`);
+  if (suggestion) parts.push(`[内容建议]\n${suggestion}`);
+  if (parts.length === 0) throw new Error("revision guidance requires a field");
+  return parts.join("\n");
 }
 
 export const REANALYSIS_SKIP_REASONS = {

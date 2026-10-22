@@ -37,8 +37,9 @@ export interface ImportSummary {
 type AppDatabase = ReturnType<typeof openAppDatabase>["db"];
 
 /**
- * 把仍留在分析任务 teacher_guidance 里的「提交后台修改并继续」两项说明纳入批改意见存档。
- * 只认 `[不合适原因]` / `[修改要求]`。普通补充说明和只有长期规则清单的任务会跳过。
+ * 把仍留在分析任务 teacher_guidance 里的旧退回说明纳入存档。
+ * 只认 `[不合适原因]` / `[修改要求]`。这些旧意见分不出两个新框，一律记为仅当前文章，不写成长期规则。
+ * 普通补充说明和只有长期规则清单的任务会跳过。
  * 作文已删除的任务会随评论级联消失，无法恢复。默认只列出，--apply 才写入。
  * 不连接生产库；要看哪一份本地库，设置 APP_DATABASE_PATH。
  */
@@ -86,6 +87,7 @@ export function importHistoricalGradingOpinions(
       paragraphLabel: described.paragraphLabel,
       category: described.category,
       body: described.body,
+      scope: "essay",
     }).where(eq(gradingOpinions.id, opinionId)).run();
   };
 
@@ -149,6 +151,7 @@ export function importHistoricalGradingOpinions(
         paragraphLabel: described.paragraphLabel,
         category: described.category,
         body: described.body,
+        scope: "essay",
       }).where(and(
         eq(gradingOpinions.id, existing.id),
         isNull(gradingOpinions.sourceJobId),
@@ -163,6 +166,7 @@ export function importHistoricalGradingOpinions(
       changeRequest: described.changeRequest,
       paragraphLabel: described.paragraphLabel,
       category: described.category,
+      scope: "essay",
       sourceReviewId: job.reviewId,
       sourceJobId: job.jobId,
       sourceStudentName: job.studentName,

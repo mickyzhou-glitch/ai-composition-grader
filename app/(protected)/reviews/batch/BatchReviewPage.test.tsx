@@ -372,11 +372,15 @@ describe("BatchReviewPage", () => {
     expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-2", expect.anything()));
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "批改没有回应题目要求");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "请围绕题目重写批改");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "批改没有回应题目要求");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "请围绕题目重写批改");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
-    expect(revisionBody).toEqual({ expectedRevision: 7, reason: "批改没有回应题目要求", changeRequest: "请围绕题目重写批改" });
+    expect(revisionBody).toEqual({
+      expectedRevision: 7,
+      commonIssue: "批改没有回应题目要求",
+      contentSuggestion: "请围绕题目重写批改",
+    });
     expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
     expect(screen.queryByText("正在展开作文与批改报告")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
@@ -410,7 +414,7 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "离题");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "离题");
     await user.click(screen.getByRole("button", { name: "完全不能用" }));
 
     expect(rejectBody).toEqual({ expectedRevision: 7, reason: "离题", changeRequest: "" });
@@ -437,14 +441,14 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因保留");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求保留");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "原因保留");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求保留");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
     expect(await screen.findByText("退回失败，请重试")).toBeVisible();
     expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "为什么不合适" })).toHaveValue("原因保留");
-    expect(screen.getByRole("textbox", { name: "应该怎么改" })).toHaveValue("要求保留");
+    expect(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" })).toHaveValue("原因保留");
+    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("要求保留");
   });
 
   it("confirms before opening the unsuitable dialog when the current review is dirty", async () => {
@@ -478,8 +482,8 @@ describe("BatchReviewPage", () => {
 
     await screen.findByRole("heading", { name: "张小明" });
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
     expect(await screen.findByRole("heading", { name: "待审核队列已完成" })).toBeVisible();
@@ -514,8 +518,8 @@ describe("BatchReviewPage", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-2", expect.anything()));
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
     expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
 
@@ -542,8 +546,8 @@ describe("BatchReviewPage", () => {
     await screen.findByRole("heading", { name: "张小明" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
     await screen.findByRole("heading", { name: "待审核队列已完成" });
 

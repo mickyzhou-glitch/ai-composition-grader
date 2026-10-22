@@ -189,8 +189,8 @@ describe("ReanalysisRepository requestRevision", () => {
   function revisionInput(expectedRevision = 3) {
     return {
       expectedRevision,
-      reason: "人物关系混乱",
-      changeRequest: "按原文称呼重排事件",
+      commonIssue: "人物关系混乱",
+      contentSuggestion: "按原文称呼重排事件",
     };
   }
 
@@ -324,8 +324,8 @@ describe("ReanalysisRepository requestRevision", () => {
       ocrCheckpoint: JSON.stringify(checkpoint),
     });
     const formattedGuidance = formatRevisionTeacherGuidance(
-      revisionInput().reason,
-      revisionInput().changeRequest,
+      revisionInput().commonIssue,
+      revisionInput().contentSuggestion,
     );
     expect(opened.sqlite.prepare(`
       SELECT mode, status, teacher_guidance AS teacherGuidance
@@ -334,25 +334,36 @@ describe("ReanalysisRepository requestRevision", () => {
       mode: "full",
       status: "queued",
       teacherGuidance: guidanceWithStandingOpinions(formattedGuidance, [{
-        reason: revisionInput().reason,
-        changeRequest: revisionInput().changeRequest,
+        text: revisionInput().commonIssue,
         createdAt: NOW.valueOf(),
       }]),
     });
     expect(opened.sqlite.prepare(`
-      SELECT reason, change_request AS changeRequest, paragraph_label AS paragraphLabel,
+      SELECT scope, change_request AS changeRequest, paragraph_label AS paragraphLabel,
         category, source_student_name AS sourceStudentName, source_title AS sourceTitle,
         source_job_id AS sourceJobId
       FROM grading_opinions WHERE owner_id = ?
-    `).all(OWNER)).toEqual([{
-      reason: revisionInput().reason,
-      changeRequest: revisionInput().changeRequest,
-      paragraphLabel: null,
-      category: "其他",
-      sourceStudentName: "艾绮",
-      sourceTitle: "My  Essay",
-      sourceJobId: result.job.id,
-    }]);
+      ORDER BY scope DESC
+    `).all(OWNER)).toEqual([
+      {
+        scope: "standing",
+        changeRequest: revisionInput().commonIssue,
+        paragraphLabel: null,
+        category: "其他",
+        sourceStudentName: "艾绮",
+        sourceTitle: "My  Essay",
+        sourceJobId: result.job.id,
+      },
+      {
+        scope: "essay",
+        changeRequest: revisionInput().contentSuggestion,
+        paragraphLabel: null,
+        category: "其他",
+        sourceStudentName: "艾绮",
+        sourceTitle: "My  Essay",
+        sourceJobId: result.job.id,
+      },
+    ]);
   });
 
   it("完全不能用只存档并标为审核不通过，不创建分析任务，之后仍可重新分析", () => {

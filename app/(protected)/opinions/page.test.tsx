@@ -8,18 +8,26 @@ vi.mock("next/navigation", () => ({
 
 import GradingOpinionsPage from "./page";
 
-const opinion = {
+const standing = {
   id: "opinion-1",
-  reason: "开头太空",
-  changeRequest: "用一句名言开头",
-  paragraphLabel: "第1段",
+  text: "严格五段",
+  scope: "standing",
+  paragraphLabel: null,
   category: "结构",
-  sourceReviewId: "review-1",
   sourceStudentName: "小明",
   sourceClassName: "六1班",
   sourceTitle: "我终于明白了",
   createdAt: "2026-10-22T02:15:00.000Z",
   updatedAt: "2026-10-22T02:15:00.000Z",
+};
+
+const essay = {
+  ...standing,
+  id: "opinion-essay",
+  text: "写具体心理",
+  scope: "essay",
+  category: "内容",
+  sourceStudentName: "小红",
 };
 
 function jsonResponse(body: unknown, status = 200) {
@@ -29,82 +37,56 @@ function jsonResponse(body: unknown, status = 200) {
   }));
 }
 
-describe("批改意见存档页", () => {
+describe("长期批改规则页", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("列出两项文字和统计，并可以编辑和删除", async () => {
-    const updated = {
-      ...opinion,
-      reason: "开头没有画面",
-      changeRequest: "先写一个动作",
-      category: "内容",
-      updatedAt: "2026-10-22T03:00:00.000Z",
-    };
+  it("只编辑长期规则，两类统计分开", async () => {
+    const updated = { ...standing, text: "开头点题", category: "结构", updatedAt: "2026-10-22T03:00:00.000Z" };
     const fetchMock = vi.spyOn(globalThis, "fetch")
-      .mockImplementationOnce(() => jsonResponse({ ok: true, data: [opinion] }))
+      .mockImplementationOnce(() => jsonResponse({ ok: true, data: [standing, essay] }))
       .mockImplementationOnce(() => jsonResponse({ ok: true, data: updated }))
       .mockImplementationOnce(() => jsonResponse({ ok: true, data: { deleted: true } }));
     const user = userEvent.setup();
     render(<GradingOpinionsPage />);
 
-    expect(await screen.findByRole("heading", { name: "批改意见存档" })).toBeInTheDocument();
-    expect(screen.getByText(/提交后台修改并继续/)).toBeInTheDocument();
-    expect(screen.getByText(/小明 · 六1班 · 我终于明白了/)).toBeInTheDocument();
-    expect(screen.getByText(/第1段/)).toBeInTheDocument();
-    const stats = screen.getByRole("region", { name: "批改意见统计" });
-    expect(stats).toHaveTextContent("共 1 条");
-    expect(stats).toHaveTextContent("结构 1 次");
+    expect(await screen.findByRole("heading", { name: "长期批改规则" })).toBeInTheDocument();
+    const standingStats = screen.getByRole("region", { name: "长期规则统计" });
+    const essayStats = screen.getByRole("region", { name: "仅当前文章统计" });
+    expect(standingStats).toHaveTextContent("共 1 条");
+    expect(standingStats).toHaveTextContent("结构 1 次");
+    expect(essayStats).toHaveTextContent("共 1 条");
+    expect(essayStats).toHaveTextContent("内容 1 次");
+    expect(screen.queryByRole("textbox", { name: "编辑小红 · 六1班 · 我终于明白了的长期规则" })).not.toBeInTheDocument();
 
-    const reason = screen.getByRole("textbox", { name: "编辑小明 · 六1班 · 我终于明白了的为什么不合适" });
-    const changeRequest = screen.getByRole("textbox", { name: "编辑小明 · 六1班 · 我终于明白了的应该怎么改" });
-    expect(reason).toHaveValue(opinion.reason);
-    expect(changeRequest).toHaveValue(opinion.changeRequest);
-
-    await user.clear(reason);
-    await user.type(reason, "开头没有画面");
-    await user.clear(changeRequest);
-    await user.type(changeRequest, "先写一个动作");
-    await user.selectOptions(screen.getByRole("combobox", { name: "编辑小明 · 六1班 · 我终于明白了的类别" }), "内容");
+    const field = screen.getByRole("textbox", { name: "编辑小明 · 六1班 · 我终于明白了的长期规则" });
+    expect(field).toHaveValue("严格五段");
+    await user.clear(field);
+    await user.type(field, "开头点题");
     await user.click(screen.getByRole("button", { name: "保存修改" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/grading-opinions/opinion-1");
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
       method: "PATCH",
-      body: JSON.stringify({
-        reason: "开头没有画面",
-        changeRequest: "先写一个动作",
-        category: "内容",
-      }),
+      body: JSON.stringify({ text: "开头点题", category: "结构" }),
     });
-    expect(reason).toHaveValue("开头没有画面");
-    expect(changeRequest).toHaveValue("先写一个动作");
-    expect(stats).toHaveTextContent("内容 1 次");
+    expect(field).toHaveValue("开头点题");
 
     await user.click(screen.getByRole("button", { name: "删除" }));
-    await waitFor(() => expect(screen.queryByRole("textbox", { name: "编辑小明 · 六1班 · 我终于明白了的为什么不合适" })).not.toBeInTheDocument());
-    expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: "DELETE" });
-    expect(screen.getByText("还没有存档的批改意见。")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "编辑小明 · 六1班 · 我终于明白了的长期规则" })).not.toBeInTheDocument());
+    expect(screen.getByText("还没有长期批改规则。")).toBeInTheDocument();
+    expect(essayStats).toHaveTextContent("共 1 条");
   });
 
-  it("按相同改法统计次数", async () => {
+  it("相同长期规则按次数统计", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => jsonResponse({
       ok: true,
-      data: [
-        opinion,
-        {
-          ...opinion,
-          id: "opinion-2",
-          sourceStudentName: "小红",
-          paragraphLabel: null,
-        },
-      ],
+      data: [standing, { ...standing, id: "opinion-2", sourceStudentName: "小刚" }],
     }));
     render(<GradingOpinionsPage />);
 
-    const stats = await screen.findByRole("region", { name: "批改意见统计" });
+    const stats = await screen.findByRole("region", { name: "长期规则统计" });
     expect(stats).toHaveTextContent("共 2 条");
-    expect(stats).toHaveTextContent("结构 2 次");
-    expect(stats).toHaveTextContent("相同改法「用一句名言开头」2 次");
+    expect(stats).toHaveTextContent("相同内容「严格五段」2 次");
+    expect(screen.getByRole("region", { name: "仅当前文章统计" })).toHaveTextContent("共 0 条");
   });
 });

@@ -5,7 +5,7 @@ import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { AppDatabase } from "../db/client";
 import { analysisJobs, gradingOpinions, reviewImages, reviews, savedAssignments } from "../db/schema";
 import { opinionSourceTitle, standingOpinions } from "../grading-opinions/grading-opinion-repository";
-import { describeGradingOpinion, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
+import { describeScopedOpinion, guidanceWithStandingOpinions, type OpinionScope } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -19,6 +19,7 @@ import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mo
 import { readStoredOcrCheckpoint, type OcrCheckpoint } from "../ocr/contracts";
 import {
   formatRevisionTeacherGuidance,
+  MAX_REVISION_FIELD_CHARS,
   normalizeAssignmentTitle,
   REANALYSIS_SKIP_REASONS,
   type BatchReanalysisCommitItem,
@@ -53,8 +54,8 @@ function archiveOpinion(
   database: Pick<AppDatabase, "insert">,
   input: {
     ownerId: string;
-    reason: string;
-    changeRequest: string;
+    text: string;
+    scope: OpinionScope;
     sourceReviewId: string;
     sourceJobId: string;
     sourceStudentName: string;
@@ -63,16 +64,17 @@ function archiveOpinion(
     createdAt: Date;
   },
 ): void {
-  const described = describeGradingOpinion(input.reason, input.changeRequest);
-  if (!described) return;
+  const described = describeScopedOpinion(input.text);
+  if (!described || described.text.length > MAX_REVISION_FIELD_CHARS) return;
   database.insert(gradingOpinions).values({
     id: randomUUID(),
     ownerId: input.ownerId,
     body: described.body,
-    reason: described.reason,
-    changeRequest: described.changeRequest,
+    reason: "",
+    changeRequest: described.text,
     paragraphLabel: described.paragraphLabel,
     category: described.category,
+    scope: input.scope,
     sourceReviewId: input.sourceReviewId,
     sourceJobId: input.sourceJobId,
     sourceStudentName: input.sourceStudentName,
@@ -303,8 +305,7 @@ export class ReanalysisRepository {
   ): AnalysisJobRecord {
     const now = this.now();
     const id = this.createId();
-    const formattedGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
-    const describedOpinion = describeGradingOpinion(input.reason, input.changeRequest);
+    const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
 
     const execute = (): AnalysisJobRecord => this.database.transaction((transaction) => {
       const review = transaction.select({
@@ -342,18 +343,20 @@ export class ReanalysisRepository {
         review.report,
         readStoredOcrCheckpoint(review.ocrCheckpoint, review.imageRevision),
       );
-      if (describedOpinion) {
-        archiveOpinion(transaction, {
-          ownerId,
-          reason: describedOpinion.reason,
-          changeRequest: describedOpinion.changeRequest,
-          sourceReviewId: reviewId,
-          sourceJobId: id,
-          sourceStudentName: review.studentName,
-          sourceClassName: review.className,
-          sourceTitle: opinionSourceTitle(review.config),
-          createdAt: now,
-        });
+      const source = {
+        ownerId,
+        sourceReviewId: reviewId,
+        sourceJobId: id,
+        sourceStudentName: review.studentName,
+        sourceClassName: review.className,
+        sourceTitle: opinionSourceTitle(review.config),
+        createdAt: now,
+      };
+      if (input.commonIssue) {
+        archiveOpinion(transaction, { ...source, text: input.commonIssue, scope: "standing" });
+      }
+      if (input.contentSuggestion) {
+        archiveOpinion(transaction, { ...source, text: input.contentSuggestion, scope: "essay" });
       }
       const teacherGuidance = guidanceWithStandingOpinions(
         formattedGuidance,

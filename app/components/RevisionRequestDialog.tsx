@@ -9,8 +9,8 @@ export interface RevisionRequestDialogProps {
   submitting: boolean;
   error: string;
   onClose(): void;
-  onSubmit(input: { reason: string; changeRequest: string }): void;
-  onReject(input: { reason: string; changeRequest: string }): void;
+  onSubmit(input: { commonIssue: string; contentSuggestion: string }): void;
+  onReject(input: { commonIssue: string; contentSuggestion: string }): void;
 }
 
 export function RevisionRequestDialog({
@@ -21,20 +21,18 @@ export function RevisionRequestDialog({
   onSubmit,
   onReject,
 }: RevisionRequestDialogProps) {
-  const reasonRef = useRef<HTMLTextAreaElement>(null);
-  const [reason, setReason] = useState("");
-  const [changeRequest, setChangeRequest] = useState("");
+  const commonIssueRef = useRef<HTMLTextAreaElement>(null);
+  const [commonIssue, setCommonIssue] = useState("");
+  const [contentSuggestion, setContentSuggestion] = useState("");
 
   useEffect(() => {
-    if (open) reasonRef.current?.focus();
+    if (open) commonIssueRef.current?.focus();
   }, [open]);
 
   if (!open) return null;
 
-  const valid = reason.trim().length > 0 &&
-    changeRequest.trim().length > 0 &&
-    reason.length <= MAX_FIELD_CHARS &&
-    changeRequest.length <= MAX_FIELD_CHARS;
+  const withinLimit = commonIssue.length <= MAX_FIELD_CHARS && contentSuggestion.length <= MAX_FIELD_CHARS;
+  const valid = withinLimit && (commonIssue.trim().length > 0 || contentSuggestion.trim().length > 0);
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && !submitting) {
@@ -46,7 +44,7 @@ export function RevisionRequestDialog({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!valid || submitting) return;
-    onSubmit({ reason: reason.trim(), changeRequest: changeRequest.trim() });
+    onSubmit({ commonIssue: commonIssue.trim(), contentSuggestion: contentSuggestion.trim() });
   }
 
   return (
@@ -67,31 +65,29 @@ export function RevisionRequestDialog({
           </div>
           <div className="revision-dialog-body">
             <label className="revision-dialog-field">
-              <span>为什么不合适</span>
+              <span>结构问题 / 共性问题（所有文章适用）</span>
               <textarea
-                ref={reasonRef}
-                aria-label="为什么不合适"
-                aria-required="true"
-                required
+                ref={commonIssueRef}
+                aria-label="结构问题 / 共性问题（所有文章适用）"
                 maxLength={MAX_FIELD_CHARS}
-                value={reason}
+                value={commonIssue}
                 disabled={submitting}
-                onChange={(event) => setReason(event.target.value)}
+                onChange={(event) => setCommonIssue(event.target.value)}
               />
-              <small>{reason.length} / {MAX_FIELD_CHARS}</small>
+              <p className="revision-dialog-scope">永久存档为长期批改规则，之后所有作文的批改和重新批改都会遵守，本篇重新分析也会用到。</p>
+              <small>{commonIssue.length} / {MAX_FIELD_CHARS}</small>
             </label>
             <label className="revision-dialog-field">
-              <span>应该怎么改</span>
+              <span>内容建议（仅当前文章）</span>
               <textarea
-                aria-label="应该怎么改"
-                aria-required="true"
-                required
+                aria-label="内容建议（仅当前文章）"
                 maxLength={MAX_FIELD_CHARS}
-                value={changeRequest}
+                value={contentSuggestion}
                 disabled={submitting}
-                onChange={(event) => setChangeRequest(event.target.value)}
+                onChange={(event) => setContentSuggestion(event.target.value)}
               />
-              <small>{changeRequest.length} / {MAX_FIELD_CHARS}</small>
+              <p className="revision-dialog-scope">只用于本篇重新分析，不进入长期规则；仍记在这篇作文下，供统计。</p>
+              <small>{contentSuggestion.length} / {MAX_FIELD_CHARS}</small>
             </label>
             {error ? <p className="revision-dialog-error" role="alert">{error}</p> : null}
           </div>
@@ -104,7 +100,7 @@ export function RevisionRequestDialog({
               aria-busy={submitting}
               onClick={() => {
                 if (submitting) return;
-                onReject({ reason: reason.trim(), changeRequest: changeRequest.trim() });
+                onReject({ commonIssue: commonIssue.trim(), contentSuggestion: contentSuggestion.trim() });
               }}
             >完全不能用</button>
             <button type="submit" className="button button--primary" disabled={!valid || submitting} aria-busy={submitting}>提交后台修改并继续</button>

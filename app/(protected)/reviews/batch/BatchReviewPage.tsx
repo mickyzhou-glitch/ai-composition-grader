@@ -278,7 +278,7 @@ export function BatchReviewPage() {
     setRevisionDialogOpen(true);
   }
 
-  async function rejectReview(input: { reason: string; changeRequest: string }) {
+  async function rejectReview(input: { commonIssue: string; contentSuggestion: string }) {
     if (!review || revisionSubmitting) return;
     const currentReview = review;
     setRevisionSubmitting(true);
@@ -290,8 +290,8 @@ export function BatchReviewPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           expectedRevision: currentReview.revision,
-          reason: input.reason,
-          changeRequest: input.changeRequest,
+          reason: input.commonIssue,
+          changeRequest: input.contentSuggestion,
         }),
       });
       for (const key of cacheRef.current.keys()) {
@@ -306,7 +306,7 @@ export function BatchReviewPage() {
     }
   }
 
-  async function requestRevision(input: { reason: string; changeRequest: string }) {
+  async function requestRevision(input: { commonIssue: string; contentSuggestion: string }) {
     if (!review || revisionSubmitting) return;
     const currentReview = review;
     setRevisionSubmitting(true);
@@ -316,7 +316,11 @@ export function BatchReviewPage() {
       const result = await apiFetch<RevisionRequestResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/revision-request`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision: currentReview.revision, reason: input.reason, changeRequest: input.changeRequest }),
+        body: JSON.stringify({
+          expectedRevision: currentReview.revision,
+          commonIssue: input.commonIssue,
+          contentSuggestion: input.contentSuggestion,
+        }),
       });
       for (const key of cacheRef.current.keys()) {
         if (key.startsWith(`${currentReview.id}:`)) cacheRef.current.delete(key);
@@ -367,7 +371,7 @@ export function BatchReviewPage() {
           <button type="button" aria-pressed={view === "export"} onClick={() => setView("export")}>已复核待导出清单 ({reviewed.length})</button>
         </div>
         <div className="batch-review-topbar-actions">
-          <Link className="button button--quiet" href="/opinions">批改意见存档</Link>
+          <Link className="button button--quiet" href="/opinions">长期批改规则</Link>
           <Link className="button button--quiet" href="/">返回历史</Link>
         </div>
       </header>

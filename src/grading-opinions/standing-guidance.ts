@@ -4,13 +4,18 @@ export const MAX_GRADING_OPINION_BODY_CHARS = 1_200;
 
 export const OPINION_CATEGORIES = ["结构", "内容", "语言", "字数", "其他"] as const;
 export type OpinionCategory = (typeof OPINION_CATEGORIES)[number];
+export const OPINION_SCOPES = ["standing", "essay"] as const;
+export type OpinionScope = (typeof OPINION_SCOPES)[number];
+
+export function isOpinionScope(value: string): value is OpinionScope {
+  return (OPINION_SCOPES as readonly string[]).includes(value);
+}
 
 export const STANDING_GUIDANCE_HEADER =
   "以下是这位老师存档的长期批改要求，已归纳成规则清单，每次批改都必须遵守。与本次补充意见冲突时，以本次补充意见为准；与原文事实冲突时，以原文为准。";
 
 export interface StandingOpinionInput {
-  reason: string;
-  changeRequest: string;
+  text: string;
   paragraphLabel?: string | null;
   category?: OpinionCategory;
   createdAt: number;
@@ -62,6 +67,22 @@ export function classifyOpinion(reason: string, changeRequest: string): OpinionC
   if (/语言|用词|修辞|生硬|口语|病句|表达/u.test(text)) return "语言";
   if (/内容|事例|情节|细节|离题|跑题|切题|选材|一件事|心理/u.test(text)) return "内容";
   return "其他";
+}
+
+export function describeScopedOpinion(text: string): {
+  text: string;
+  paragraphLabel: string | null;
+  category: OpinionCategory;
+  body: string;
+} | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  return {
+    text: trimmed,
+    paragraphLabel: paragraphLabelFromText(trimmed),
+    category: classifyOpinion(trimmed, ""),
+    body: trimmed.slice(0, MAX_GRADING_OPINION_BODY_CHARS),
+  };
 }
 
 export function describeGradingOpinion(reason: string, changeRequest: string): {
@@ -134,8 +155,7 @@ function standingBudget(user: string): number {
 
 interface StandingRule {
   category: OpinionCategory;
-  reason: string;
-  changeRequest: string;
+  text: string;
   paragraphLabel: string | null;
   createdAt: number;
   count: number;
@@ -145,12 +165,10 @@ function aggregateRules(opinions: readonly StandingOpinionInput[]): StandingRule
   const sorted = [...opinions].sort((left, right) => right.createdAt - left.createdAt);
   const rules = new Map<string, StandingRule>();
   for (const opinion of sorted) {
-    const reason = opinion.reason.trim();
-    const changeRequest = opinion.changeRequest.trim();
-    if (!reason && !changeRequest) continue;
-    const paragraphLabel = opinion.paragraphLabel?.trim()
-      || paragraphLabelFromText(`${reason}\n${changeRequest}`);
-    const key = opinionDedupeKey([paragraphLabel, reason, changeRequest].filter(Boolean).join(" "));
+    const text = opinion.text.trim();
+    if (!text) continue;
+    const paragraphLabel = opinion.paragraphLabel?.trim() || paragraphLabelFromText(text);
+    const key = opinionDedupeKey([paragraphLabel, text].filter(Boolean).join(" "));
     const existing = rules.get(key);
     if (existing) {
       existing.count += 1;
@@ -158,11 +176,10 @@ function aggregateRules(opinions: readonly StandingOpinionInput[]): StandingRule
     }
     const category = opinion.category && isOpinionCategory(opinion.category)
       ? opinion.category
-      : classifyOpinion(reason, changeRequest);
+      : classifyOpinion(text, "");
     rules.set(key, {
       category,
-      reason,
-      changeRequest,
+      text,
       paragraphLabel,
       createdAt: opinion.createdAt,
       count: 1,
@@ -174,9 +191,7 @@ function aggregateRules(opinions: readonly StandingOpinionInput[]): StandingRule
 function ruleText(rule: StandingRule, index: number): string {
   const where = rule.paragraphLabel ? `（${rule.paragraphLabel}）` : "";
   const times = rule.count > 1 ? `（出现 ${rule.count} 次）` : "";
-  const lines = [`${index}. 应该怎么改：${rule.changeRequest}${where}${times}`];
-  if (rule.reason) lines.push(`   为什么不合适：${rule.reason}`);
-  return lines.join("\n");
+  return `${index}. ${rule.text}${where}${times}`;
 }
 
 function formatStandingBlock(rules: readonly StandingRule[], budget: number): string | null {

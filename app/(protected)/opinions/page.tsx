@@ -9,11 +9,12 @@ import { apiFetch, errorMessage } from "../../lib/api";
 
 const categories = ["结构", "内容", "语言", "字数", "其他"] as const;
 type OpinionCategory = (typeof categories)[number];
+type OpinionScope = "standing" | "essay";
 
 interface GradingOpinion {
   id: string;
-  reason: string;
-  changeRequest: string;
+  text: string;
+  scope: OpinionScope | string;
   paragraphLabel: string | null;
   category: OpinionCategory | string;
   sourceStudentName: string;
@@ -23,8 +24,7 @@ interface GradingOpinion {
 }
 
 interface OpinionDraft {
-  reason: string;
-  changeRequest: string;
+  text: string;
   category: OpinionCategory;
 }
 
@@ -54,10 +54,10 @@ function categoryCounts(opinions: GradingOpinion[]): Array<{ category: OpinionCa
   });
 }
 
-function repeatedChanges(opinions: GradingOpinion[]): Array<{ text: string; count: number }> {
+function repeatedTexts(opinions: GradingOpinion[]): Array<{ text: string; count: number }> {
   const counts = new Map<string, { text: string; count: number }>();
   for (const opinion of opinions) {
-    const text = opinion.changeRequest.trim().replace(/\s+/gu, " ");
+    const text = opinion.text.trim().replace(/\s+/gu, " ");
     if (!text) continue;
     const key = text.toLocaleLowerCase("zh-CN");
     const current = counts.get(key);
@@ -65,6 +65,25 @@ function repeatedChanges(opinions: GradingOpinion[]): Array<{ text: string; coun
     else counts.set(key, { text, count: 1 });
   }
   return [...counts.values()].filter((item) => item.count > 1);
+}
+
+function OpinionStats({
+  label,
+  opinions,
+}: {
+  label: string;
+  opinions: GradingOpinion[];
+}) {
+  const counts = categoryCounts(opinions);
+  const repeats = repeatedTexts(opinions);
+  return (
+    <section className="opinion-stats" aria-label={label}>
+      <h2>{label}</h2>
+      <span>共 {opinions.length} 条</span>
+      {counts.map(({ category, count }) => <span key={category}>{category} {count} 次</span>)}
+      {repeats.map((item) => <span key={item.text}>相同内容「{item.text}」{item.count} 次</span>)}
+    </section>
+  );
 }
 
 export default function GradingOpinionsPage() {
@@ -80,9 +99,8 @@ export default function GradingOpinionsPage() {
       .then((loaded) => {
         if (!active) return;
         setOpinions(loaded);
-        setDrafts(Object.fromEntries(loaded.map((opinion) => [opinion.id, {
-          reason: opinion.reason,
-          changeRequest: opinion.changeRequest,
+        setDrafts(Object.fromEntries(loaded.filter((opinion) => opinion.scope === "standing").map((opinion) => [opinion.id, {
+          text: opinion.text,
           category: asCategory(opinion.category),
         }])));
       })
@@ -91,40 +109,33 @@ export default function GradingOpinionsPage() {
     return () => { active = false; };
   }, []);
 
+  const standing = opinions.filter((opinion) => opinion.scope === "standing");
+  const essay = opinions.filter((opinion) => opinion.scope !== "standing");
+
   function draftOf(opinion: GradingOpinion): OpinionDraft {
     return drafts[opinion.id] ?? {
-      reason: opinion.reason,
-      changeRequest: opinion.changeRequest,
+      text: opinion.text,
       category: asCategory(opinion.category),
     };
   }
 
   async function save(opinion: GradingOpinion) {
     const draft = draftOf(opinion);
-    const reason = draft.reason.trim();
-    const changeRequest = draft.changeRequest.trim();
-    if (!reason || !changeRequest) return;
-    if (
-      reason === opinion.reason
-      && changeRequest === opinion.changeRequest
-      && draft.category === asCategory(opinion.category)
-    ) return;
+    const text = draft.text.trim();
+    if (!text) return;
+    if (text === opinion.text && draft.category === asCategory(opinion.category)) return;
     setBusyId(opinion.id);
     setError("");
     try {
       const updated = await apiFetch<GradingOpinion>(`/api/grading-opinions/${encodeURIComponent(opinion.id)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ reason, changeRequest, category: draft.category }),
+        body: JSON.stringify({ text, category: draft.category }),
       });
       setOpinions((current) => current.map((item) => item.id === opinion.id ? updated : item));
       setDrafts((current) => ({
         ...current,
-        [opinion.id]: {
-          reason: updated.reason,
-          changeRequest: updated.changeRequest,
-          category: asCategory(updated.category),
-        },
+        [opinion.id]: { text: updated.text, category: asCategory(updated.category) },
       }));
     } catch (caught) {
       setError(errorMessage(caught));
@@ -146,35 +157,25 @@ export default function GradingOpinionsPage() {
     }
   }
 
-  const counts = categoryCounts(opinions);
-  const repeats = repeatedChanges(opinions);
-
   return (
     <div className="app-shell">
       <AppHeader compact />
       <main className="narrow-page">
         <div className="page-title">
           <p className="eyebrow">长期批改要求</p>
-          <h1>批改意见存档</h1>
-          <p>批量审核里点「不合适」后，按「提交后台修改并继续」写下的两项说明会留在这里。之后这位老师的新批改和重新批改都会带上归纳后的规则。</p>
+          <h1>长期批改规则</h1>
+          <p>这里只管理退回弹窗第一框「结构问题 / 共性问题」。这些规则对之后所有作文的批改和重新批改生效。第二框「内容建议」只留在对应作文下，不在这里修改。</p>
         </div>
         {error ? <ErrorBanner message={error} /> : null}
-        {loading ? <p className="loading-note" role="status">正在读取批改意见…</p> : null}
-        {!loading && opinions.length === 0 ? <p className="muted">还没有存档的批改意见。</p> : null}
-        {!loading && opinions.length > 0 ? (
-          <section className="opinion-stats" aria-label="批改意见统计">
-            <span>共 {opinions.length} 条</span>
-            {counts.map(({ category, count }) => <span key={category}>{category} {count} 次</span>)}
-            {repeats.map((item) => <span key={item.text}>相同改法「{item.text}」{item.count} 次</span>)}
-          </section>
-        ) : null}
+        {loading ? <p className="loading-note" role="status">正在读取批改规则…</p> : null}
+        {!loading ? <OpinionStats label="长期规则统计" opinions={standing} /> : null}
+        {!loading ? <OpinionStats label="仅当前文章统计" opinions={essay} /> : null}
+        {!loading && standing.length === 0 ? <p className="muted">还没有长期批改规则。</p> : null}
         <div className="opinion-list">
-          {opinions.map((opinion) => {
+          {standing.map((opinion) => {
             const draft = draftOf(opinion);
-            const unchanged = draft.reason.trim() === opinion.reason
-              && draft.changeRequest.trim() === opinion.changeRequest
-              && draft.category === asCategory(opinion.category);
-            const incomplete = draft.reason.trim() === "" || draft.changeRequest.trim() === "";
+            const unchanged = draft.text.trim() === opinion.text && draft.category === asCategory(opinion.category);
+            const incomplete = draft.text.trim() === "";
             return (
               <article className="opinion-card" key={opinion.id}>
                 <p className="opinion-card-meta muted">
@@ -182,24 +183,13 @@ export default function GradingOpinionsPage() {
                   {opinion.paragraphLabel ? ` · ${opinion.paragraphLabel}` : ""}
                 </p>
                 <label>
-                  为什么不合适
+                  结构问题 / 共性问题
                   <textarea
-                    aria-label={`编辑${sourceLabel(opinion)}的为什么不合适`}
-                    value={draft.reason}
+                    aria-label={`编辑${sourceLabel(opinion)}的长期规则`}
+                    value={draft.text}
                     onChange={(event) => setDrafts((current) => ({
                       ...current,
-                      [opinion.id]: { ...draft, reason: event.target.value },
-                    }))}
-                  />
-                </label>
-                <label>
-                  应该怎么改
-                  <textarea
-                    aria-label={`编辑${sourceLabel(opinion)}的应该怎么改`}
-                    value={draft.changeRequest}
-                    onChange={(event) => setDrafts((current) => ({
-                      ...current,
-                      [opinion.id]: { ...draft, changeRequest: event.target.value },
+                      [opinion.id]: { ...draft, text: event.target.value },
                     }))}
                   />
                 </label>

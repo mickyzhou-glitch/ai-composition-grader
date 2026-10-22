@@ -182,7 +182,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .revision-dialog-body { display: grid; min-height: 0; gap: 16px; overflow-y: auto; padding: 18px 24px; }
 .revision-dialog-field { display: grid; gap: 7px; font-weight: 700; }
 .revision-dialog-field textarea { width: 100%; min-height: 116px; resize: vertical; }
+.revision-dialog-scope { margin: 0; color: var(--muted); font-size: .78rem; font-weight: 500; line-height: 1.45; }
 .revision-dialog-field small { color: var(--muted); font-size: .78rem; font-weight: 600; text-align: right; }
+.opinion-stats h2 { flex: 1 0 100%; margin: 8px 0 0; font-size: .95rem; }
+.opinion-stats:first-of-type h2 { margin-top: 0; }
 .revision-dialog-error { margin: 0; padding: 10px 12px; border-left: 3px solid var(--danger); background: #fff2f0; color: var(--danger); font-size: .88rem; font-weight: 700; }
 .revision-dialog-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 10px; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--surface); }
 .batch-export-view { width: min(1100px, calc(100% - 32px)); margin: 0 auto; padding: 20px 0 48px; }

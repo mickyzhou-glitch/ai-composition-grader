@@ -1,5 +1,5 @@
 import { listD1StandingOpinions } from "./d1-grading-opinions";
-import { describeGradingOpinion, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
+import { describeScopedOpinion, guidanceWithStandingOpinions, type OpinionScope } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -325,15 +325,15 @@ export class D1Reanalysis {
     this.assertRequestable(row, input.expectedRevision);
     const jobId = crypto.randomUUID();
     const now = Date.now();
-    const formattedGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
-    const describedOpinion = describeGradingOpinion(input.reason, input.changeRequest);
+    const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
+    const standingIssue = input.commonIssue ? describeScopedOpinion(input.commonIssue) : null;
+    const essaySuggestion = input.contentSuggestion ? describeScopedOpinion(input.contentSuggestion) : null;
     const standing = await listD1StandingOpinions(this.database, ownerId);
-    if (describedOpinion) {
+    if (standingIssue) {
       standing.unshift({
-        reason: describedOpinion.reason,
-        changeRequest: describedOpinion.changeRequest,
-        paragraphLabel: describedOpinion.paragraphLabel,
-        category: describedOpinion.category,
+        text: standingIssue.text,
+        paragraphLabel: standingIssue.paragraphLabel,
+        category: standingIssue.category,
         createdAt: now,
       });
     }
@@ -348,8 +348,11 @@ export class D1Reanalysis {
       teacherGuidance,
       mode,
     );
-    if (describedOpinion) {
-      statements.push(this.opinionStatement(ownerId, reviewId, row!, describedOpinion, jobId, now));
+    if (standingIssue) {
+      statements.push(this.opinionStatement(ownerId, reviewId, row!, standingIssue, "standing", jobId, now));
+    }
+    if (essaySuggestion) {
+      statements.push(this.opinionStatement(ownerId, reviewId, row!, essaySuggestion, "essay", jobId, now));
     }
     let outcomes: D1Outcome[];
     try {
@@ -604,24 +607,26 @@ export class D1Reanalysis {
     ownerId: string,
     reviewId: string,
     row: ReviewRow,
-    opinion: NonNullable<ReturnType<typeof describeGradingOpinion>>,
+    opinion: NonNullable<ReturnType<typeof describeScopedOpinion>>,
+    scope: OpinionScope,
     jobId: string,
     now: number,
   ): D1ReanalysisStatement {
     return this.database.prepare(`
       INSERT INTO grading_opinions (
-        id, owner_id, body, reason, change_request, paragraph_label, category,
+        id, owner_id, body, reason, change_request, paragraph_label, category, scope,
         source_review_id, source_job_id, source_student_name, source_class_name, source_title,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       crypto.randomUUID(),
       ownerId,
       opinion.body,
-      opinion.reason,
-      opinion.changeRequest,
+      "",
+      opinion.text,
       opinion.paragraphLabel,
       opinion.category,
+      scope,
       reviewId,
       jobId,
       row.student_name ?? "",

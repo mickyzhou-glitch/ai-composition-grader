@@ -47,7 +47,7 @@ describe("AppHeader", () => {
   it("为教师和管理员提供退出入口并保留设置权限规则", () => {
     const teacher = renderHeader("teacher");
     expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "批改意见存档" })).toHaveAttribute("href", "/opinions");
+    expect(screen.getByRole("link", { name: "长期批改规则" })).toHaveAttribute("href", "/opinions");
     expect(screen.queryByRole("link", { name: "设置" })).not.toBeInTheDocument();
     teacher.unmount();
 

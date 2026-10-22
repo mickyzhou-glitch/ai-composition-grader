@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS grading_opinions (
   change_request TEXT NOT NULL DEFAULT '',
   paragraph_label TEXT,
   category TEXT NOT NULL DEFAULT '其他',
+  scope TEXT NOT NULL DEFAULT 'essay',
   source_review_id TEXT,
   source_job_id TEXT,
   source_student_name TEXT NOT NULL DEFAULT '',
@@ -243,6 +244,7 @@ function migrateGradingOpinions(database: Database.Database): void {
     ["paragraph_label", "TEXT"],
     ["category", "TEXT NOT NULL DEFAULT '其他'"],
     ["source_job_id", "TEXT"],
+    ["scope", "TEXT NOT NULL DEFAULT 'essay'"],
   ];
   for (const [name, definition] of additions) {
     if (!columns.has(name)) database.exec(`ALTER TABLE grading_opinions ADD COLUMN ${name} ${definition}`);

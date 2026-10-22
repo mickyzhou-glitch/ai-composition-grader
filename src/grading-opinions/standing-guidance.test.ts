@@ -74,18 +74,17 @@ describe("grading opinion standing guidance", () => {
 
   it("相同意见合并成一条规则并按类别列出次数", () => {
     const guidance = guidanceWithStandingOpinions("本次只改结尾", [
-      { reason: "结构散", changeRequest: "严格五段", createdAt: 1 },
-      { reason: "结构散", changeRequest: "严格五段", createdAt: 3 },
-      { reason: "离题", changeRequest: "只写一件事", createdAt: 2 },
+      { text: "严格五段", category: "结构", createdAt: 1 },
+      { text: "严格五段", category: "结构", createdAt: 3 },
+      { text: "只写一件事", category: "内容", createdAt: 2 },
     ]);
 
     expect(guidance).toContain("本次只改结尾");
     expect(guidance).toContain(STANDING_GUIDANCE_HEADER);
     expect(guidance).toContain("【结构】");
-    expect(guidance).toContain("1. 应该怎么改：严格五段（出现 2 次）");
-    expect(guidance).toContain("   为什么不合适：结构散");
+    expect(guidance).toContain("1. 严格五段（出现 2 次）");
     expect(guidance).toContain("【内容】");
-    expect(guidance).toContain("1. 应该怎么改：只写一件事");
+    expect(guidance).toContain("1. 只写一件事");
     expect(guidance!.indexOf("【内容】")).toBeGreaterThan(guidance!.indexOf("【结构】"));
     expect(guidance?.match(/严格五段/gu)).toHaveLength(1);
   });
@@ -93,9 +92,9 @@ describe("grading opinion standing guidance", () => {
   it("段落位置写进规则，超长时丢掉放不下的旧规则", () => {
     const user = "意".repeat(1_100);
     const guidance = guidanceWithStandingOpinions(user, [
-      { reason: "旧", changeRequest: "旧".repeat(900), createdAt: 1 },
-      { reason: "中", changeRequest: "中".repeat(900), createdAt: 2 },
-      { reason: "新", changeRequest: `第2段${"新".repeat(900)}`, createdAt: 3 },
+      { text: "旧".repeat(900), createdAt: 1 },
+      { text: "中".repeat(900), createdAt: 2 },
+      { text: `第2段${"新".repeat(900)}`, createdAt: 3 },
     ]);
 
     expect(guidance?.startsWith(user)).toBe(true);
@@ -108,11 +107,11 @@ describe("grading opinion standing guidance", () => {
 
   it("单条超长规则放不下时，仍带上后面较短的规则", () => {
     const guidance = guidanceWithStandingOpinions(null, [
-      { reason: "短", changeRequest: "短要求", createdAt: 1 },
-      { reason: "长", changeRequest: "长".repeat(MAX_STANDING_GUIDANCE_CHARS), createdAt: 2 },
+      { text: "短要求", createdAt: 1 },
+      { text: "长".repeat(MAX_STANDING_GUIDANCE_CHARS), createdAt: 2 },
     ]);
 
-    expect(guidance).toContain("1. 应该怎么改：短要求");
+    expect(guidance).toContain("1. 短要求");
     expect(guidance).not.toContain("长".repeat(20));
     expect(guidance!.length).toBeLessThanOrEqual(MAX_STANDING_GUIDANCE_CHARS);
   });

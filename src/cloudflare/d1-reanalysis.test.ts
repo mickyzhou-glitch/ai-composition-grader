@@ -195,8 +195,8 @@ describe("D1Reanalysis", () => {
 
     const result = await new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
       expectedRevision: 3,
-      reason: "原批改不合适",
-      changeRequest: "重新关注结尾",
+      commonIssue: "重新关注结尾",
+      contentSuggestion: "补一件事",
     });
 
     expect(database.batch).toHaveBeenCalledOnce();
@@ -216,18 +216,13 @@ describe("D1Reanalysis", () => {
     expect(update.sql).not.toContain("sourceRevision");
     expect(insert.bindings).toContain("full");
     expect(insert.bindings).toContain(guidanceWithStandingOpinions(
-      "[不合适原因]\n原批改不合适\n[修改要求]\n重新关注结尾",
-      [{ reason: "原批改不合适", changeRequest: "重新关注结尾", createdAt: 1 }],
+      "[结构问题 / 共性问题]\n重新关注结尾\n[内容建议]\n补一件事",
+      [{ text: "重新关注结尾", category: "结构", createdAt: 1 }],
     ));
-    const archived = statements.find(({ sql }) => /INSERT INTO grading_opinions/u.test(sql));
-    expect(archived?.bindings).toEqual(expect.arrayContaining([
-      "原批改不合适",
-      "重新关注结尾",
-      "结构",
-      "小明",
-      "春天",
-      "job-1",
-    ]));
+    const archived = statements.filter(({ sql }) => /INSERT INTO grading_opinions/u.test(sql));
+    expect(archived).toHaveLength(2);
+    expect(archived[0]?.bindings).toEqual(expect.arrayContaining(["重新关注结尾", "结构", "standing", "小明", "春天", "job-1"]));
+    expect(archived[1]?.bindings).toEqual(expect.arrayContaining(["补一件事", "内容", "essay", "job-1"]));
   });
 
   it("逐段报告与 OCR v2 单篇退回排 content_only", async () => {
@@ -250,8 +245,8 @@ describe("D1Reanalysis", () => {
 
     const result = await new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
       expectedRevision: 3,
-      reason: "原批改不合适",
-      changeRequest: "重新关注结尾",
+      commonIssue: "重新关注结尾",
+      contentSuggestion: "补一件事",
     });
 
     expect(result.job).toMatchObject({ mode: "content_only" });
@@ -392,8 +387,8 @@ describe("D1Reanalysis", () => {
 
     const result = await new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
       expectedRevision: 3,
-      reason: "分析失败",
-      changeRequest: "从原图重新识别",
+      commonIssue: "分析失败",
+      contentSuggestion: "从原图重新识别",
     });
 
     expect(result.job).toMatchObject({ mode: "full" });
@@ -412,8 +407,8 @@ describe("D1Reanalysis", () => {
 
     await expect(new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
       expectedRevision: 3,
-      reason: "原因",
-      changeRequest: "要求",
+      commonIssue: "原因",
+      contentSuggestion: "要求",
     })).rejects.toMatchObject({ code: "ANALYSIS_ACTIVE" });
   });
 
