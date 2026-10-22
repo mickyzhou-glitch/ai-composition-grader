@@ -138,6 +138,23 @@ function mockReviewApi(
 }
 
 describe("BatchReviewPage", () => {
+  it("审核操作栏在三栏上方，底部不再有重复按钮", async () => {
+    mockReviewApi([queueItem("review-1", "张小明", 1)], { currentReport: paragraphReport });
+    const { container } = render(<BatchReviewPage />);
+    await screen.findByRole("textbox", { name: "第 1 段改后全段" });
+    const toolbar = screen.getByRole("toolbar", { name: "审核操作" });
+    expect(toolbar).toHaveClass("batch-review-actionbar");
+    expect(toolbar).toHaveTextContent("修改将在审核确认时保存");
+    expect(screen.getAllByRole("button", { name: "不合适" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "审核通过并进入下一篇" })).toHaveLength(1);
+    expect(toolbar).toContainElement(screen.getByRole("button", { name: "不合适" }));
+    expect(toolbar).toContainElement(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
+    const layout = container.querySelector(".batch-review-layout")!;
+    const essayPane = layout.querySelector(".batch-essay-pane")!;
+    expect(toolbar.compareDocumentPosition(essayPane) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector("footer.batch-review-footer, .batch-review-footer")).toBeNull();
+  });
+
   it("preserves unsaved edits when class filtering keeps the current review visible", async () => {
     mockReviewApi([
       { ...queueItem("review-1", "张小明", 1), className: "六（1）班" },

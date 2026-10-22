@@ -149,7 +149,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .segmented-control { display: inline-flex; padding: 3px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
 .segmented-control button { min-height: 34px; padding: 6px 12px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font-weight: 700; }
 .segmented-control button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgb(40 34 28 / 12%); }
-.batch-review-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(360px, 1.15fr) minmax(340px, .85fr); grid-template-rows: minmax(0, 1fr) 64px; height: calc(100dvh - 146px); min-height: 560px; }
+.batch-review-layout { display: grid; grid-template-columns: minmax(180px, 240px) minmax(360px, 1.15fr) minmax(340px, .85fr); grid-template-rows: auto minmax(0, 1fr); height: calc(100dvh - 146px); min-height: 560px; }
 .batch-queue, .batch-essay-pane, .batch-report-pane { min-width: 0; min-height: 0; overflow: auto; }
 .batch-queue { grid-row: 1 / 3; padding: 16px 12px; border-right: 1px solid var(--line); background: var(--surface); }
 .batch-queue > label { display: grid; gap: 6px; font-size: .8rem; font-weight: 700; color: var(--muted); }
@@ -160,6 +160,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-queue-list span { grid-row: 1 / 3; align-self: center; color: var(--muted); font-variant-numeric: tabular-nums; }
 .batch-queue-list b, .batch-queue-list small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .batch-queue-list small { color: var(--muted); }
+.batch-essay-pane, .batch-report-pane { grid-row: 2; }
 .batch-essay-pane { padding: 18px; border-right: 1px solid var(--line); background: #f2f1ed; }
 .batch-pane-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
 .batch-pane-heading h2 { margin: 0; font-size: 1.35rem; overflow-wrap: anywhere; }
@@ -170,9 +171,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-essay-content figcaption { margin-top: 5px; color: var(--muted); font-size: .8rem; text-align: center; }
 .batch-report-pane { padding: 16px; background: var(--paper); }
 .batch-report-pane .report-editor { padding-bottom: 20px; }
-.batch-review-footer { grid-column: 2 / 4; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--surface); box-shadow: 0 -3px 10px rgb(40 34 28 / 7%); }
-.batch-review-footer span { color: var(--muted); font-size: .85rem; }
-.batch-review-footer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+/* 审核操作栏在三栏上方吸顶：桌面端各栏在下方各自滚动，窄屏随页面滚动时贴在视口顶部。 */
+.batch-review-actionbar { grid-column: 2 / 4; grid-row: 1; position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); box-shadow: 0 3px 10px rgb(40 34 28 / 7%); }
+.batch-review-actionbar span { color: var(--muted); font-size: .85rem; }
+.batch-review-actionbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .revision-job-notice { width: min(1100px, calc(100% - 32px)); margin: 12px auto 0; padding: 10px 12px; border: 1px solid #e7c7a6; background: #fff8ef; color: #7a481e; }
 .revision-dialog-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; padding: 20px; place-items: center; background: rgb(22 27 25 / 48%); }
 .revision-dialog { display: flex; width: min(560px, 100%); max-height: min(760px, calc(100dvh - 40px)); overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 20px 55px rgb(22 27 25 / 22%); }
@@ -530,10 +532,10 @@ textarea { min-height: 100px; resize: vertical; }
   .batch-review-layout { display: block; height: auto; min-height: 0; }
   .batch-queue { max-height: 250px; border-right: 0; border-bottom: 1px solid var(--line); }
   .batch-essay-pane, .batch-report-pane { overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
-  .batch-review-footer { position: sticky; bottom: 0; z-index: 10; flex-wrap: wrap; }
-  .batch-review-footer .button { flex: 1 1 260px; }
-  .batch-review-footer-actions { width: 100%; }
-  .batch-review-footer-actions .button { flex: 1 1 220px; }
+  .batch-review-actionbar { flex-wrap: wrap; }
+  .batch-review-actionbar .button { flex: 1 1 260px; }
+  .batch-review-actionbar-actions { width: 100%; }
+  .batch-review-actionbar-actions .button { flex: 1 1 220px; }
   .review-export-comments { grid-template-columns: 1fr; }
   .batch-export-actions { align-items: flex-start; flex-direction: column; }
   .batch-export-action-buttons { width: 100%; justify-content: stretch; }
