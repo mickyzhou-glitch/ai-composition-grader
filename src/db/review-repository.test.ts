@@ -301,6 +301,15 @@ describe("ReviewRepository", () => {
     expect(stored.rewrittenEssay).toEqual(essay);
   });
 
+  it("批量审核队列排除分析失败（含保留旧报告）的作文", () => {
+    repository.create(OWNER_ID, { id: "review-ok", config });
+    repository.updateReport(OWNER_ID, "review-ok", report);
+    repository.create(OWNER_ID, { id: "review-failed", config });
+    repository.updateReport(OWNER_ID, "review-failed", report);
+    sqlite.prepare("UPDATE reviews SET status = 'failed' WHERE id = 'review-failed'").run();
+    expect(repository.listTeacherReviewQueue(OWNER_ID).map(({ id }) => id)).toEqual(["review-ok"]);
+  });
+
   it("原子保存教师修改并标记审核", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const ready = repository.updateReport(OWNER_ID, "review-1", report);

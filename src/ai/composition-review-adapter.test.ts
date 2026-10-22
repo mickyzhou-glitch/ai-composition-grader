@@ -207,6 +207,41 @@ describe("CompositionReviewAdapter", () => {
     })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "rewritten_essay_paragraph_count_expected_5" });
   });
 
+  it("解析前去掉代码块和前后多余文字", async () => {
+    const harness = setup();
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: `好的，以下是批改结果：\n\`\`\`json\n${JSON.stringify(validResult)}\n\`\`\`\n如需调整请告诉我。` } }] });
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("模型漏掉 annotationAnchors 时按无批注处理，不判失败", async () => {
+    const { annotationAnchors: _omit, ...withoutAnchors } = validResult;
+    const harness = setup({ response: withoutAnchors });
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: [] });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("输出被截断时调高输出上限自动重试一次", async () => {
+    const harness = setup();
+    const text = JSON.stringify(validResult);
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: text.slice(0, 200) }, finish_reason: "length" }] } as never);
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect((harness.create.mock.calls[1][0] as { max_tokens?: number }).max_tokens).toBe(8192);
+    expect((harness.create.mock.calls[0][0] as { max_tokens?: number }).max_tokens).toBeUndefined();
+  });
+
+  it("重试后仍被截断时报 output_truncated", async () => {
+    const harness = setup();
+    harness.create.mockResolvedValue({ choices: [{ message: { content: "{\"report\":" }, finish_reason: "length" }] } as never);
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "output_truncated" });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
   it("只向内容模型发送有序段落文字并返回逐段报告", async () => {
     const harness = setup();
 
@@ -642,6 +677,36 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("按这 3 个结构段归组");
     expect(prompt).toContain("对应原文第 x–y 段");
     expect(prompt).not.toContain("两者段数独立");
+  });
+
+  it("结构段组数正确但原文范围标错时由程序重新分配范围（张天乐/姬嘉言）", async () => {
+    const source = ["一。", "二。", "三。", "四。"].map((text, index) => ({ id: `paragraph-${index + 1}`, text }));
+    const essay = ["甲。", "乙。", "丙。"];
+    const wrong = {
+      ...validResult,
+      annotationAnchors: [],
+      report: {
+        ...report,
+        rewrittenEssay: essay,
+        paragraphReviews: essay.map((text, index) => ({
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: index + 1,
+          sourceParagraphEnd: index + 1,
+          suggestions: [{ advice: `建议${index}` }],
+          revisedText: text,
+        })),
+      },
+    };
+    const harness = setup({ response: wrong });
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, structureRequirements: "严格三段式：开篇、经过、感悟。" },
+      paragraphs: source,
+      studentName: "小艾",
+    });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    expect(result.report.paragraphReviews.map((item) => [item.paragraphId, item.sourceParagraphStart, item.sourceParagraphEnd]))
+      .toEqual([["paragraph-1", 1, 2], ["paragraph-3", 3, 3], ["paragraph-4", 4, 4]]);
+    expect(result.report.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
   });
 
   it("结构段的改后全段与范文不一致时先重试，仍不一致则改成与范文相同", async () => {

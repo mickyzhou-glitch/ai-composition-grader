@@ -67,7 +67,15 @@ export function describePublicAnalysisFailure(input: {
     summary = `批注找不到对应段落${paragraph ? `（${paragraph}）` : ""}，请重新分析`;
   } else if (errorCode.includes("annotation_order")) {
     summary = "批注顺序对不上原文，请重新分析";
-  } else if (/schema|json|unrecognized_keys|invalid_type|parse/iu.test(errorCode)) {
+  } else if (errorCode.includes("output_truncated")) {
+    summary = "批改结果输出被截断（超出模型输出上限），已自动重试仍失败，请重新分析";
+  } else if (errorCode.includes("json_parse")) {
+    summary = "批改结果不是合法 JSON（可能夹带多余文字或未转义字符），请重新分析";
+  } else if (/schema_/u.test(errorCode)) {
+    const field = errorCode.match(/schema_(.+?)_(invalid_type|unrecognized_keys|too_small|too_big|invalid_value|invalid_enum_value|invalid_string|custom|invalid_union)/u);
+    const kind = errorCode.includes("unrecognized_keys") ? "多出字段" : errorCode.includes("invalid_type") ? "缺少字段或类型不对" : "字段不合要求";
+    summary = `批改结果结构不符：${field ? `「${field[1]}」` : ""}${kind}，请重新分析`;
+  } else if (/json|unrecognized_keys|invalid_type|parse/iu.test(errorCode)) {
     summary = "批改结果 JSON 解析失败，请重新分析";
   } else if (errorCode === "AI_IMAGE_UNAVAILABLE" || errorCode === "AI_IMAGE_UNSUPPORTED") {
     summary = image

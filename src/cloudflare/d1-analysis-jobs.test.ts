@@ -5,7 +5,7 @@ import { D1AnalysisJobs } from "./d1-analysis-jobs";
 
 describe("D1AnalysisJobs", () => {
   it.each([
-    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "批改结果 JSON 解析失败，请重新分析"],
+    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "批改结果结构不符：「report_sampleParagraphs_0_suggestion」缺少字段或类型不对，请重新分析"],
     ["AI_INVALID_RESPONSE_rewritten_essay_chars_3_min_180_actual_170", "AI 生成的范文未满足指定字数，请重新生成整篇批改"],
     ["AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_expected_5", "AI 生成的范文未满足指定段数，请重新生成整篇批改"],
   ])("准确说明生成失败原因：%s", async (errorCode, message) => {

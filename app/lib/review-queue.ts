@@ -4,7 +4,16 @@ import type { ReviewView } from "./types";
 
 export type ReviewDisplayStatus = ReviewStatus | "reviewed";
 
-type ReviewLifecycleFields = Pick<ReviewView, "status" | "teacherReviewedAt">;
+type ReviewLifecycleFields = Pick<ReviewView, "status" | "teacherReviewedAt"> & { report?: unknown };
+
+/**
+ * 审核失败：分析失败（含保留旧报告但最新一次分析失败，状态即 failed），
+ * 或分析结束却没有可用报告。审核不通过（rejected）不算在内。
+ */
+export function isReviewFailed(review: ReviewLifecycleFields): boolean {
+  if (review.status === "failed") return true;
+  return review.status === "ready_for_review" && "report" in review && review.report == null;
+}
 
 export function normalizeStudentSearch(value: string): string {
   return value.trim().toLocaleLowerCase("zh-CN");
@@ -34,7 +43,7 @@ export function reviewDisplayStatus(review: ReviewLifecycleFields): ReviewDispla
   return isReviewedPendingExport(review) ? "reviewed" : review.status;
 }
 
-export type HistoryStatusFilter = "" | "draft" | "review" | "reviewed" | "exported" | "rejected";
+export type HistoryStatusFilter = "" | "draft" | "review" | "failed" | "reviewed" | "exported" | "rejected";
 
 export function matchesHistoryStatus(
   review: ReviewLifecycleFields,
@@ -44,8 +53,10 @@ export function matchesHistoryStatus(
   if (filter === "draft") return review.status === "draft";
   if (filter === "review") {
     return !review.teacherReviewedAt
-      && ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(review.status);
+      && !isReviewFailed(review)
+      && ["analyzing", "needs_better_images", "ready_for_review"].includes(review.status);
   }
+  if (filter === "failed") return isReviewFailed(review);
   if (filter === "reviewed") return isReviewedPendingExport(review);
   if (filter === "exported") return review.status === "exported";
   return review.status === "rejected";

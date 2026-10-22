@@ -4,6 +4,7 @@ import {
   exportEligibility,
   filterReviewsByStudentName,
   isReviewedPendingExport,
+  isReviewFailed,
   matchesHistoryStatus,
   normalizeStudentSearch,
   reviewDisplayStatus,
@@ -87,5 +88,21 @@ describe("review queue helpers", () => {
     expect(matchesHistoryStatus({ status: "rejected", teacherReviewedAt: null }, "rejected")).toBe(true);
     expect(matchesHistoryStatus({ status: "ready_for_review", teacherReviewedAt: null }, "rejected")).toBe(false);
     expect(matchesHistoryStatus({ status: "rejected", teacherReviewedAt: null }, "review")).toBe(false);
+    expect(matchesHistoryStatus({ status: "rejected", teacherReviewedAt: null }, "failed")).toBe(false);
+  });
+
+  it("审核失败单独筛选，并从待审核中排除", () => {
+    const failedNoReport = { status: "failed" as const, teacherReviewedAt: null, report: null };
+    const failedWithOldReport = { status: "failed" as const, teacherReviewedAt: null, report: { version: 2 } };
+    const readyWithoutReport = { status: "ready_for_review" as const, teacherReviewedAt: null, report: null };
+    const ready = { status: "ready_for_review" as const, teacherReviewedAt: null, report: { version: 2 } };
+    for (const item of [failedNoReport, failedWithOldReport, readyWithoutReport]) {
+      expect(isReviewFailed(item)).toBe(true);
+      expect(matchesHistoryStatus(item, "failed")).toBe(true);
+      expect(matchesHistoryStatus(item, "review")).toBe(false);
+    }
+    expect(isReviewFailed(ready)).toBe(false);
+    expect(matchesHistoryStatus(ready, "review")).toBe(true);
+    expect(matchesHistoryStatus(ready, "failed")).toBe(false);
   });
 });

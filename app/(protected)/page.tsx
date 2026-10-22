@@ -13,7 +13,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadLegacyCachedPdf, downloadReview, downloadReviewArchive, type ExportFormat } from "../lib/review-export";
 import { chunkItems } from "../lib/failed-regrade";
-import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, matchesHistoryStatus, reviewDisplayStatus, type HistoryStatusFilter } from "../lib/review-queue";
+import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, isReviewFailed, matchesHistoryStatus, reviewDisplayStatus, type HistoryStatusFilter } from "../lib/review-queue";
 import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, PublicAnalysisJobView, ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal, isLegacyEvaluationReport } from "@/src/domain/contracts";
 import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
@@ -108,9 +108,8 @@ export default function Home() {
   );
   const stats = useMemo(() => ({
     draft: reviews.filter(({ status }) => status === "draft").length,
-    review: reviews.filter(({ status, teacherReviewedAt }) =>
-      !teacherReviewedAt && ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(status),
-    ).length,
+    review: reviews.filter((review) => matchesHistoryStatus(review, "review")).length,
+    failed: reviews.filter(isReviewFailed).length,
     reviewed: reviewedPending.length,
     exported: reviews.filter(({ status }) => status === "exported").length,
     rejected: reviews.filter(({ status }) => status === "rejected").length,
@@ -384,6 +383,7 @@ export default function Home() {
         <dl className="stats-grid" aria-label="批改统计">
           <div><dt>草稿</dt><dd>{stats.draft}</dd></div>
           <div><dt>待复核</dt><dd>{stats.review}</dd></div>
+          <div><dt>审核失败</dt><dd>{stats.failed}</dd></div>
           <div><dt>已复核</dt><dd>{stats.reviewed}</dd></div>
           <div><dt>已导出</dt><dd>{stats.exported}</dd></div>
           <div><dt>审核不通过</dt><dd>{stats.rejected}</dd></div>
@@ -402,6 +402,7 @@ export default function Home() {
                 <option value="">全部</option>
                 <option value="draft">草稿</option>
                 <option value="review">待复核</option>
+                <option value="failed">审核失败</option>
                 <option value="reviewed">已复核</option>
                 <option value="exported">已导出</option>
                 <option value="rejected">审核不通过</option>

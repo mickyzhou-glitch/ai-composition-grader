@@ -13,7 +13,10 @@ import {
   paragraphAnnotationAnchorSchema,
   type ParagraphAnnotationAnchor,
 } from "../ocr/contracts";
-import { completionContent, parseJsonResponse, roleClient } from "./adapter-shared";
+import { completionWithFinish, parseJsonResponse, roleClient, TruncatedOutputError } from "./adapter-shared";
+
+/** Output cap used when the first answer hit the provider default limit. */
+export const CONTENT_RETRY_MAX_TOKENS = 8192;
 import {
   AiAdapterError,
   type AiSettingsSource,
@@ -31,7 +34,8 @@ const resultSchema = z.object({
   // AI may repeat metadata outside the declared shape; discard it while
   // keeping required report fields and annotation anchors strictly validated.
   report: paragraphEvaluationReportSchema.strip(),
-  annotationAnchors: z.array(paragraphAnnotationAnchorSchema),
+  // 模型偶尔漏掉整个批注数组；按无批注处理，报告本身仍严格校验。
+  annotationAnchors: z.array(paragraphAnnotationAnchorSchema).default([]),
 });
 
 export interface AnalyzeOcrTextInput {
@@ -252,6 +256,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
 }
 
 function validationCode(error: unknown): string {
+  if (error instanceof TruncatedOutputError) return "output_truncated";
   if (error instanceof SyntaxError) return "json_parse";
   if (error instanceof z.ZodError) {
     const issue = error.issues[0];
@@ -408,7 +413,7 @@ function assertStructureGroups(
     return placed;
   }
   let cursor = 0;
-  reviews.forEach((review) => {
+  const covered = reviews.every((review) => {
     const start = review.sourceParagraphStart;
     const end = review.sourceParagraphEnd;
     const expectedId = input.paragraphs[cursor]?.id;
@@ -419,14 +424,25 @@ function assertStructureGroups(
       || end > input.paragraphs.length
       || review.paragraphId !== expectedId
     ) {
-      throw new Error("paragraphReviews must cover original paragraphs in order");
+      return false;
     }
     cursor = end;
-  });
-  if (cursor !== input.paragraphs.length) {
-    throw new Error("paragraphReviews must cover original paragraphs in order");
-  }
-  const aligned = alignRevisedText ? alignGroupedRevisedText(report) : report;
+    return true;
+  }) && cursor === input.paragraphs.length;
+  // 组数对但原文范围标错/漏标：范围由程序按范文段数重新分配，不因此判失败。
+  const ranged = covered ? report : {
+    ...report,
+    paragraphReviews: reviews.map((review, index) => {
+      const range = allocateSourceRanges(input.paragraphs.length, groups)[index]!;
+      return {
+        ...review,
+        paragraphId: input.paragraphs[range.start - 1]!.id,
+        sourceParagraphStart: range.start,
+        sourceParagraphEnd: range.end,
+      };
+    }),
+  };
+  const aligned = alignRevisedText || !covered ? alignGroupedRevisedText(ranged) : ranged;
   aligned.paragraphReviews.forEach((review, index) => {
     if (review.revisedText !== aligned.rewrittenEssay?.[index]) {
       throw new Error(`paragraph_review_revised_mismatch_${index + 1}`);
@@ -519,13 +535,20 @@ export class CompositionReviewAdapter {
       ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
     };
     const prompt = contentPrompt(safeInput);
-    const content = await completionContent(client, {
-      ...requestOptions,
-      messages: [
-        { role: "system", content: prompt },
-        { role: "user", content: JSON.stringify({ paragraphs }) },
-      ],
-    });
+    const messages = [
+      { role: "system", content: prompt },
+      { role: "user", content: JSON.stringify({ paragraphs }) },
+    ];
+    const first = await completionWithFinish(client, { ...requestOptions, messages });
+    let content = first.content;
+    if (first.truncated) {
+      // 输出被截断：调高输出上限重试一次。
+      const retry = await completionWithFinish(client, { ...requestOptions, max_tokens: CONTENT_RETRY_MAX_TOKENS, messages });
+      if (retry.truncated) {
+        throw new AiAdapterError("AI_INVALID_RESPONSE", "作文内容模型输出被截断", 502, undefined, "output_truncated");
+      }
+      content = retry.content;
+    }
     try {
       return validateContentResult(content, safeInput);
     } catch (initialError) {
@@ -533,8 +556,9 @@ export class CompositionReviewAdapter {
       const previous = lengthRepair
         ? resultSchema.parse(dropUnrecognizedKeys(parseJsonResponse(content), resultSchema))
         : null;
-      const repaired = await completionContent(client, {
+      const repairedResult = await completionWithFinish(client, {
         ...requestOptions,
+        max_tokens: CONTENT_RETRY_MAX_TOKENS,
         messages: lengthRepair ? [
           { role: "system", content: [
             "你负责修正一篇作文的完整范文。只重写正文，不生成点评或批注。保持原文事实，不虚构关键经历，满足教师的结构、详略和最新修改要求。",
@@ -565,8 +589,10 @@ export class CompositionReviewAdapter {
           },
         ],
       });
+      const repaired = repairedResult.content;
       let repairedContent = repaired;
       try {
+        if (repairedResult.truncated) throw new TruncatedOutputError();
         if (previous) {
           const { rewrittenEssay } = z.object({
             rewrittenEssay: paragraphEvaluationReportSchema.shape.rewrittenEssay.unwrap(),

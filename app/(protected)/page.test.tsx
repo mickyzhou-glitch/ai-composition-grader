@@ -197,6 +197,23 @@ describe("历史首页", () => {
     expect(screen.queryByText("学生：张小明")).not.toBeInTheDocument();
   });
 
+  it("分析失败的作文归入「审核失败」，不算待复核", async () => {
+    const failed = { ...exportableReview, id: "review-failed", status: "failed", studentName: "逯益帆", teacherReviewedAt: null };
+    const pending = { ...exportableReview, id: "review-pending", status: "ready_for_review", studentName: "张小明", teacherReviewedAt: null };
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([pending, failed]));
+    const user = userEvent.setup();
+    render(<Home />);
+    expect(await screen.findByText("学生：逯益帆")).toBeInTheDocument();
+    expect(screen.getByText("审核失败", { selector: "dt" }).parentElement).toHaveTextContent("1");
+    expect(screen.getByText("待复核", { selector: "dt" }).parentElement).toHaveTextContent("1");
+    await user.selectOptions(screen.getByLabelText("筛选批改状态"), "failed");
+    expect(screen.getByText("学生：逯益帆")).toBeInTheDocument();
+    expect(screen.queryByText("学生：张小明")).not.toBeInTheDocument();
+    await user.selectOptions(screen.getByLabelText("筛选批改状态"), "review");
+    expect(screen.getByText("学生：张小明")).toBeInTheDocument();
+    expect(screen.queryByText("学生：逯益帆")).not.toBeInTheDocument();
+  });
+
   it("可直接按学生姓名搜索且不匹配作文题目", async () => {
     const reviews = [
       review,
