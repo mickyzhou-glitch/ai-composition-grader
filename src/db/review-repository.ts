@@ -1,3 +1,4 @@
+import { syncEssayBeforeApproval } from "../domain/essay-paragraph-sync";
 import { and, asc, desc, eq, gt, inArray, isNull, isNotNull, lt, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
@@ -733,7 +734,7 @@ export class ReviewRepository {
     const report =
       input.report !== undefined
         ? markReviewed
-          ? validateReport(input.report, { config, ocr: checkpoint ?? undefined })
+          ? validateReport(syncEssayBeforeApproval(input.report, checkpoint), { config, ocr: checkpoint ?? undefined })
           : validateReport(input.report, {
               templateType: config.templateType,
               ocr: checkpoint ?? undefined,

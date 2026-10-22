@@ -1,3 +1,4 @@
+import { syncEssayBeforeApproval } from "../domain/essay-paragraph-sync";
 import { z } from "zod";
 
 import { deliveryReadiness } from "../delivery/readiness";
@@ -178,7 +179,8 @@ export class D1ReviewWriter {
     ) {
       throw new RevisionConflictError();
     }
-    const report = validateReport(parsed.report, { config, ocr: checkpoint });
+    // 审核通过时强制「同步到逐段」，通过后的作文两边一定一致，导出也用同步后的内容。
+    const report = validateReport(syncEssayBeforeApproval(parsed.report, checkpoint), { config, ocr: checkpoint });
     const now = Date.now();
     const nextRevision = parsed.expectedRevision + 1;
     const eligibility = `

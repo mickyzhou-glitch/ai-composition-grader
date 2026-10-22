@@ -229,6 +229,18 @@ describe("BatchReviewPage", () => {
     });
   });
 
+  it("审核通过前先按完整范文同步改后全段，再提交", async () => {
+    const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1)], {
+      currentReport: { ...paragraphReport, rewrittenEssay: ["范文里的第一段。"] } as typeof paragraphReport,
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+    expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue("我走上台。");
+    await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
+    const teacherCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/review-1/teacher-review");
+    expect(JSON.parse(String(teacherCall?.[1]?.body)).report.paragraphReviews[0].revisedText).toBe("范文里的第一段。");
+  });
+
   it("同段多条建议时批量审核仍是一段一个框", async () => {
     const multiAdvice = {
       ...paragraphReport,

@@ -2,6 +2,7 @@
 
 /* eslint-disable @next/next/no-img-element -- Protected review images use runtime API URLs. */
 
+import { syncEssayBeforeApproval } from "@/src/domain/essay-paragraph-sync";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -244,13 +245,16 @@ export function BatchReviewPage() {
       setError(paragraphReadiness.message);
       return;
     }
+    // 与「同步到逐段」相同：以完整范文为准覆盖改后全段，一致时不改。
+    const report = syncEssayBeforeApproval(review.report, review.ocr?.version === 2 ? review.ocr : null);
+    if (report !== review.report) setReview({ ...review, report });
     setSaving(true);
     setError("");
     try {
       const saved = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(review.id)}/teacher-review`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision: review.revision, studentName: review.studentName, report: review.report, annotations: review.annotations }),
+        body: JSON.stringify({ expectedRevision: review.revision, studentName: review.studentName, report, annotations: review.annotations }),
       });
       cacheRef.current.set(cacheKey(saved.id, saved.revision), saved);
       setReviewed((current) => [...current.filter(({ id }) => id !== saved.id), saved]);

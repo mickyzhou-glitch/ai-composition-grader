@@ -1,5 +1,6 @@
 "use client";
 
+import { syncEssayBeforeApproval } from "@/src/domain/essay-paragraph-sync";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -678,7 +679,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setError("");
     setNotice("");
     try {
-      if (dirty || !review.teacherReviewedAt) {
+      // 审核确认前执行「同步到逐段」：以完整范文为准，一致时不改。
+      const synced = syncEssayBeforeApproval(report, review.ocr?.version === 2 ? review.ocr : null);
+      const needsSync = synced !== report;
+      if (needsSync) setReport(synced);
+      if (dirty || needsSync || !review.teacherReviewedAt) {
         const reviewed = await apiFetch<ReviewView>(
           `/api/reviews/${encodeURIComponent(review.id)}/teacher-review`,
           {
@@ -688,7 +693,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
               expectedRevision: review.revision,
               studentName,
               ...(className !== (review.className ?? "") ? { className } : {}),
-              report,
+              report: synced,
               annotations,
             }),
           },

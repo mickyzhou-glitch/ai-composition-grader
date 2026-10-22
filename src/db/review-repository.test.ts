@@ -285,6 +285,22 @@ describe("ReviewRepository", () => {
     ]);
   });
 
+  it("审核通过时以完整范文为准同步改后全段，一致时不改", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    const ready = makeParagraphDeliveryExportable("review-1");
+    const essay = ["我站在领奖台上，为自己喝彩。"];
+    const saved = repository.completeTeacherReview(OWNER_ID, "review-1", {
+      expectedRevision: ready.revision,
+      studentName: "张小明",
+      report: { ...paragraphReport, rewrittenEssay: essay } as EvaluationReport,
+      annotations: [],
+    });
+    const stored = saved.report as { rewrittenEssay: string[]; paragraphReviews: Array<{ revisedText: string; suggestions: unknown }> };
+    expect(stored.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(stored.paragraphReviews[0]?.suggestions).toEqual((paragraphReport as { paragraphReviews: Array<{ suggestions: unknown }> }).paragraphReviews[0]!.suggestions);
+    expect(stored.rewrittenEssay).toEqual(essay);
+  });
+
   it("原子保存教师修改并标记审核", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const ready = repository.updateReport(OWNER_ID, "review-1", report);

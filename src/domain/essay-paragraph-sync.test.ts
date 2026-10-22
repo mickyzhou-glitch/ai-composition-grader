@@ -6,6 +6,7 @@ import {
   applyEssayToParagraphReviews,
   essayDiffersFromParagraphReviews,
   splitEssayIntoReviewParagraphs,
+  syncEssayBeforeApproval,
 } from "./essay-paragraph-sync";
 
 const diagnostics = {
@@ -114,5 +115,18 @@ describe("完整范文切到逐段改后全段", () => {
       paragraphId: "paragraph-3",
       revisedText: "结尾。",
     });
+  });
+
+  it("审核通过前的同步与「同步到逐段」一致，一致时返回原对象", () => {
+    const essay = ["一。", "二。", "三。"];
+    const ocr = { paragraphs: [{ id: "paragraph-2", paragraphIndex: 1 }, { id: "paragraph-1", paragraphIndex: 0 }] };
+    const source = report(essay, ["旧一", "旧二"]);
+    const synced = syncEssayBeforeApproval(source, ocr);
+    expect(synced).toEqual(applyEssayToParagraphReviews(source, ["paragraph-1", "paragraph-2"]));
+    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(syncEssayBeforeApproval(synced, ocr)).toBe(synced);
+    const same = report(essay, essay);
+    expect(syncEssayBeforeApproval(same, ocr)).toBe(same);
+    expect(syncEssayBeforeApproval(report(essay, ["甲", "乙", "丙"]), null).paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
   });
 });

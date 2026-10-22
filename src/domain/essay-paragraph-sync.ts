@@ -1,4 +1,10 @@
-import type { ParagraphEvaluationReport, ParagraphReview, ParagraphSuggestion } from "./contracts";
+import {
+  isParagraphEvaluationReport,
+  type EvaluationReport,
+  type ParagraphEvaluationReport,
+  type ParagraphReview,
+  type ParagraphSuggestion,
+} from "./contracts";
 import { UNCHANGED_PARAGRAPH_ACTION } from "./paragraph-actions";
 import {
   NO_SOURCE_PARAGRAPH_ACTION,
@@ -162,4 +168,23 @@ function graphemes(value: string): string[] {
     new Intl.Segmenter("zh-CN", { granularity: "grapheme" }).segment(value),
     ({ segment }) => segment,
   );
+}
+
+/**
+ * 审核通过前执行与「同步到逐段」相同的同步：以完整范文为准，按范文段数覆盖改后全段。
+ * 已一致时原样返回同一对象。旧版报告或没有完整范文时不改。
+ */
+export function syncEssayBeforeApproval<T extends EvaluationReport>(
+  report: T,
+  ocr?: object | null,
+): T {
+  if (!isParagraphEvaluationReport(report) || !report.rewrittenEssay?.length) return report;
+  // 只有 version 2 的 OCR 带自然段；version 1 没有 paragraphs，此时只在段数相同时覆盖文字。
+  const paragraphs = ocr && "paragraphs" in ocr && Array.isArray(ocr.paragraphs)
+    ? ocr.paragraphs as ReadonlyArray<{ id: string; paragraphIndex: number }>
+    : undefined;
+  const ids = paragraphs?.length
+    ? [...paragraphs].sort((left, right) => left.paragraphIndex - right.paragraphIndex).map(({ id }) => id)
+    : undefined;
+  return applyEssayToParagraphReviews(report, ids) as T;
 }
