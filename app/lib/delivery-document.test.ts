@@ -159,4 +159,28 @@ describe("buildDeliveryDocument", () => {
       revisionRuns: [{ kind: "unchanged", text: revised }],
     });
   });
+
+  it("同段多条建议导出时合并成一条，段落数不变", async () => {
+    const groupedReport = {
+      ...report,
+      paragraphReviews: [
+        {
+          ...report.paragraphReviews[0],
+          suggestions: [
+            { advice: "补听觉" },
+            { advice: "补动作" },
+            { advice: "收束主题" },
+          ],
+        },
+        report.paragraphReviews[1],
+      ],
+    };
+    const document = await buildDeliveryDocument({ ...review, report: groupedReport }, dependencies());
+
+    expect(document.paragraphs).toHaveLength(2);
+    expect(document.paragraphs[0]?.suggestions).toEqual([{
+      advice: "1. 补听觉\n2. 补动作\n3. 收束主题",
+    }]);
+    expect(document.paragraphs[1]?.suggestions).toEqual(report.paragraphReviews[1].suggestions);
+  });
 });

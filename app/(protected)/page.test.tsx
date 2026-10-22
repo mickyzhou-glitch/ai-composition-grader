@@ -163,11 +163,38 @@ describe("历史首页", () => {
     expect(await screen.findByText("已复核", { selector: ".status-badge" })).toBeInTheDocument();
     expect(screen.getByText("已复核", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("已导出", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.getByText("审核不通过", { selector: "dt" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "导出全部已复核" }));
     await user.click(screen.getByRole("menuitem", { name: "Word (.docx)" }));
 
     await waitFor(() => expect(reviewExports.batch).toHaveBeenCalledWith(["review-reviewed"], "docx"));
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/reviews");
+  });
+
+  it("审核不通过出现在统计和列表中，可筛选且不能导出", async () => {
+    const rejected = {
+      ...exportableReview,
+      id: "review-rejected",
+      status: "rejected",
+      studentName: "王若宁",
+      teacherReviewedAt: null,
+      rejectionReason: "完全离题",
+      rejectionChangeRequest: "不必再改",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([exportableReview, rejected]));
+    const user = userEvent.setup();
+    render(<Home />);
+
+    expect(await screen.findByText("审核不通过", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.getByText("审核不通过", { selector: "dt" }).parentElement).toHaveTextContent("1");
+    const exportButtons = screen.getAllByRole("button", { name: "导出《为自己鼓掌》" });
+    expect(exportButtons[0]).toBeEnabled();
+    expect(exportButtons[1]).toBeDisabled();
+    expect(screen.getByText("审核不通过的作文不能导出")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("筛选批改状态"), "rejected");
+    expect(screen.getByText("学生：王若宁")).toBeInTheDocument();
+    expect(screen.queryByText("学生：张小明")).not.toBeInTheDocument();
   });
 
   it("可直接按学生姓名搜索且不匹配作文题目", async () => {

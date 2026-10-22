@@ -3,6 +3,7 @@ import {
   paragraphEvaluationReportSchema,
   type ParagraphSuggestion,
 } from "@/src/domain/contracts";
+import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import {
   deliveryReadiness,
@@ -115,7 +116,7 @@ function graphemes(value: string): string[] {
 }
 
 function suggestionText(suggestions: ParagraphSuggestion[]) {
-  return suggestions.map((suggestion) => suggestion.advice).join("\n");
+  return mergedParagraphAction(suggestions);
 }
 
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {

@@ -295,7 +295,7 @@ describe("CompositionReviewAdapter", () => {
     });
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("不要写问题描述，也不要写修改示例");
-    expect(prompt).toContain("一两句话");
+    expect(prompt).toContain("恰好 1 项");
     expect(prompt).toContain("改后全段");
     expect(prompt).toContain("逐句比对");
     expect(prompt).toContain("下划线");
@@ -670,5 +670,36 @@ describe("CompositionReviewAdapter", () => {
       .toContain("paragraph_review_revised_mismatch");
     expect(result.report.paragraphReviews[0]?.revisedText).toBe(essay[0]);
     expect(result.report.rewrittenEssay).toEqual(essay);
+  });
+
+  it("同一段的多条建议合并成一条编号修改动作，不增加框", async () => {
+    const merged = {
+      ...validResult,
+      report: {
+        ...report,
+        paragraphReviews: report.paragraphReviews.map((review, index) => index === 0
+          ? {
+            ...review,
+            suggestions: [
+              { advice: "补听觉" },
+              { advice: "补动作" },
+              { advice: "收束主题" },
+            ],
+          }
+          : review),
+      },
+    };
+    const harness = setup({ response: merged });
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+
+    expect(result.report.paragraphReviews).toHaveLength(paragraphs.length);
+    expect(result.report.paragraphReviews[0]?.suggestions).toEqual([
+      { advice: "1. 补听觉\n2. 补动作\n3. 收束主题" },
+    ]);
+    expect(result.report.paragraphReviews[1]?.suggestions).toHaveLength(1);
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("suggestions 必须恰好 1 项");
+    expect(prompt).toContain("本段无需修改");
+    expect(prompt).not.toContain("1 至 4");
   });
 });

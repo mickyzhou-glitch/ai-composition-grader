@@ -41,6 +41,7 @@ import {
   batchReanalysisCommitInputSchema,
   batchReanalysisPreviewInputSchema,
   REANALYSIS_SKIP_REASONS,
+  rejectReviewInputSchema,
   revisionRequestInputSchema,
   type ReanalysisSkipCode,
 } from "../src/reanalysis/contracts";
@@ -381,12 +382,32 @@ export default {
           : apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
       } catch (error) {
         const revisionConflict = error instanceof Error && error.name === "RevisionConflictError";
+        const rejected = error instanceof Error && error.name === "ReviewRejectedError";
         return apiError(
-          revisionConflict ? "REVISION_CONFLICT" : "VALIDATION_ERROR",
-          revisionConflict ? "批改记录已更新，请刷新后重试" : "请求参数无效",
-          revisionConflict ? 409 : 400,
-          revisionConflict ? undefined : validationErrorDetails(error),
+          rejected ? "REVIEW_REJECTED" : revisionConflict ? "REVISION_CONFLICT" : "VALIDATION_ERROR",
+          rejected ? error.message : revisionConflict ? "批改记录已更新，请刷新后重试" : "请求参数无效",
+          rejected || revisionConflict ? 409 : 400,
+          rejected || revisionConflict ? undefined : validationErrorDetails(error),
         );
+      }
+    }
+    const rejectReviewMatch = /^\/api\/reviews\/([^/]+)\/reject$/u.exec(url.pathname);
+    if (rejectReviewMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let reviewId: string;
+      let input: ReturnType<typeof rejectReviewInputSchema.parse>;
+      try {
+        reviewId = decodeURIComponent(rejectReviewMatch[1]);
+        if (!reanalysisRouteIdPattern.test(reviewId)) throw new Error("INVALID_REANALYSIS_ID");
+        input = rejectReviewInputSchema.parse(await request.json());
+      } catch (error) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
+      }
+      try {
+        const rejected = await new D1Reanalysis(env.DB).rejectReview(user.id, reviewId, input);
+        return Response.json({ ok: true, data: rejected }, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        return reanalysisFailure(error);
       }
     }
     const revisionRequestMatch = /^\/api\/reviews\/([^/]+)\/revision-request$/u.exec(url.pathname);

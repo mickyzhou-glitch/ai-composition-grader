@@ -92,6 +92,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .button--primary { background: var(--teal); color: white; }
 .button--primary:hover:not(:disabled) { background: var(--teal-dark); }
 .button--quiet { border-color: var(--line); background: var(--ivory); color: var(--ink); }
+.button--danger { background: var(--danger); color: white; }
+.button--danger:hover:not(:disabled) { background: #8b382f; }
 .button--danger-quiet { background: transparent; color: var(--danger); }
 .text-button { padding: 2px 4px; border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; }
 .export-menu { position: relative; display: inline-flex; max-width: 100%; flex-direction: column; align-items: stretch; }
@@ -123,7 +125,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .hero-cta { min-width: 168px; background: var(--teal); color: white; box-shadow: 0 10px 24px rgb(1 101 75 / 22%); }
 .hero-cta span { margin-left: 14px; font-size: 1.2em; }
 
-.stats-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin: 22px 0 54px; }
+.stats-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin: 22px 0 54px; }
 .stats-grid > div { display: flex; padding: 18px 22px; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 12px; background: rgb(251 254 252 / 78%); }
 .stats-grid dt { color: var(--muted); font-size: .9rem; }
 .stats-grid dd { margin: 0; font: 700 1.5rem/1 STKaiti, KaiTi, serif; }
@@ -218,7 +220,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .status-badge--draft, .status-badge--analyzing { background: var(--gold-soft); color: var(--gold); }
 .status-badge--ready_for_review, .status-badge--exported { background: var(--green-soft); color: var(--green); }
 .status-badge--reviewed { background: #e5eef5; color: #2f5d78; }
-.status-badge--needs_better_images, .status-badge--failed { background: var(--danger-soft); color: var(--danger); }
+.status-badge--needs_better_images, .status-badge--failed, .status-badge--rejected { background: var(--danger-soft); color: var(--danger); }
 .batch-reanalysis-backdrop { position: fixed; inset: 0; z-index: 110; display: grid; padding: 20px; place-items: center; background: rgb(22 27 25 / 48%); }
 .batch-reanalysis-dialog { display: flex; width: min(760px, 100%); max-height: min(820px, calc(100dvh - 40px)); flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--ivory); box-shadow: 0 20px 55px rgb(22 27 25 / 22%); }
 .batch-reanalysis-heading { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 14px; border-bottom: 1px solid var(--line); }
@@ -416,9 +418,13 @@ textarea { min-height: 100px; resize: vertical; }
 .paragraph-review-unit:first-child { padding-top: 8px; }
 .paragraph-review-unit:last-child { border-bottom: 0; }
 .paragraph-review-unit h3 { margin: 0 0 14px; font-size: 1.15rem; }
-.paragraph-review-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.paragraph-review-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
 .paragraph-review-heading h3 { margin: 0; }
 .paragraph-review-heading span { flex: 0 0 auto; color: var(--muted); font-size: .8rem; }
+.essay-sync { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.essay-sync button { width: fit-content; min-height: 32px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: #171717; cursor: pointer; font-weight: 700; }
+.essay-sync button:disabled { cursor: not-allowed; opacity: .5; }
+.paragraph-review-heading .essay-sync-hint { flex: 0 0 auto; color: var(--danger); font-size: .8rem; font-weight: 700; }
 .paragraph-review-heading strong { color: var(--ink); font-variant-numeric: tabular-nums; }
 .paragraph-review-unit h4 { margin: 24px 0 10px; font-size: 1rem; }
 .batch-legacy-note { margin: 0; padding: 10px 12px; border-left: 3px solid var(--gold); background: #fff8e1; color: #695000; font-size: .82rem; }

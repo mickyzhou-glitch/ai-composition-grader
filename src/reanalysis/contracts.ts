@@ -12,6 +12,16 @@ export const revisionRequestInputSchema = z.object({
   changeRequest: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
 }).strict();
 
+export const rejectReviewInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  reason: z.string().max(MAX_REVISION_FIELD_CHARS).optional().default(""),
+  changeRequest: z.string().max(MAX_REVISION_FIELD_CHARS).optional().default(""),
+}).strict().transform((value) => ({
+  expectedRevision: value.expectedRevision,
+  reason: value.reason.trim(),
+  changeRequest: value.changeRequest.trim(),
+}));
+
 export const batchReanalysisPreviewInputSchema = z.object({
   reviewIds: z.array(safeIdSchema).min(1).max(BATCH_REANALYSIS_LIMIT),
 }).strict().superRefine(({ reviewIds }, context) => {
@@ -45,6 +55,15 @@ export const batchReanalysisCommitInputSchema = z.object({
 });
 
 export type RevisionRequestInput = z.infer<typeof revisionRequestInputSchema>;
+export type RejectReviewInput = z.infer<typeof rejectReviewInputSchema>;
+
+export interface RejectReviewResult {
+  id: string;
+  status: "rejected";
+  revision: number;
+  rejectionReason: string | null;
+  rejectionChangeRequest: string | null;
+}
 export type BatchReanalysisCommitItem = z.infer<typeof batchReanalysisCommitItemSchema>;
 
 export function normalizeAssignmentTitle(value: string): string {

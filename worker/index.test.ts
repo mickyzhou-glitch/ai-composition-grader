@@ -858,7 +858,7 @@ describe("Cloudflare Worker", () => {
           sql.includes("FROM sessions INNER JOIN users") ? {
             id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
             expires_at: Date.now() + 60_000,
-          } : sql.includes("SELECT config, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews") ? {
+          } : sql.includes("SELECT config, status, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews") ? {
             config: JSON.stringify(reviewConfig), revision: 3,
           } : sql.includes("FROM reviews WHERE id") ? {
             id: "review-1", status: "ready_for_review", student_name: "张小明",
@@ -1110,6 +1110,40 @@ describe("Cloudflare Worker", () => {
     expect(database.batch).not.toHaveBeenCalled();
     expect(jobs.send).not.toHaveBeenCalled();
     requestRevision.mockRestore();
+  });
+
+  it("完全不能用返回审核不通过且不投递分析队列", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const rejectReview = vi.spyOn(D1Reanalysis.prototype, "rejectReview").mockResolvedValue({
+      id: "review-1",
+      status: "rejected",
+      revision: 4,
+      rejectionReason: null,
+      rejectionChangeRequest: null,
+    });
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/reject", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ expectedRevision: 3 }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: { status: "rejected", revision: 4 },
+    });
+    expect(jobs.send).not.toHaveBeenCalled();
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+    expect(rejectReview).toHaveBeenCalledWith("teacher-1", "review-1", {
+      expectedRevision: 3,
+      reason: "",
+      changeRequest: "",
+    });
+    rejectReview.mockRestore();
   });
 
   it("revision request 成功后发送单条 Queue 并返回 202 no-store", async () => {

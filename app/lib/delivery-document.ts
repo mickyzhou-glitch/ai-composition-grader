@@ -5,6 +5,7 @@ import {
   type DeliveryReadinessInput,
 } from "@/src/delivery/readiness";
 import { paragraphEvaluationReportSchema } from "@/src/domain/contracts";
+import { collapseParagraphSuggestions } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import type { PublicOcrView } from "@/src/ocr/contracts";
 import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
@@ -139,7 +140,7 @@ export async function buildDeliveryDocument(
         paragraphNumber: grouped ? groupIndex + 1 : group.paragraphs[0].paragraphIndex + 1,
         ...(group.sourceLabel ? { sourceLabel: group.sourceLabel } : {}),
         crops,
-        suggestions: group.review.suggestions,
+        suggestions: collapseParagraphSuggestions(group.review.suggestions),
         revisionRuns: buildSentenceRevisionRuns(group.sourceText, group.review.revisedText),
       });
     }

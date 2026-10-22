@@ -23,10 +23,12 @@ import {
   type BatchReanalysisCommitResult,
   type BatchReanalysisPreview,
   type ReanalysisSkipCode,
+  type RejectReviewInput,
+  type RejectReviewResult,
   type RevisionRequestInput,
 } from "./contracts";
 
-const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed"] as const;
+const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed", "rejected"] as const;
 
 function reanalysisJobMarker(pdfFilename: string | null): string {
   return pdfFilename
@@ -189,6 +191,73 @@ export class ReanalysisRepository {
       });
     }
     return { matched, skipped: skippedItems };
+  }
+
+  rejectReview(
+    ownerId: string,
+    reviewId: string,
+    input: RejectReviewInput,
+  ): RejectReviewResult {
+    const now = this.now();
+    const rejectionReason = input.reason.trim() || null;
+    const rejectionChangeRequest = input.changeRequest.trim() || null;
+    const execute = (): RejectReviewResult => this.database.transaction((transaction) => {
+      const review = transaction.select({
+        revision: reviews.revision,
+        status: reviews.status,
+        deletingAt: reviews.deletingAt,
+      }).from(reviews).where(and(
+        eq(reviews.id, reviewId),
+        eq(reviews.ownerId, ownerId),
+      )).get();
+      if (!review) throw domainError("REVIEW_NOT_FOUND");
+      if (review.deletingAt !== null) throw domainError("REVIEW_UNAVAILABLE");
+      if (review.revision !== input.expectedRevision) throw domainError("REVISION_CONFLICT");
+      const image = transaction.select({ id: reviewImages.id }).from(reviewImages)
+        .where(eq(reviewImages.reviewId, reviewId)).get();
+      if (!image) throw domainError("IMAGES_MISSING");
+      const active = transaction.select({ id: analysisJobs.id }).from(analysisJobs).where(and(
+        eq(analysisJobs.reviewId, reviewId),
+        inArray(analysisJobs.status, ["queued", "running"]),
+      )).get();
+      if (active) throw domainError("ANALYSIS_ACTIVE");
+      if (!ANALYZABLE_STATUSES.includes(review.status as (typeof ANALYZABLE_STATUSES)[number])) {
+        throw domainError("REVIEW_UNAVAILABLE");
+      }
+      const update = transaction.update(reviews).set({
+        status: "rejected",
+        rejectionReason,
+        rejectionChangeRequest,
+        analysisRunId: null,
+        teacherReviewedAt: null,
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
+        revision: sql`${reviews.revision} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(reviews.id, reviewId),
+        eq(reviews.ownerId, ownerId),
+        eq(reviews.revision, input.expectedRevision),
+        sql`${reviews.deletingAt} IS NULL`,
+        inArray(reviews.status, [...ANALYZABLE_STATUSES]),
+      )).run();
+      if (update.changes !== 1) throw domainError("REVISION_CONFLICT");
+      return {
+        id: reviewId,
+        status: "rejected",
+        revision: input.expectedRevision + 1,
+        rejectionReason,
+        rejectionChangeRequest,
+      };
+    }, { behavior: "immediate" });
+    try {
+      return execute();
+    } catch (error) {
+      if (isSqliteWriteConflict(error)) throw domainError("REVISION_CONFLICT");
+      throw error;
+    }
   }
 
   requestRevision(

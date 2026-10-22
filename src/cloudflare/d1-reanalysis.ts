@@ -16,6 +16,8 @@ import {
   type BatchReanalysisSubmittedItem,
   type PublicAnalysisJobView,
   type ReanalysisSkipCode,
+  type RejectReviewInput,
+  type RejectReviewResult,
   type RevisionRequestInput,
   type RevisionRequestResult,
 } from "../reanalysis/contracts";
@@ -45,7 +47,7 @@ interface AssignmentRow {
   updated_at: number | string;
 }
 
-const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed"] as const;
+const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed", "rejected"] as const;
 
 export class D1ReanalysisError extends Error {
   readonly code: ReanalysisSkipCode;
@@ -259,6 +261,50 @@ export class D1Reanalysis {
     return { matched, skipped: skippedItems };
   }
 
+  async rejectReview(
+    ownerId: string,
+    reviewId: string,
+    input: RejectReviewInput,
+  ): Promise<RejectReviewResult> {
+    const row = await this.readReview(ownerId, reviewId);
+    this.assertRequestable(row, input.expectedRevision);
+    const now = Date.now();
+    const rejectionReason = input.reason.trim() || null;
+    const rejectionChangeRequest = input.changeRequest.trim() || null;
+    const updated = await this.database.prepare(`
+      UPDATE reviews SET status = 'rejected',
+        rejection_reason = ?, rejection_change_request = ?,
+        analysis_run_id = NULL, teacher_reviewed_at = NULL,
+        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL,
+        revision = revision + 1, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
+        AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
+        AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM analysis_jobs
+          WHERE review_id = reviews.id AND status IN ('queued', 'running')
+        )
+    `).bind(
+      rejectionReason,
+      rejectionChangeRequest,
+      now,
+      reviewId,
+      ownerId,
+      input.expectedRevision,
+    ).run();
+    if ((updated.meta?.changes ?? 0) !== 1) {
+      await this.assertRequestable(await this.readReview(ownerId, reviewId), input.expectedRevision);
+      throw new D1ReanalysisError("REVISION_CONFLICT");
+    }
+    return {
+      id: reviewId,
+      status: "rejected",
+      revision: input.expectedRevision + 1,
+      rejectionReason,
+      rejectionChangeRequest,
+    };
+  }
+
   async requestRevision(
     ownerId: string,
     reviewId: string,
@@ -439,7 +485,7 @@ export class D1Reanalysis {
         UPDATE reviews SET status = 'analyzing', analysis_run_id = ?, teacher_reviewed_at = NULL,
           pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
-          AND status IN ('draft', 'ready_for_review', 'exported', 'failed')
+          AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
           AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
           ${ocrGuard(mode)}
           AND NOT EXISTS (
@@ -482,7 +528,7 @@ export class D1Reanalysis {
           teacher_reviewed_at = NULL, pdf_filename = NULL, pdf_path = NULL,
           pdf_revision = NULL, exported_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
-          AND status IN ('draft', 'ready_for_review', 'exported', 'failed')
+          AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
           AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
           ${ocrGuard(mode)}
           AND NOT EXISTS (

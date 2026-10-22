@@ -20,6 +20,7 @@ import {
 } from "./openai-review-adapter";
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import { teacherRewriteLengthRule, validateTeacherRewriteLengths } from "../domain/teacher-rewrite-lengths";
+import { collapseParagraphSuggestions } from "../domain/paragraph-actions";
 import { countHanCharacters } from "../domain/sample-writing-requirements";
 import { buildSampleWritingRule } from "./sample-writing-requirements";
 import { buildStructureReviewRule } from "./structure-review-requirements";
@@ -149,12 +150,12 @@ function outputTemplate(input: AnalyzeOcrTextInput): string {
       paragraphId: input.paragraphs[range.start - 1]?.id ?? `paragraph-${range.start}`,
       sourceParagraphStart: range.start,
       sourceParagraphEnd: range.end,
-      suggestions: [{ advice: "用一两句话说明这一组怎么改" }],
+      suggestions: [{ advice: "这一组的全部修改动作。多处时写成 1. 2. 分行；无需修改时写本段无需修改" }],
       revisedText: essay[index],
     }))
     : input.paragraphs.map(({ id }) => ({
       paragraphId: id,
-      suggestions: [{ advice: "用一两句话说明这一段怎么改" }],
+      suggestions: [{ advice: "这一段的全部修改动作。多处时写成 1. 2. 分行；无需修改时写本段无需修改" }],
       revisedText: "该段按修改动作改完后的完整段落",
     }));
   return JSON.stringify({
@@ -229,8 +230,8 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
     "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
     paragraphArrayRule(input),
-    "每组或每段 suggestions 必须有 1 至 4 项；每项只写 advice，也就是修改动作，用一两句话说明具体怎么改。不要写问题描述，也不要写修改示例。",
-    "原文已经很好时，advice 仍须用一两句话说明要保留的具体写法。不得只写空泛判断。",
+    "每个结构段或自然段只对应一个框。suggestions 必须恰好 1 项，只写 advice。一段里有多处修改时，全部写进这一个 advice，用「1. 」「2. 」分行编号，绝不能按修改处数再增加 suggestion 或 paragraphReviews。不要写问题描述，也不要写修改示例。",
+    "没有需要修改的段也要保留这个框：advice 写「本段无需修改」。未归组时 revisedText 与该段原文逐字相同；已按结构段归组时 revisedText 仍与 rewrittenEssay 的对应段逐字相同。",
     revisedTextRule(input),
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 paragraphId、category、anchorText、comment、isHighlight。paragraphId 必须来自输入，按输入段落顺序排列；anchorText 必须逐字来自对应段落原文，无法确定时不要返回。",
@@ -332,6 +333,18 @@ function validateParagraphInput(paragraphs: AnalyzeOcrTextInput["paragraphs"]): 
   }
 }
 
+function collapseParagraphActions(report: ParagraphEvaluationReport): ParagraphEvaluationReport {
+  if (report.paragraphReviews.every((review) => review.suggestions.length <= 1)) return report;
+  return {
+    ...report,
+    paragraphReviews: report.paragraphReviews.map((review) => (
+      review.suggestions.length <= 1
+        ? review
+        : { ...review, suggestions: collapseParagraphSuggestions(review.suggestions) }
+    )),
+  };
+}
+
 function alignGroupedRevisedText(report: ParagraphEvaluationReport): ParagraphEvaluationReport {
   if (!report.rewrittenEssay || report.rewrittenEssay.length !== report.paragraphReviews.length) return report;
   return {
@@ -396,7 +409,9 @@ function validateContentResult(
     throw new Error(`rewritten_essay_paragraph_count_expected_${rewriteParagraphCount(input)}`);
   }
   validateTeacherRewriteLengths(parsed.report.rewrittenEssay!, input.teacherGuidance);
-  parsed.report = assertStructureGroups(parsed.report, input, options.alignGroupedRevisedText === true);
+  parsed.report = collapseParagraphActions(
+    assertStructureGroups(parsed.report, input, options.alignGroupedRevisedText === true),
+  );
   const paragraphIds = input.paragraphs.map(({ id }) => id);
   const paragraphsById = new Map(input.paragraphs.map((paragraph, index) =>
     [paragraph.id, { ...paragraph, index }] as const));

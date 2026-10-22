@@ -13,7 +13,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadLegacyCachedPdf, downloadReview, downloadReviewArchive, type ExportFormat } from "../lib/review-export";
 import { chunkItems } from "../lib/failed-regrade";
-import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, reviewDisplayStatus } from "../lib/review-queue";
+import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, matchesHistoryStatus, reviewDisplayStatus, type HistoryStatusFilter } from "../lib/review-queue";
 import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal, isLegacyEvaluationReport } from "@/src/domain/contracts";
 import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
@@ -34,6 +34,7 @@ export default function Home() {
   const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(() => new Set());
   const [batchExporting, setBatchExporting] = useState(false);
   const [studentSearch, setStudentSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>("");
   const [classFilter, setClassFilter] = useState<string | null>(null);
   const [reanalysisOpen, setReanalysisOpen] = useState(false);
   const [reanalysisLoading, setReanalysisLoading] = useState(false);
@@ -86,10 +87,12 @@ export default function Home() {
     ).length,
     reviewed: reviewedPending.length,
     exported: reviews.filter(({ status }) => status === "exported").length,
+    rejected: reviews.filter(({ status }) => status === "rejected").length,
   }), [reviews, reviewedPending.length]);
   const visibleReviews = useMemo(
-    () => filterReviewsByStudentName(filterReviewsByClass(reviews, classFilter), studentSearch),
-    [reviews, studentSearch, classFilter],
+    () => filterReviewsByStudentName(filterReviewsByClass(reviews, classFilter), studentSearch)
+      .filter((review) => matchesHistoryStatus(review, statusFilter)),
+    [reviews, studentSearch, classFilter, statusFilter],
   );
   const failedInView = useMemo(
     () => visibleReviews.filter((review) => review.status === "failed"),
@@ -340,6 +343,7 @@ export default function Home() {
           <div><dt>待复核</dt><dd>{stats.review}</dd></div>
           <div><dt>已复核</dt><dd>{stats.reviewed}</dd></div>
           <div><dt>已导出</dt><dd>{stats.exported}</dd></div>
+          <div><dt>审核不通过</dt><dd>{stats.rejected}</dd></div>
         </dl>
 
         <section className="history-section" aria-labelledby="recent-title">
@@ -350,6 +354,16 @@ export default function Home() {
           <div className="history-tools">
             <ClassFilter items={reviews} value={classFilter} onChange={setClassFilter} />
             <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></label>
+            <label className="history-search">批改状态
+              <select aria-label="筛选批改状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}>
+                <option value="">全部</option>
+                <option value="draft">草稿</option>
+                <option value="review">待复核</option>
+                <option value="reviewed">已复核</option>
+                <option value="exported">已导出</option>
+                <option value="rejected">审核不通过</option>
+              </select>
+            </label>
             <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
           </div>
           {reviews.length ? (

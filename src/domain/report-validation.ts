@@ -23,7 +23,8 @@ export class ReportValidationError extends Error {
     readonly code:
       | "VALIDATION_ERROR"
       | "OCR_V2_REQUIRED"
-      | "PARAGRAPH_COVERAGE_MISMATCH" = "VALIDATION_ERROR",
+      | "PARAGRAPH_COVERAGE_MISMATCH"
+      | "REVIEW_REJECTED" = "VALIDATION_ERROR",
   ) {
     super(message);
     this.name = "ReportValidationError";

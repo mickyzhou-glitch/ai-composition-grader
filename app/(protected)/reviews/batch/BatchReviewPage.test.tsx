@@ -212,6 +212,28 @@ describe("BatchReviewPage", () => {
     });
   });
 
+  it("同段多条建议时批量审核仍是一段一个框", async () => {
+    const multiAdvice = {
+      ...paragraphReport,
+      paragraphReviews: [{
+        ...paragraphReport.paragraphReviews[0],
+        suggestions: [
+          { advice: "补听觉" },
+          { advice: "补动作" },
+          { advice: "收束主题" },
+        ],
+      }],
+    };
+    mockReviewApi([queueItem("review-1", "张小明", 1)], { currentReport: multiAdvice });
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "第 1 段" })).toBeVisible();
+    expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: "第 2 段" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /新增第 \d+ 段建议/u })).not.toBeInTheDocument();
+  });
+
   it("老师指定结构段时按组展示改后全段，并标出对应原文范围", async () => {
     const essay = ["我走上台。天很蓝。", "我终于明白了。"];
     const groupedReport = {
@@ -294,8 +316,9 @@ describe("BatchReviewPage", () => {
     const teacherCall = fetchMock.mock.calls.find(([input]) => (
       String(input) === "/api/reviews/review-1/teacher-review"
     ));
+    expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
     expect(JSON.parse(String(teacherCall?.[1]?.body)).report).toMatchObject({
-      rewrittenEssay: ["我听见呼吸声，走上了台。天很蓝。", essay[1]],
+      rewrittenEssay: essay,
       paragraphReviews: [
         {
           paragraphId: "paragraph-1",
@@ -352,6 +375,44 @@ describe("BatchReviewPage", () => {
     expect(screen.queryByText("正在展开作文与批改报告")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "已复核待导出清单 (0)" })).toBeVisible();
+  });
+
+  it("完全不能用直接标为审核不通过并进入下一篇，不触发重新分析", async () => {
+    const queue = [
+      queueItem("review-1", "张小明", 7),
+      queueItem("review-2", "李安然", 3),
+    ];
+    const details = new Map(queue.map((item) => [item.id, detail(item.id, item.studentName, item.revision)]));
+    let rejectBody: unknown;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
+      if (url === "/api/reviews/review-1/reject" && init?.method === "POST") {
+        rejectBody = JSON.parse(String(init.body));
+        queue.splice(0, 1);
+        return Response.json({ ok: true, data: {
+          id: "review-1", status: "rejected", revision: 8, rejectionReason: "离题", rejectionChangeRequest: null,
+        } });
+      }
+      const detailMatch = /^\/api\/reviews\/(review-\d)$/u.exec(url);
+      if (detailMatch) return Response.json({ ok: true, data: details.get(detailMatch[1]) });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "离题");
+    await user.click(screen.getByRole("button", { name: "完全不能用" }));
+
+    expect(rejectBody).toEqual({ expectedRevision: 7, reason: "离题", changeRequest: "" });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("revision-request"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/analyze"))).toBe(false);
+    expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
   });
 
   it("keeps the current essay, dialog, and fields when revision request fails", async () => {

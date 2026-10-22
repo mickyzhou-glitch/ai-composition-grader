@@ -435,6 +435,35 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("下划线");
     expect(serialized).toContain(config.title);
     expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
+    expect(serialized).toContain("只返回 1 条");
+    expect(serialized).toContain("本段无需修改");
+  });
+
+  it("单段重写把多条建议合并成一个编号修改动作", async () => {
+    const rewritten: ParagraphReview = {
+      ...currentParagraphReview,
+      suggestions: [
+        { advice: "补听觉" },
+        { advice: "补动作" },
+        { advice: "收束主题" },
+      ],
+      revisedText: "我听见呼吸声，攥紧衣角走上台。",
+    };
+    const harness = setup([JSON.stringify(rewritten)]);
+
+    await expect(harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [
+        { id: "paragraph-1", text: "我站在台下，心里很紧张。" },
+        { id: "paragraph-2", text: "轮到我时，我终于走上台。" },
+      ],
+      current: currentParagraphReview,
+      paragraphId: "paragraph-1",
+    })).resolves.toMatchObject({
+      paragraphId: "paragraph-1",
+      suggestions: [{ advice: "1. 补听觉\n2. 补动作\n3. 收束主题" }],
+      revisedText: rewritten.revisedText,
+    });
   });
 
   it.each([

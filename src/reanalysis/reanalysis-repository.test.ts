@@ -335,6 +335,41 @@ describe("ReanalysisRepository requestRevision", () => {
     });
   });
 
+  it("完全不能用只存档并标为审核不通过，不创建分析任务，之后仍可重新分析", () => {
+    const rejected = service.rejectReview(OWNER, "review-1", {
+      expectedRevision: 3,
+      reason: "完全离题",
+      changeRequest: "",
+    });
+
+    expect(rejected).toEqual({
+      id: "review-1",
+      status: "rejected",
+      revision: 4,
+      rejectionReason: "完全离题",
+      rejectionChangeRequest: null,
+    });
+    expect(opened.sqlite.prepare("SELECT COUNT(*) AS count FROM analysis_jobs").get()).toEqual({ count: 0 });
+    expect(reviewRepository.getById(OWNER, "review-1")).toMatchObject({
+      status: "rejected",
+      teacherReviewedAt: null,
+      pdfFilename: null,
+      rejectionReason: "完全离题",
+      rejectionChangeRequest: null,
+    });
+    expect(reviewRepository.listTeacherReviewQueue(OWNER).map(({ id }) => id)).not.toContain("review-1");
+    expect(() => reviewRepository.completeTeacherReview(OWNER, "review-1", {
+      expectedRevision: 4,
+      studentName: "艾绮",
+      report,
+      annotations: [],
+    })).toThrow(expect.objectContaining({ code: "REVIEW_REJECTED" }));
+
+    const recovered = service.requestRevision(OWNER, "review-1", revisionInput(4));
+    expect(recovered.job.status).toBe("queued");
+    expect(reviewRepository.getById(OWNER, "review-1")?.status).toBe("analyzing");
+  });
+
   it("逐段报告与当前 OCR v2 退回时仍排 content_only", () => {
     opened.sqlite.prepare("UPDATE reviews SET ocr_checkpoint = ?, report = ? WHERE id = ?")
       .run(JSON.stringify(paragraphCheckpoint), JSON.stringify(paragraphReport), "review-1");

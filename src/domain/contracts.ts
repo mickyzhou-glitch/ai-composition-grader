@@ -39,6 +39,7 @@ export const reviewStatusSchema = z.enum([
   "ready_for_review",
   "exported",
   "failed",
+  "rejected",
 ]);
 export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
 

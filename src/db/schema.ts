@@ -59,6 +59,8 @@ export const reviews = sqliteTable(
     status: text("status").$type<ReviewStatus>().notNull(),
     studentName: text("student_name").notNull().default(""),
     className: text("class_name").notNull().default(""),
+    rejectionReason: text("rejection_reason"),
+    rejectionChangeRequest: text("rejection_change_request"),
     config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
     report: text("report", { mode: "json" }).$type<EvaluationReport>(),
     revision: integer("revision").notNull().default(0),

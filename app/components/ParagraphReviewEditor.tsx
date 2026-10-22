@@ -3,6 +3,11 @@
 import { useState } from "react";
 
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
+import {
+  applyEssayToParagraphReviews,
+  essayDiffersFromParagraphReviews,
+} from "@/src/domain/essay-paragraph-sync";
+import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import { countTextCharactersIncludingPunctuation } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
@@ -27,8 +32,6 @@ interface ParagraphReviewEditorProps {
   revisionLabel?: string;
 }
 
-const emptySuggestion = { advice: "" };
-
 export function ParagraphReviewEditor({
   reviewId,
   report,
@@ -49,8 +52,7 @@ export function ParagraphReviewEditor({
     .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
   const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
   const groups = resolveReviewGroups(report.paragraphReviews, paragraphs);
-  const essayAligned = grouped
-    && report.rewrittenEssay?.length === report.paragraphReviews.length;
+  const essayOutOfSync = essayDiffersFromParagraphReviews(report);
   const totalCharacters = report.rewrittenEssay
     ? report.rewrittenEssay.reduce((total, text) => total + countTextCharactersIncludingPunctuation(text), 0)
     : paragraphs.reduce((total, paragraph) => {
@@ -70,9 +72,6 @@ export function ParagraphReviewEditor({
     onChange({
       ...report,
       paragraphReviews,
-      rewrittenEssay: essayAligned
-        ? paragraphReviews.map((review) => review.revisedText)
-        : report.rewrittenEssay,
     });
   }
 
@@ -83,7 +82,11 @@ export function ParagraphReviewEditor({
       </div> : null}
       {report.rewrittenEssay ? <section className="paragraph-review-unit" aria-label="完整范文">
         <div className="paragraph-review-heading">
-          <h3>按要求重写的完整范文</h3>
+          <div className="essay-sync">
+            <h3>按要求重写的完整范文</h3>
+            <button type="button" disabled={disabled} onClick={() => onChange(applyEssayToParagraphReviews(report))}>同步到逐段</button>
+            {essayOutOfSync ? <span className="essay-sync-hint">与逐段不一致</span> : null}
+          </div>
           <span>共 {report.rewrittenEssay.length} 段 · {totalCharacters} 字（含标点）</span>
         </div>
         {report.rewrittenEssay.map((text, index) => <label key={index}>第 {index + 1} 段
@@ -97,11 +100,6 @@ export function ParagraphReviewEditor({
             onChange({
               ...report,
               rewrittenEssay,
-              paragraphReviews: essayAligned
-                ? report.paragraphReviews.map((review, reviewIndex) => (
-                  reviewIndex === index ? { ...review, revisedText: event.target.value } : review
-                ))
-                : report.paragraphReviews,
             });
           }}
           />
@@ -156,47 +154,20 @@ export function ParagraphReviewEditor({
                 />
               )) : null}
 
-              {showSuggestions ? <>
+              {showSuggestions ? <div className="paragraph-suggestion">
                 <h4>【修改动作】</h4>
-                <div className="paragraph-suggestion-list">
-                  {paragraphReview.suggestions.map((suggestion, suggestionIndex) => (
-                    <fieldset className="paragraph-suggestion" key={suggestionIndex}>
-                      <legend>建议 {suggestionIndex + 1}</legend>
-                      <label>修改动作
-                        <input
-                          aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改动作`}
-                          value={suggestion.advice}
-                          disabled={disabled || rewriting}
-                          onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
-                            ...current,
-                            suggestions: current.suggestions.map((item, index) => index === suggestionIndex
-                              ? { ...item, advice: event.target.value }
-                              : item),
-                          }))}
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        aria-label={`删除第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条建议`}
-                        disabled={disabled || rewriting || paragraphReview.suggestions.length <= 1}
-                        onClick={() => updateParagraph(paragraphReview.paragraphId, (current) => ({
-                          ...current,
-                          suggestions: current.suggestions.filter((_, index) => index !== suggestionIndex),
-                        }))}
-                      >删除建议</button>
-                    </fieldset>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  aria-label={`新增第 ${paragraphNumber} 段建议`}
-                  disabled={disabled || rewriting || paragraphReview.suggestions.length >= 4}
-                  onClick={() => updateParagraph(paragraphReview.paragraphId, (current) => ({
-                    ...current,
-                    suggestions: [...current.suggestions, emptySuggestion],
-                  }))}
-                >新增建议</button>
-              </> : null}
+                <label>修改动作
+                  <textarea
+                    aria-label={`第 ${paragraphNumber} 段修改动作`}
+                    value={mergedParagraphAction(paragraphReview.suggestions)}
+                    disabled={disabled || rewriting}
+                    onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
+                      ...current,
+                      suggestions: [{ advice: event.target.value }],
+                    }))}
+                  />
+                </label>
+              </div> : null}
 
               <h4>【{revisionHeading}】</h4>
               <label>{revisionLabel}

@@ -10,6 +10,7 @@ export interface RevisionRequestDialogProps {
   error: string;
   onClose(): void;
   onSubmit(input: { reason: string; changeRequest: string }): void;
+  onReject(input: { reason: string; changeRequest: string }): void;
 }
 
 export function RevisionRequestDialog({
@@ -18,6 +19,7 @@ export function RevisionRequestDialog({
   error,
   onClose,
   onSubmit,
+  onReject,
 }: RevisionRequestDialogProps) {
   const reasonRef = useRef<HTMLTextAreaElement>(null);
   const [reason, setReason] = useState("");
@@ -95,6 +97,16 @@ export function RevisionRequestDialog({
           </div>
           <div className="revision-dialog-actions">
             <button type="button" className="button button--quiet" disabled={submitting} onClick={onClose}>取消</button>
+            <button
+              type="button"
+              className="button button--danger"
+              disabled={submitting}
+              aria-busy={submitting}
+              onClick={() => {
+                if (submitting) return;
+                onReject({ reason: reason.trim(), changeRequest: changeRequest.trim() });
+              }}
+            >完全不能用</button>
             <button type="submit" className="button button--primary" disabled={!valid || submitting} aria-busy={submitting}>提交后台修改并继续</button>
           </div>
         </form>

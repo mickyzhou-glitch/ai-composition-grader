@@ -8,6 +8,7 @@ describe("RevisionRequestDialog", () => {
   function renderDialog(overrides: Partial<React.ComponentProps<typeof RevisionRequestDialog>> = {}) {
     const onClose = vi.fn();
     const onSubmit = vi.fn();
+    const onReject = vi.fn();
     const view = render(
       <RevisionRequestDialog
         open
@@ -15,10 +16,11 @@ describe("RevisionRequestDialog", () => {
         error=""
         onClose={onClose}
         onSubmit={onSubmit}
+        onReject={onReject}
         {...overrides}
       />,
     );
-    return { onClose, onSubmit, ...view };
+    return { onClose, onSubmit, onReject, ...view };
   }
 
   it("requires both trimmed fields and submits trimmed values", async () => {
@@ -37,6 +39,7 @@ describe("RevisionRequestDialog", () => {
     await user.click(submit);
 
     expect(onSubmit).toHaveBeenCalledWith({ reason: "主题判断不准确", changeRequest: "请重新围绕题目生成" });
+    expect(screen.getByRole("button", { name: "完全不能用" })).toBeEnabled();
     expect(reason).toHaveValue("  主题判断不准确  ");
     expect(changeRequest).toHaveValue("  请重新围绕题目生成  ");
   });
@@ -65,11 +68,28 @@ describe("RevisionRequestDialog", () => {
         error="退回失败，请重试"
         onClose={vi.fn()}
         onSubmit={vi.fn()}
+        onReject={vi.fn()}
       />,
     );
     expect(screen.getByRole("button", { name: "提交后台修改并继续" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "完全不能用" })).toBeDisabled();
     expect(screen.getByRole("textbox", { name: "为什么不合适" })).toHaveValue("失败时保留的原因");
     expect(screen.getByRole("textbox", { name: "应该怎么改" })).toHaveValue("失败时保留的要求");
+  });
+
+  it("完全不能用无需填写两个框，已填内容会原样带回", async () => {
+    const user = userEvent.setup();
+    const { onReject, onSubmit } = renderDialog();
+
+    await user.click(screen.getByRole("button", { name: "完全不能用" }));
+    expect(onReject).toHaveBeenCalledWith({ reason: "", changeRequest: "" });
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "  离题  ");
+    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "  不必改  ");
+    await user.click(screen.getByRole("button", { name: "完全不能用" }));
+    expect(onReject).toHaveBeenLastCalledWith({ reason: "离题", changeRequest: "不必改" });
+    expect(screen.getByRole("button", { name: "提交后台修改并继续" })).toBeEnabled();
   });
 
   it("closes on cancel or Escape only when it is not submitting", async () => {
@@ -86,6 +106,7 @@ describe("RevisionRequestDialog", () => {
         error=""
         onClose={blockedClose}
         onSubmit={vi.fn()}
+        onReject={vi.fn()}
       />,
     );
     await user.keyboard("{Escape}");

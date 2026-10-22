@@ -4,6 +4,8 @@ import type {
   BatchReanalysisCommitResult,
   BatchReanalysisPreview,
   PublicAnalysisJobView,
+  RejectReviewInput,
+  RejectReviewResult,
   RevisionRequestInput,
   RevisionRequestResult,
 } from "./contracts";
@@ -27,6 +29,14 @@ export class ReanalysisService {
 
   preview(ownerId: string, reviewIds: string[]): BatchReanalysisPreview {
     return this.repository.preview(ownerId, reviewIds);
+  }
+
+  rejectReview(
+    ownerId: string,
+    reviewId: string,
+    input: RejectReviewInput,
+  ): RejectReviewResult {
+    return this.repository.rejectReview(ownerId, reviewId, input);
   }
 
   requestRevision(

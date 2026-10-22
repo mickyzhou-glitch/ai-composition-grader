@@ -4,6 +4,7 @@ import {
   exportEligibility,
   filterReviewsByStudentName,
   isReviewedPendingExport,
+  matchesHistoryStatus,
   normalizeStudentSearch,
   reviewDisplayStatus,
   reviewPrefetchWindow,
@@ -64,6 +65,10 @@ describe("review queue helpers", () => {
     };
     expect(exportEligibility(paragraphReview)).toEqual({ eligible: true });
     expect(exportEligibility({ ...paragraphReview, teacherReviewedAt: null })).toMatchObject({ eligible: false });
+    expect(exportEligibility({ ...paragraphReview, status: "rejected" })).toEqual({
+      eligible: false,
+      reason: "审核不通过的作文不能导出",
+    });
     expect(exportEligibility({ ...paragraphReview, report: null })).toMatchObject({ eligible: false });
   });
 
@@ -78,5 +83,9 @@ describe("review queue helpers", () => {
     expect(reviewDisplayStatus(pending)).toBe("ready_for_review");
     expect(isReviewedPendingExport(exported)).toBe(false);
     expect(reviewDisplayStatus(exported)).toBe("exported");
+    expect(reviewDisplayStatus({ status: "rejected", teacherReviewedAt: null })).toBe("rejected");
+    expect(matchesHistoryStatus({ status: "rejected", teacherReviewedAt: null }, "rejected")).toBe(true);
+    expect(matchesHistoryStatus({ status: "ready_for_review", teacherReviewedAt: null }, "rejected")).toBe(false);
+    expect(matchesHistoryStatus({ status: "rejected", teacherReviewedAt: null }, "review")).toBe(false);
   });
 });

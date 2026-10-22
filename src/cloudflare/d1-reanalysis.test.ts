@@ -101,6 +101,39 @@ function reviewRow(overrides: Record<string, unknown> = {}) {
 }
 
 describe("D1Reanalysis", () => {
+  it("完全不能用只更新作文状态，不插入分析任务", async () => {
+    const statements: Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const prepared = statement(sql, {
+          first: vi.fn(async () => reviewRow()),
+          run: vi.fn(async () => ({ meta: { changes: 1 } })),
+        }) as D1ReanalysisStatement & { sql: string; bindings: unknown[] };
+        statements.push(prepared);
+        return prepared;
+      }),
+      batch: vi.fn(),
+    } as unknown as D1Database;
+
+    await expect(new D1Reanalysis(database).rejectReview(OWNER, REVIEW, {
+      expectedRevision: 3,
+      reason: "  离题  ",
+      changeRequest: "   ",
+    })).resolves.toEqual({
+      id: REVIEW,
+      status: "rejected",
+      revision: 4,
+      rejectionReason: "离题",
+      rejectionChangeRequest: null,
+    });
+
+    expect(database.batch).not.toHaveBeenCalled();
+    expect(statements.some(({ sql }) => /INSERT INTO analysis_jobs/iu.test(sql))).toBe(false);
+    const update = statements.find(({ sql }) => /UPDATE reviews SET status = 'rejected'/u.test(sql));
+    expect(update?.sql).toContain("analysis_run_id = NULL");
+    expect(update?.bindings.slice(0, 2)).toEqual(["离题", null]);
+  });
+
   it("预览只使用 all，跨 owner 只返回安全的 REVIEW_NOT_FOUND", async () => {
     const calls: string[] = [];
     const database = {
