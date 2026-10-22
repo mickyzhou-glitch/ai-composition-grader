@@ -769,8 +769,10 @@ describe("OpenAIReviewAdapter", () => {
       messages: Array<{ role: string; content: string }>;
     };
     const systemPrompt = request.messages.find(({ role }) => role === "system")?.content;
-    expect(systemPrompt).toContain("[不合适原因]");
-    expect(systemPrompt).toContain("[修改要求]");
+    expect(systemPrompt).toContain("[结构问题 / 共性问题]");
+    expect(systemPrompt).toContain("[内容建议]");
+    expect(systemPrompt).toContain("结尾主题与正文经历不一致");
+    expect(systemPrompt).toContain("依据可辨认原文重新判断主题并修改建议");
     expect(systemPrompt).toMatch(/与(?:可辨认)?原文冲突时，?以原文为准/u);
     expect(systemPrompt).toContain("不得虚构关键经历");
   });
