@@ -464,7 +464,12 @@ describe("D1AnalysisJobs", () => {
           },
           async all() {
             return query.includes("FROM grading_opinions")
-              ? { results: [{ body: "应该怎么改：严格五段", updatedAt: 20 }, { body: "应该怎么改：严格五段", updatedAt: 10 }] }
+              ? {
+                results: [
+                  { reason: "结构散", changeRequest: "严格五段", paragraphLabel: null, category: "结构", updatedAt: 20 },
+                  { reason: "结构散", changeRequest: "严格五段", paragraphLabel: null, category: "结构", updatedAt: 10 },
+                ],
+              }
               : { results: [] };
           },
         };
@@ -484,7 +489,7 @@ describe("D1AnalysisJobs", () => {
     const guidance = statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings
       .find((binding) => typeof binding === "string" && binding.includes("本次只改结尾"));
     expect(guidance).toEqual(expect.stringContaining(STANDING_GUIDANCE_HEADER));
-    expect(guidance).toEqual(expect.stringContaining("1. 应该怎么改：严格五段"));
+    expect(guidance).toEqual(expect.stringContaining("1. 应该怎么改：严格五段（出现 2 次）"));
     expect(String(guidance).match(/严格五段/gu)).toHaveLength(1);
   });
 

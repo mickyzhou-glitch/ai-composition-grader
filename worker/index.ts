@@ -11,7 +11,7 @@ import {
   D1ReanalysisError,
 } from "../src/cloudflare/d1-reanalysis";
 import { D1GradingOpinions } from "../src/cloudflare/d1-grading-opinions";
-import { MAX_GRADING_OPINION_BODY_CHARS } from "../src/grading-opinions/standing-guidance";
+import { OPINION_CATEGORIES } from "../src/grading-opinions/standing-guidance";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { analysisFailureCode } from "../src/cloudflare/analysis-failure";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
@@ -42,6 +42,7 @@ import type { ReviewView } from "../app/lib/types";
 import {
   batchReanalysisCommitInputSchema,
   batchReanalysisPreviewInputSchema,
+  MAX_REVISION_FIELD_CHARS,
   REANALYSIS_SKIP_REASONS,
   rejectReviewInputSchema,
   revisionRequestInputSchema,
@@ -58,7 +59,9 @@ const editOcrParagraphsSchema = z.object({
 }).strict();
 
 const gradingOpinionUpdateSchema = z.object({
-  body: z.string().trim().min(1).max(MAX_GRADING_OPINION_BODY_CHARS),
+  reason: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
+  changeRequest: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
+  category: z.enum(OPINION_CATEGORIES).optional(),
 }).strict();
 
 const paragraphRewriteSchema = z.object({
@@ -334,8 +337,8 @@ export default {
           : apiError("NOT_FOUND", "批改意见不存在", 404);
       }
       try {
-        const body = gradingOpinionUpdateSchema.parse(await request.json()).body;
-        const updated = await opinions.update(user.id, opinionId, body);
+        const input = gradingOpinionUpdateSchema.parse(await request.json());
+        const updated = await opinions.update(user.id, opinionId, input);
         return updated
           ? Response.json({ ok: true, data: updated }, { headers: { "cache-control": "no-store" } })
           : apiError("NOT_FOUND", "批改意见不存在", 404);

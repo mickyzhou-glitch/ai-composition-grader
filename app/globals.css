@@ -140,6 +140,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-review-topbar h1 { margin: 0; font-size: 1.45rem; }
 .batch-review-topbar .button { justify-self: end; }
 .batch-review-topbar-actions { justify-self: end; display: flex; flex-wrap: wrap; gap: 8px; }
+.opinion-stats { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 16px; }
+.opinion-stats span { padding: 4px 10px; border-radius: 999px; background: var(--ivory); color: var(--ink); font-size: .85rem; }
 .opinion-list { display: grid; gap: 16px; }
 .opinion-card { display: grid; gap: 10px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .opinion-card-meta { margin: 0; }

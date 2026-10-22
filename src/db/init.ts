@@ -81,7 +81,12 @@ CREATE TABLE IF NOT EXISTS grading_opinions (
   id TEXT PRIMARY KEY NOT NULL,
   owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body TEXT NOT NULL CHECK (length(body) > 0),
+  reason TEXT NOT NULL DEFAULT '',
+  change_request TEXT NOT NULL DEFAULT '',
+  paragraph_label TEXT,
+  category TEXT NOT NULL DEFAULT '其他',
   source_review_id TEXT,
+  source_job_id TEXT,
   source_student_name TEXT NOT NULL DEFAULT '',
   source_class_name TEXT NOT NULL DEFAULT '',
   source_title TEXT NOT NULL DEFAULT '',
@@ -91,6 +96,9 @@ CREATE TABLE IF NOT EXISTS grading_opinions (
 
 CREATE INDEX IF NOT EXISTS grading_opinions_owner_created_idx
   ON grading_opinions(owner_id, created_at, id);
+
+CREATE INDEX IF NOT EXISTS grading_opinions_source_job_idx
+  ON grading_opinions(source_job_id);
 
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY NOT NULL,
@@ -225,6 +233,42 @@ export const INITIALIZE_SCHEMA_SQL = [
   CREATE_REVIEWS_SQL,
   CREATE_REMAINING_SCHEMA_SQL,
 ].join("\n");
+
+function migrateGradingOpinions(database: Database.Database): void {
+  const columns = tableColumns(database, "grading_opinions");
+  if (columns.size === 0) return;
+  const additions: Array<[string, string]> = [
+    ["reason", "TEXT NOT NULL DEFAULT ''"],
+    ["change_request", "TEXT NOT NULL DEFAULT ''"],
+    ["paragraph_label", "TEXT"],
+    ["category", "TEXT NOT NULL DEFAULT '其他'"],
+    ["source_job_id", "TEXT"],
+  ];
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) database.exec(`ALTER TABLE grading_opinions ADD COLUMN ${name} ${definition}`);
+  }
+  database.exec(`
+    UPDATE grading_opinions
+    SET
+      reason = TRIM(SUBSTR(
+        body,
+        LENGTH('为什么不合适：') + 1,
+        INSTR(body, CHAR(10) || '应该怎么改：') - LENGTH('为什么不合适：') - 1
+      )),
+      change_request = TRIM(SUBSTR(
+        body,
+        INSTR(body, CHAR(10) || '应该怎么改：') + LENGTH(CHAR(10) || '应该怎么改：')
+      ))
+    WHERE change_request = ''
+      AND INSTR(body, CHAR(10) || '应该怎么改：') > LENGTH('为什么不合适：')
+      AND SUBSTR(body, 1, LENGTH('为什么不合适：')) = '为什么不合适：';
+    UPDATE grading_opinions
+    SET reason = TRIM(body)
+    WHERE reason = '' AND change_request = '' AND length(TRIM(body)) > 0;
+    CREATE INDEX IF NOT EXISTS grading_opinions_source_job_idx
+      ON grading_opinions(source_job_id);
+  `);
+}
 
 function tableColumns(database: Database.Database, table: string): Set<string> {
   return new Set(
@@ -545,6 +589,7 @@ export function initializeSchema(database: Database.Database): void {
       database.exec(CREATE_REVIEWS_SQL);
       migrateReviews(database);
       database.exec(CREATE_REMAINING_SCHEMA_SQL);
+      migrateGradingOpinions(database);
       migrateSettings(database);
       migrateAnalysisJobs(database);
       migrateLegacyReviewImages(database);

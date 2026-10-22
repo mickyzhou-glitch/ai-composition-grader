@@ -1,8 +1,17 @@
-import { MAX_GRADING_OPINION_BODY_CHARS, type StandingOpinionInput } from "../grading-opinions/standing-guidance";
+import {
+  describeGradingOpinion,
+  isOpinionCategory,
+  type OpinionCategory,
+  type StandingOpinionInput,
+} from "../grading-opinions/standing-guidance";
 
 export interface GradingOpinionView {
   id: string;
   body: string;
+  reason: string;
+  changeRequest: string;
+  paragraphLabel: string | null;
+  category: string;
   sourceReviewId: string | null;
   sourceStudentName: string;
   sourceClassName: string;
@@ -11,9 +20,19 @@ export interface GradingOpinionView {
   updatedAt: string;
 }
 
+export interface GradingOpinionUpdate {
+  reason: string;
+  changeRequest: string;
+  category?: OpinionCategory;
+}
+
 interface OpinionRow {
   id: string;
   body: string;
+  reason: string | null;
+  changeRequest: string | null;
+  paragraphLabel: string | null;
+  category: string | null;
   sourceReviewId: string | null;
   sourceStudentName: string | null;
   sourceClassName: string | null;
@@ -23,7 +42,10 @@ interface OpinionRow {
 }
 
 const opinionColumns = `
-  id, body,
+  id, body, reason,
+  change_request AS changeRequest,
+  paragraph_label AS paragraphLabel,
+  category,
   source_review_id AS sourceReviewId,
   source_student_name AS sourceStudentName,
   source_class_name AS sourceClassName,
@@ -37,20 +59,25 @@ export async function listD1StandingOpinions(
   ownerId: string,
 ): Promise<StandingOpinionInput[]> {
   const bound = database.prepare(`
-    SELECT body, updated_at AS updatedAt
+    SELECT reason, change_request AS changeRequest, paragraph_label AS paragraphLabel,
+      category, updated_at AS updatedAt
     FROM grading_opinions
     WHERE owner_id = ?
     ORDER BY updated_at DESC, created_at DESC, id DESC
   `).bind(ownerId) as D1PreparedStatement & {
-    all?: () => Promise<{ results?: Array<{ body?: unknown; updatedAt?: unknown }> }>;
+    all?: () => Promise<{ results?: Array<Record<string, unknown>> }>;
   };
   // Some job-enqueue doubles only stub first(). An absent archive query means no standing opinions.
   if (typeof bound.all !== "function") return [];
   const result = await bound.all();
   return (result.results ?? []).flatMap((row) => {
-    if (typeof row.body !== "string" || !row.body.trim()) return [];
+    const reason = typeof row.reason === "string" ? row.reason : "";
+    const changeRequest = typeof row.changeRequest === "string" ? row.changeRequest : "";
+    if (!reason.trim() && !changeRequest.trim()) return [];
     const createdAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
-    return [{ body: row.body, createdAt }];
+    const category = typeof row.category === "string" && isOpinionCategory(row.category) ? row.category : undefined;
+    const paragraphLabel = typeof row.paragraphLabel === "string" ? row.paragraphLabel : null;
+    return [{ reason, changeRequest, paragraphLabel, category, createdAt }];
   });
 }
 
@@ -67,17 +94,24 @@ export class D1GradingOpinions {
     return (result.results ?? []).map(toView);
   }
 
-  async update(ownerId: string, id: string, body: string): Promise<GradingOpinionView | null> {
-    const trimmed = body.trim();
-    if (!trimmed || trimmed.length > MAX_GRADING_OPINION_BODY_CHARS) {
-      throw new TypeError(`body must be 1 to ${MAX_GRADING_OPINION_BODY_CHARS} characters`);
-    }
+  async update(ownerId: string, id: string, input: GradingOpinionUpdate): Promise<GradingOpinionView | null> {
+    const described = describeGradingOpinion(input.reason, input.changeRequest);
+    if (!described) throw new TypeError("reason and changeRequest are required");
     const row = await this.database.prepare(`
       UPDATE grading_opinions
-      SET body = ?, updated_at = ?
+      SET body = ?, reason = ?, change_request = ?, paragraph_label = ?, category = ?, updated_at = ?
       WHERE id = ? AND owner_id = ?
       RETURNING ${opinionColumns}
-    `).bind(trimmed, Date.now(), id, ownerId).first<OpinionRow>();
+    `).bind(
+      described.body,
+      described.reason,
+      described.changeRequest,
+      described.paragraphLabel,
+      input.category ?? described.category,
+      Date.now(),
+      id,
+      ownerId,
+    ).first<OpinionRow>();
     return row ? toView(row) : null;
   }
 
@@ -93,6 +127,10 @@ function toView(row: OpinionRow): GradingOpinionView {
   return {
     id: row.id,
     body: row.body,
+    reason: row.reason ?? "",
+    changeRequest: row.changeRequest ?? "",
+    paragraphLabel: row.paragraphLabel,
+    category: row.category ?? "其他",
     sourceReviewId: row.sourceReviewId,
     sourceStudentName: row.sourceStudentName ?? "",
     sourceClassName: row.sourceClassName ?? "",

@@ -110,7 +110,12 @@ export const gradingOpinions = sqliteTable(
     id: text("id").primaryKey(),
     ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
     body: text("body").notNull(),
+    reason: text("reason").notNull().default(""),
+    changeRequest: text("change_request").notNull().default(""),
+    paragraphLabel: text("paragraph_label"),
+    category: text("category").notNull().default("其他"),
     sourceReviewId: text("source_review_id"),
+    sourceJobId: text("source_job_id"),
     sourceStudentName: text("source_student_name").notNull().default(""),
     sourceClassName: text("source_class_name").notNull().default(""),
     sourceTitle: text("source_title").notNull().default(""),
@@ -120,6 +125,7 @@ export const gradingOpinions = sqliteTable(
   (table) => [
     check("grading_opinions_body_check", sql`length(${table.body}) > 0`),
     index("grading_opinions_owner_created_idx").on(table.ownerId, table.createdAt, table.id),
+    index("grading_opinions_source_job_idx").on(table.sourceJobId),
   ],
 );
 

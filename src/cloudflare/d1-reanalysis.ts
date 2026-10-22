@@ -1,5 +1,5 @@
 import { listD1StandingOpinions } from "./d1-grading-opinions";
-import { gradingOpinionBody, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
+import { describeGradingOpinion, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -282,7 +282,6 @@ export class D1Reanalysis {
     const now = Date.now();
     const rejectionReason = input.reason.trim() || null;
     const rejectionChangeRequest = input.changeRequest.trim() || null;
-    const opinionBody = gradingOpinionBody(input.reason, input.changeRequest);
     const updated = await this.database.prepare(`
       UPDATE reviews SET status = 'rejected',
         rejection_reason = ?, rejection_change_request = ?,
@@ -308,7 +307,6 @@ export class D1Reanalysis {
       await this.assertRequestable(await this.readReview(ownerId, reviewId), input.expectedRevision);
       throw new D1ReanalysisError("REVISION_CONFLICT");
     }
-    if (opinionBody) await this.insertOpinion(ownerId, reviewId, row!, opinionBody, now);
     return {
       id: reviewId,
       status: "rejected",
@@ -328,9 +326,17 @@ export class D1Reanalysis {
     const jobId = crypto.randomUUID();
     const now = Date.now();
     const formattedGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
-    const opinionBody = gradingOpinionBody(input.reason, input.changeRequest);
+    const describedOpinion = describeGradingOpinion(input.reason, input.changeRequest);
     const standing = await listD1StandingOpinions(this.database, ownerId);
-    if (opinionBody) standing.unshift({ body: opinionBody, createdAt: now });
+    if (describedOpinion) {
+      standing.unshift({
+        reason: describedOpinion.reason,
+        changeRequest: describedOpinion.changeRequest,
+        paragraphLabel: describedOpinion.paragraphLabel,
+        category: describedOpinion.category,
+        createdAt: now,
+      });
+    }
     const teacherGuidance = guidanceWithStandingOpinions(formattedGuidance, standing) ?? formattedGuidance;
     const mode = reanalysisMode(row!);
     const statements = this.requestStatements(
@@ -342,7 +348,9 @@ export class D1Reanalysis {
       teacherGuidance,
       mode,
     );
-    if (opinionBody) statements.push(this.opinionStatement(ownerId, reviewId, row!, opinionBody, now));
+    if (describedOpinion) {
+      statements.push(this.opinionStatement(ownerId, reviewId, row!, describedOpinion, jobId, now));
+    }
     let outcomes: D1Outcome[];
     try {
       outcomes = await this.database.batch(statements) as D1Outcome[];
@@ -596,35 +604,32 @@ export class D1Reanalysis {
     ownerId: string,
     reviewId: string,
     row: ReviewRow,
-    body: string,
+    opinion: NonNullable<ReturnType<typeof describeGradingOpinion>>,
+    jobId: string,
     now: number,
   ): D1ReanalysisStatement {
     return this.database.prepare(`
       INSERT INTO grading_opinions (
-        id, owner_id, body, source_review_id, source_student_name, source_class_name, source_title,
+        id, owner_id, body, reason, change_request, paragraph_label, category,
+        source_review_id, source_job_id, source_student_name, source_class_name, source_title,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       crypto.randomUUID(),
       ownerId,
-      body,
+      opinion.body,
+      opinion.reason,
+      opinion.changeRequest,
+      opinion.paragraphLabel,
+      opinion.category,
       reviewId,
+      jobId,
       row.student_name ?? "",
       row.class_name ?? "",
       safeTitle(row.config),
       now,
       now,
     );
-  }
-
-  private async insertOpinion(
-    ownerId: string,
-    reviewId: string,
-    row: ReviewRow,
-    body: string,
-    now: number,
-  ): Promise<void> {
-    await this.opinionStatement(ownerId, reviewId, row, body, now).run();
   }
 
   private async resolveCommitConflict(ownerId: string, item: BatchReanalysisCommitItem): Promise<never> {

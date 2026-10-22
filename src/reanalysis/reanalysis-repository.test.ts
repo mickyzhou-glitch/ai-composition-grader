@@ -17,7 +17,7 @@ import {
 } from "../jobs/analysis-job-metadata";
 import { ReviewService } from "../services/review-service";
 import { ReviewFileStore } from "../storage/review-file-store";
-import { gradingOpinionBody, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
+import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { formatRevisionTeacherGuidance, REANALYSIS_SKIP_REASONS } from "./contracts";
 import { ReanalysisDomainError, ReanalysisRepository } from "./reanalysis-repository";
 import { ReanalysisService } from "./reanalysis-service";
@@ -334,17 +334,24 @@ describe("ReanalysisRepository requestRevision", () => {
       mode: "full",
       status: "queued",
       teacherGuidance: guidanceWithStandingOpinions(formattedGuidance, [{
-        body: gradingOpinionBody(revisionInput().reason, revisionInput().changeRequest)!,
+        reason: revisionInput().reason,
+        changeRequest: revisionInput().changeRequest,
         createdAt: NOW.valueOf(),
       }]),
     });
     expect(opened.sqlite.prepare(`
-      SELECT body, source_student_name AS sourceStudentName, source_title AS sourceTitle
+      SELECT reason, change_request AS changeRequest, paragraph_label AS paragraphLabel,
+        category, source_student_name AS sourceStudentName, source_title AS sourceTitle,
+        source_job_id AS sourceJobId
       FROM grading_opinions WHERE owner_id = ?
     `).all(OWNER)).toEqual([{
-      body: gradingOpinionBody(revisionInput().reason, revisionInput().changeRequest),
+      reason: revisionInput().reason,
+      changeRequest: revisionInput().changeRequest,
+      paragraphLabel: null,
+      category: "其他",
       sourceStudentName: "艾绮",
       sourceTitle: "My  Essay",
+      sourceJobId: result.job.id,
     }]);
   });
 

@@ -5,8 +5,13 @@ import { and, desc, eq } from "drizzle-orm";
 import type { AppDatabase } from "../db/client";
 import { gradingOpinions } from "../db/schema";
 import { assignmentConfigSchema } from "../domain/contracts";
-import { normalizeAssignmentTitle } from "../reanalysis/contracts";
-import { MAX_GRADING_OPINION_BODY_CHARS, type StandingOpinionInput } from "./standing-guidance";
+import { MAX_REVISION_FIELD_CHARS, normalizeAssignmentTitle } from "../reanalysis/contracts";
+import {
+  describeGradingOpinion,
+  isOpinionCategory,
+  type OpinionCategory,
+  type StandingOpinionInput,
+} from "./standing-guidance";
 
 type OpinionReader = Pick<AppDatabase, "select">;
 
@@ -14,7 +19,12 @@ export interface GradingOpinionRecord {
   id: string;
   ownerId: string;
   body: string;
+  reason: string;
+  changeRequest: string;
+  paragraphLabel: string | null;
+  category: string;
   sourceReviewId: string | null;
+  sourceJobId: string | null;
   sourceStudentName: string;
   sourceClassName: string;
   sourceTitle: string;
@@ -24,23 +34,44 @@ export interface GradingOpinionRecord {
 
 export interface NewGradingOpinion {
   ownerId: string;
-  body: string;
+  reason: string;
+  changeRequest: string;
+  category?: OpinionCategory;
   sourceReviewId: string | null;
+  sourceJobId?: string | null;
   sourceStudentName: string;
   sourceClassName: string;
   sourceTitle: string;
   createdAt: Date;
 }
 
+export interface GradingOpinionUpdate {
+  reason: string;
+  changeRequest: string;
+  category?: OpinionCategory;
+}
+
 export function standingOpinions(database: OpinionReader, ownerId: string): StandingOpinionInput[] {
   return database.select({
-    body: gradingOpinions.body,
+    reason: gradingOpinions.reason,
+    changeRequest: gradingOpinions.changeRequest,
+    paragraphLabel: gradingOpinions.paragraphLabel,
+    category: gradingOpinions.category,
     updatedAt: gradingOpinions.updatedAt,
   }).from(gradingOpinions)
     .where(eq(gradingOpinions.ownerId, ownerId))
     .orderBy(desc(gradingOpinions.updatedAt), desc(gradingOpinions.createdAt), desc(gradingOpinions.id))
     .all()
-    .map((row) => ({ body: row.body, createdAt: row.updatedAt.getTime() }));
+    .flatMap((row) => {
+      if (!row.reason.trim() && !row.changeRequest.trim()) return [];
+      return [{
+        reason: row.reason,
+        changeRequest: row.changeRequest,
+        paragraphLabel: row.paragraphLabel,
+        category: isOpinionCategory(row.category) ? row.category : undefined,
+        createdAt: row.updatedAt.getTime(),
+      }];
+    });
 }
 
 export function opinionSourceTitle(config: unknown): string {
@@ -62,20 +93,38 @@ export class GradingOpinionRepository {
   }
 
   insert(input: NewGradingOpinion): GradingOpinionRecord {
+    const described = requireDescribed(input.reason, input.changeRequest);
     const id = this.options.createId?.() ?? randomUUID();
-    this.database.insert(gradingOpinions).values({ id, ...input, updatedAt: input.createdAt }).run();
+    this.database.insert(gradingOpinions).values({
+      id,
+      ownerId: input.ownerId,
+      body: described.body,
+      reason: described.reason,
+      changeRequest: described.changeRequest,
+      paragraphLabel: described.paragraphLabel,
+      category: input.category ?? described.category,
+      sourceReviewId: input.sourceReviewId,
+      sourceJobId: input.sourceJobId ?? null,
+      sourceStudentName: input.sourceStudentName,
+      sourceClassName: input.sourceClassName,
+      sourceTitle: input.sourceTitle,
+      createdAt: input.createdAt,
+      updatedAt: input.createdAt,
+    }).run();
     return this.require(input.ownerId, id);
   }
 
-  update(ownerId: string, id: string, body: string): GradingOpinionRecord | null {
-    const trimmed = body.trim();
-    if (!trimmed || trimmed.length > MAX_GRADING_OPINION_BODY_CHARS) {
-      throw new TypeError(`body must be 1 to ${MAX_GRADING_OPINION_BODY_CHARS} characters`);
-    }
+  update(ownerId: string, id: string, input: GradingOpinionUpdate): GradingOpinionRecord | null {
+    const described = requireDescribed(input.reason, input.changeRequest);
     const now = this.options.now?.() ?? new Date();
-    const updated = this.database.update(gradingOpinions).set({ body: trimmed, updatedAt: now })
-      .where(and(eq(gradingOpinions.id, id), eq(gradingOpinions.ownerId, ownerId)))
-      .run();
+    const updated = this.database.update(gradingOpinions).set({
+      body: described.body,
+      reason: described.reason,
+      changeRequest: described.changeRequest,
+      paragraphLabel: described.paragraphLabel,
+      category: input.category ?? described.category,
+      updatedAt: now,
+    }).where(and(eq(gradingOpinions.id, id), eq(gradingOpinions.ownerId, ownerId))).run();
     if (updated.changes !== 1) return null;
     return this.require(ownerId, id);
   }
@@ -93,4 +142,16 @@ export class GradingOpinionRepository {
     if (!row) throw new Error("GRADING_OPINION_NOT_FOUND");
     return row;
   }
+}
+
+function requireDescribed(reason: string, changeRequest: string) {
+  const described = describeGradingOpinion(reason, changeRequest);
+  if (
+    !described
+    || described.reason.length > MAX_REVISION_FIELD_CHARS
+    || described.changeRequest.length > MAX_REVISION_FIELD_CHARS
+  ) {
+    throw new TypeError(`reason and changeRequest must each be 1 to ${MAX_REVISION_FIELD_CHARS} characters`);
+  }
+  return described;
 }

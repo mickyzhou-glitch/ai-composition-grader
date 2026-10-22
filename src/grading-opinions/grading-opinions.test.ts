@@ -74,9 +74,10 @@ describe("批改意见存档", () => {
       `).run(ownerId, ownerId, NOW.valueOf(), NOW.valueOf());
     }
     let nextJob = 0;
+    let nextOpinion = 0;
     reanalysis = new ReanalysisRepository(opened.db, { now: () => NOW, createId: () => "job-reanalysis" });
     jobs = new AnalysisJobRepository(opened.db, { now: () => NOW, createId: () => `job-${++nextJob}` });
-    opinions = new GradingOpinionRepository(opened.db, { now: () => new Date(NOW.valueOf() + 60_000), createId: () => "opinion-edited" });
+    opinions = new GradingOpinionRepository(opened.db, { now: () => new Date(NOW.valueOf() + 60_000), createId: () => `opinion-${++nextOpinion}` });
   }
 
   function insertReview(id: string, ownerId = OWNER, revision = 1) {
@@ -94,32 +95,33 @@ describe("批改意见存档", () => {
     `).run(id, NOW.valueOf());
   }
 
-  it("退回和有内容的完全不能用会存档，空的完全不能用不会", () => {
+  it("提交后台修改会分开存档两项文字，完全不能用不写入长期存档", () => {
     setup();
     insertReview("review-1");
 
-    reanalysis.rejectReview(OWNER, "review-1", { expectedRevision: 1, reason: "   ", changeRequest: "" });
-    expect(opinions.list(OWNER)).toEqual([]);
-
     reanalysis.rejectReview(OWNER, "review-1", {
-      expectedRevision: 2,
+      expectedRevision: 1,
       reason: "只写了一件事",
       changeRequest: "不要编情节",
     });
+    expect(opinions.list(OWNER)).toEqual([]);
+
+    reanalysis.requestRevision(OWNER, "review-1", {
+      expectedRevision: 2,
+      reason: "第2段太空",
+      changeRequest: "写具体",
+    });
     expect(opinions.list(OWNER)).toMatchObject([{
-      body: "为什么不合适：只写了一件事\n应该怎么改：不要编情节",
+      reason: "第2段太空",
+      changeRequest: "写具体",
+      paragraphLabel: "第2段",
+      category: "结构",
       sourceReviewId: "review-1",
+      sourceJobId: "job-reanalysis",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
       sourceTitle: "我终于明白了",
     }]);
-
-    reanalysis.requestRevision(OWNER, "review-1", {
-      expectedRevision: 3,
-      reason: "开头太空",
-      changeRequest: "用一句名言开头",
-    });
-    expect(opinions.list(OWNER)).toHaveLength(2);
   });
 
   it("删掉作文或重新分析后意见还在，并注入这位老师之后的全部批改", () => {
@@ -158,15 +160,25 @@ describe("批改意见存档", () => {
   it("相同意见只注入一次，编辑和删除会改变之后的批改要求", () => {
     setup();
     insertReview("review-1");
-    reanalysis.rejectReview(OWNER, "review-1", {
-      expectedRevision: 1,
+    opinions.insert({
+      ownerId: OWNER,
       reason: "离题",
       changeRequest: "扣住题目",
+      sourceReviewId: "review-1",
+      sourceStudentName: "小明",
+      sourceClassName: "六1班",
+      sourceTitle: "我终于明白了",
+      createdAt: new Date(NOW.valueOf() - 1_000),
     });
-    reanalysis.rejectReview(OWNER, "review-1", {
-      expectedRevision: 2,
+    opinions.insert({
+      ownerId: OWNER,
       reason: "离题",
       changeRequest: "扣住题目",
+      sourceReviewId: "review-1",
+      sourceStudentName: "小明",
+      sourceClassName: "六1班",
+      sourceTitle: "我终于明白了",
+      createdAt: NOW,
     });
     insertReview("review-2");
     const queued = () => opened.sqlite.prepare(
@@ -179,7 +191,8 @@ describe("批改意见存档", () => {
     for (const opinion of opinions.list(OWNER)) opinions.delete(OWNER, opinion.id);
     const kept = opinions.insert({
       ownerId: OWNER,
-      body: "开头保留原句，只润色",
+      reason: "语言生硬",
+      changeRequest: "开头保留原句，只润色",
       sourceReviewId: "review-1",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
@@ -200,10 +213,15 @@ describe("批改意见存档", () => {
   it("按最新框架重新分析也会带上存档里的全部意见", () => {
     setup();
     insertReview("review-1");
-    reanalysis.rejectReview(OWNER, "review-1", {
-      expectedRevision: 1,
+    opinions.insert({
+      ownerId: OWNER,
       reason: "情感转变太快",
       changeRequest: "先抑后扬",
+      sourceReviewId: "review-1",
+      sourceStudentName: "小明",
+      sourceClassName: "六1班",
+      sourceTitle: "我终于明白了",
+      createdAt: NOW,
     });
     opened.sqlite.prepare(`
       INSERT INTO saved_assignments (id, owner_id, title, config, created_at, updated_at)
@@ -237,23 +255,29 @@ describe("批改意见存档", () => {
     `).run();
     sqlite.prepare(`
       INSERT INTO grading_opinions (
-        id, owner_id, body, source_review_id, source_student_name, source_class_name, source_title, created_at, updated_at
-      ) VALUES ('opinion-1', 'teacher-a', '用名言开头', 'review-1', '小明', '六1班', '我终于明白了', 10, 10)
+        id, owner_id, body, reason, change_request, category, source_review_id,
+        source_student_name, source_class_name, source_title, created_at, updated_at
+      ) VALUES ('opinion-1', 'teacher-a', '为什么不合适：太空\n应该怎么改：用名言开头', '太空', '用名言开头', '结构', 'review-1', '小明', '六1班', '我终于明白了', 10, 10)
     `).run();
     const archive = new D1GradingOpinions(d1From(sqlite));
 
     await expect(archive.list("teacher-b")).resolves.toEqual([]);
-    await expect(archive.update("teacher-b", "opinion-1", "改掉")).resolves.toBeNull();
+    await expect(archive.update("teacher-b", "opinion-1", { reason: "改掉", changeRequest: "重写" })).resolves.toBeNull();
     await expect(archive.delete("teacher-b", "opinion-1")).resolves.toBe(false);
     await expect(archive.list("teacher-a")).resolves.toMatchObject([{
       id: "opinion-1",
-      body: "用名言开头",
+      reason: "太空",
+      changeRequest: "用名言开头",
       sourceStudentName: "小明",
       sourceClassName: "六1班",
       sourceTitle: "我终于明白了",
     }]);
-    await expect(archive.update("teacher-a", "opinion-1", "改为五段")).resolves.toMatchObject({ body: "改为五段" });
-    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a")).resolves.toMatchObject([{ body: "改为五段" }]);
+    await expect(archive.update("teacher-a", "opinion-1", { reason: "结构散", changeRequest: "改为五段", category: "结构" })).resolves.toMatchObject({
+      reason: "结构散",
+      changeRequest: "改为五段",
+      category: "结构",
+    });
+    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a")).resolves.toMatchObject([{ changeRequest: "改为五段" }]);
     await expect(archive.delete("teacher-a", "opinion-1")).resolves.toBe(true);
     sqlite.close();
   });

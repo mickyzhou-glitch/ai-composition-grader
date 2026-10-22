@@ -217,13 +217,16 @@ describe("D1Reanalysis", () => {
     expect(insert.bindings).toContain("full");
     expect(insert.bindings).toContain(guidanceWithStandingOpinions(
       "[不合适原因]\n原批改不合适\n[修改要求]\n重新关注结尾",
-      [{ body: "为什么不合适：原批改不合适\n应该怎么改：重新关注结尾", createdAt: 1 }],
+      [{ reason: "原批改不合适", changeRequest: "重新关注结尾", createdAt: 1 }],
     ));
     const archived = statements.find(({ sql }) => /INSERT INTO grading_opinions/u.test(sql));
     expect(archived?.bindings).toEqual(expect.arrayContaining([
-      "为什么不合适：原批改不合适\n应该怎么改：重新关注结尾",
+      "原批改不合适",
+      "重新关注结尾",
+      "结构",
       "小明",
       "春天",
+      "job-1",
     ]));
   });
 
