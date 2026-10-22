@@ -3,8 +3,8 @@ import {
   createOcrCheckpointV2,
   editOcrParagraphTexts,
   OcrCheckpointError,
-  ocrCheckpointSchema,
   publicOcrView,
+  readStoredOcrCheckpoint,
   type OcrCheckpoint,
   type OcrCheckpointV2,
   type OcrParagraphTextEdit,
@@ -26,8 +26,7 @@ export class D1OcrCheckpointRepository {
       "SELECT image_revision, ocr_checkpoint FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
     ).bind(reviewId, ownerId).first<OcrRow>();
     if (!row?.ocr_checkpoint) return null;
-    const checkpoint = ocrCheckpointSchema.parse(JSON.parse(row.ocr_checkpoint));
-    return checkpoint.sourceRevision === row.image_revision ? checkpoint : null;
+    return readStoredOcrCheckpoint(row.ocr_checkpoint, row.image_revision);
   }
 
   async saveRecognized(

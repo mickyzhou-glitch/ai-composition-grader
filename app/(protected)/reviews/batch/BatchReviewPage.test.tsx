@@ -145,13 +145,14 @@ describe("BatchReviewPage", () => {
     ], { currentReport: paragraphReport });
     const user = userEvent.setup();
     render(<BatchReviewPage />);
-    const revised = await screen.findByRole("textbox", { name: "第 1 段完整示范文" });
+    const revised = await screen.findByRole("textbox", { name: "第 1 段改后全段" });
+    expect(screen.queryByRole("textbox", { name: "第 1 段第 1 条修改动作" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: "第 1 段第 1 条问题描述" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除第 1 段第 1 条建议" })).not.toBeInTheDocument();
     await user.clear(revised);
     await user.type(revised, "需要补充声音描写");
     await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（1）班");
-    expect(screen.getByRole("textbox", { name: "第 1 段完整示范文" })).toHaveValue("需要补充声音描写");
+    expect(screen.getByRole("textbox", { name: "第 1 段改后全段" })).toHaveValue("需要补充声音描写");
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（2）班");
     expect(confirm).toHaveBeenCalled();
@@ -185,12 +186,13 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
 
-    expect(await screen.findByRole("heading", { name: "修改意见与示范文" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "修改动作与改后全段" })).toBeVisible();
     expect(screen.queryByTestId("page-crop-1")).not.toBeInTheDocument();
+    expect(screen.queryByText("【修改动作】")).not.toBeInTheDocument();
     expect(screen.queryByText("【修改建议】")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /删除第 \d+ 段第 \d+ 条建议/u })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /新增第 \d+ 段建议/u })).not.toBeInTheDocument();
-    const revised = screen.getByLabelText("第 1 段完整示范文");
+    const revised = screen.getByLabelText("第 1 段改后全段");
     await user.clear(revised);
     await user.type(revised, "我听见急促的呼吸声，终于走上台。");
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));

@@ -78,7 +78,9 @@ describe("VisionOcrAdapter", () => {
     expect(harness.settings.getRuntimeConfig).toHaveBeenCalledWith("vision");
     const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
     expect(serialized).toContain("data:image/jpeg;base64,eA==");
+    expect(serialized).toContain("不要把作文图片裁成一段一段再识别");
     expect(serialized).toContain("只把作文正文自然段写入 paragraphs");
+    expect(serialized).toContain("不得合并");
     expect(serialized).toContain("跨页延续使用同一个 paragraphIndex");
     expect(serialized).not.toContain("修改建议");
   });
@@ -107,6 +109,26 @@ describe("VisionOcrAdapter", () => {
     await expect(harness.adapter.recognize({
       imageUrls: ["data:image/jpeg;base64,page-0", "data:image/jpeg;base64,page-1"],
     })).resolves.toEqual(response);
+  });
+
+  it("原文有 5 个自然段而模型合并成 3 段时仍返回 5 段", async () => {
+    const lines = ["第一段。", "第二段。", "第三段。", "第四段。", "第五段。"];
+    const harness = setup({
+      pages: [page(0, lines.join("\n"))],
+      paragraphs: [
+        paragraph(0, "第一段。第二段。"),
+        paragraph(1, "第三段。"),
+        paragraph(2, "第四段。第五段。"),
+      ],
+    });
+
+    const recognized = await harness.adapter.recognize({
+      imageUrls: ["data:image/jpeg;base64,eA=="],
+    });
+
+    expect(recognized.paragraphs.map((item) => item.text)).toEqual(lines);
+    expect(recognized.paragraphs).toHaveLength(5);
+    expect(recognized.pages).toHaveLength(1);
   });
 
   it("rejects a response whose page count differs from the supplied images", async () => {

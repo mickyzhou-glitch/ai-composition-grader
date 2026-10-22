@@ -29,6 +29,7 @@ import type {
   OcrCheckpointV2,
   OcrParagraphTextEdit,
 } from "../ocr/contracts";
+import { uprightRecognitionImage } from "../images/upright-recognition";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
@@ -508,9 +509,22 @@ export class ReviewService {
         if (effectiveMode === "full") checkpoint = null;
         const imageDataUrls = checkpoint ? [] : await Promise.all(
           review.images.map(async (image) => {
-            const filename = image.aiPath.replace(/^images\//, "");
-            const data = await this.fileStore.readFile(ownerId, id, "images", filename);
-            return `data:image/jpeg;base64,${data.toString("base64")}`;
+            const candidates = [
+              { path: image.originalPath, mimeType: image.mimeType },
+              { path: image.aiPath, mimeType: "image/jpeg" },
+            ];
+            let lastError: unknown;
+            for (const candidate of candidates) {
+              try {
+                const filename = candidate.path.replace(/^images\//, "");
+                const data = await this.fileStore.readFile(ownerId, id, "images", filename);
+                const upright = await uprightRecognitionImage(data, candidate.mimeType);
+                return `data:${upright.mimeType};base64,${Buffer.from(upright.bytes).toString("base64")}`;
+              } catch (error) {
+                lastError = error;
+              }
+            }
+            throw lastError;
           }),
         );
         return {

@@ -9,14 +9,12 @@ import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { DeliveryDocument } from "../src/delivery/contracts";
 import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
 import { D1Reanalysis } from "../src/cloudflare/d1-reanalysis";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { publicOcrView } from "../src/ocr/contracts";
 import worker from "../worker/index";
 import { createReviewDocx } from "../app/lib/docx-download";
-import { paginateDeliveryDocument } from "../app/lib/delivery-pagination";
 
 const workspace = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -363,17 +361,49 @@ describe("最终交付的本机安全默认值", () => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
       "base64",
     ));
-    const delivery: DeliveryDocument = {
-      title: "公开作文标题",
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(png.slice()));
+    const docx = await createReviewDocx({
+      id: "review-public",
       studentName: "公开学生姓名",
-      paragraphs: [{
-        paragraphNumber: 1,
-        crops: [{ pageIndex: 0, bytes: png, width: 600, height: 300 }],
-        suggestions: [{ problem: "保留", advice: "保留原文", example: "自然。" }],
-        revisionRuns: [{ kind: "unchanged", text: "公开修改稿。" }],
-      }],
-    };
-    const docx = await createReviewDocx(delivery, paginateDeliveryDocument(delivery));
+      config: { title: "公开作文标题" },
+      report: {
+        version: 2,
+        themeFit: "fits",
+        themeReason: "切题",
+        personalizedComment: "真实",
+        painPoints: [],
+        commonIssues: [],
+        revisionSuggestions: [],
+        grade: "A",
+        diagnostics: {
+          authenticityAndRelevance: { finding: "真实", action: "保留" },
+          materialAndDetails: { finding: "具体", action: "保留" },
+          structure: { finding: "完整", action: "保留" },
+          language: { finding: "通顺", action: "保留" },
+        },
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          suggestions: [{ problem: "保留", advice: "保留原文", example: "自然。" }],
+          revisedText: "公开修改稿。",
+        }],
+        parentFeedbacks: [],
+      },
+      teacherReviewedAt: "2026-08-28T08:00:00.000Z",
+      reportStale: false,
+      images: [{ id: 7, position: 0, width: 600, height: 300, mimeType: "image/png" }],
+      ocr: {
+        version: 2,
+        ocrRevision: 1,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: "公开修改稿。", readable: true, warnings: [] }],
+        paragraphs: [{
+          id: "paragraph-1",
+          paragraphIndex: 0,
+          text: "公开修改稿。",
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+        }],
+      },
+    });
     const zip = await JSZip.loadAsync(await docx.arrayBuffer());
     const propertyFiles = Object.values(zip.files).filter(({ dir, name }) => (
       !dir && name.startsWith("docProps/")

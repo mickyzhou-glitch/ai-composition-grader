@@ -209,10 +209,12 @@ function legacyDiagnostics(report: z.infer<typeof historicalEvaluationReportSche
   };
 }
 
+const optionalSuggestionText = z.string().trim().min(1).optional();
+
 export const paragraphSuggestionSchema = z.object({
-  problem: z.string().trim().min(1),
+  problem: optionalSuggestionText,
   advice: z.string().trim().min(1),
-  example: z.string().trim().min(1),
+  example: optionalSuggestionText,
 }).strict();
 export type ParagraphSuggestion = z.infer<typeof paragraphSuggestionSchema>;
 

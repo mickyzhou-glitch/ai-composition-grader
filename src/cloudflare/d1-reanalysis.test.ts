@@ -179,6 +179,7 @@ describe("D1Reanalysis", () => {
       newlyQueued: true,
       job: { id: "job-1", reviewId: REVIEW, mode: "full", status: "queued" },
     });
+    expect(update.sql).not.toContain("sourceRevision");
     expect(insert.bindings).toContain("full");
     expect(insert.bindings).toContain("[不合适原因]\n原批改不合适\n[修改要求]\n重新关注结尾");
   });
@@ -208,6 +209,8 @@ describe("D1Reanalysis", () => {
     });
 
     expect(result.job).toMatchObject({ mode: "content_only" });
+    expect(statements.find(({ sql }) => /UPDATE reviews/iu.test(sql))?.sql)
+      .toContain("sourceRevision");
     expect(statements.find(({ sql }) => /INSERT INTO analysis_jobs/iu.test(sql))?.bindings)
       .toContain("content_only");
   });
@@ -274,12 +277,40 @@ describe("D1Reanalysis", () => {
     expect(statements[1].sql).toContain("status = 'analyzing'");
   });
 
-  it("预览严格按 sourceRevision 判断 OCR 是否当前", async () => {
+  it("识别原文缺失或失效但原图还在时仍可重新分析", async () => {
     const database = {
       prepare: vi.fn((sql: string) => {
         if (/^\s*SELECT/iu.test(sql) && sql.includes("FROM reviews")) {
           return statement(sql, { all: vi.fn(async () => ({ results: [reviewRow({
             ocr_checkpoint: JSON.stringify({ sourceRevision: 3 }),
+          })] })) });
+        }
+        if (/^\s*SELECT/iu.test(sql) && sql.includes("FROM saved_assignments")) {
+          return statement(sql, {
+            all: vi.fn(async () => ({ results: [{
+              id: ASSIGNMENT,
+              title: " 春天 ",
+              updated_at: 1_700_000_000_000,
+            }] })),
+          });
+        }
+        return statement(sql, { all: vi.fn(async () => ({ results: [] })) });
+      }),
+    } as unknown as D1Database;
+
+    await expect(new D1Reanalysis(database).preview(OWNER, [REVIEW])).resolves.toEqual({
+      matched: [expect.objectContaining({ reviewId: REVIEW, expectedRevision: 3 })],
+      skipped: [],
+    });
+  });
+
+  it("原图也没有时跳过并说明原因", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        if (/^\s*SELECT/iu.test(sql) && sql.includes("FROM reviews")) {
+          return statement(sql, { all: vi.fn(async () => ({ results: [reviewRow({
+            image_count: 0,
+            ocr_checkpoint: null,
           })] })) });
         }
         return statement(sql, { all: vi.fn(async () => ({ results: [] })) });
@@ -292,10 +323,35 @@ describe("D1Reanalysis", () => {
         reviewId: REVIEW,
         studentName: "小明",
         title: "春天",
-        code: "OCR_NOT_CURRENT",
-        reason: "识别原文不存在或已失效",
+        code: "IMAGES_MISSING",
+        reason: "原始图片不存在，无法重新识别",
       }],
     });
+  });
+
+  it("没有当前识别原文时单篇退回仍排 full，SQL 不再要求 checkpoint", async () => {
+    const statements: Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const prepared = statement(sql, {
+          first: vi.fn(async () => reviewRow({ ocr_checkpoint: null, status: "failed", report: null })),
+        }) as D1ReanalysisStatement & { sql: string; bindings: unknown[] };
+        statements.push(prepared);
+        return prepared;
+      }),
+      batch: vi.fn(async (batchStatements: D1ReanalysisStatement[]) =>
+        batchStatements.map(() => ({ meta: { changes: 1 } }))),
+    } as unknown as D1Database;
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("job-missing-ocr");
+
+    const result = await new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
+      expectedRevision: 3,
+      reason: "分析失败",
+      changeRequest: "从原图重新识别",
+    });
+
+    expect(result.job).toMatchObject({ mode: "full" });
+    expect(statements.find(({ sql }) => /UPDATE reviews/iu.test(sql))?.sql).not.toContain("sourceRevision");
   });
 
   it("活动任务唯一竞态映射为 ANALYSIS_ACTIVE，而不是向上暴露 D1 错误", async () => {

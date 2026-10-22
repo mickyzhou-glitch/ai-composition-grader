@@ -26,7 +26,7 @@ interface ParagraphReviewEditorProps {
   revisionLabel?: string;
 }
 
-const emptySuggestion = { problem: "", advice: "", example: "" };
+const emptySuggestion = { advice: "" };
 
 export function ParagraphReviewEditor({
   reviewId,
@@ -40,8 +40,8 @@ export function ParagraphReviewEditor({
   showSourceCrops = true,
   showCharacterCounts = false,
   showSuggestions = true,
-  revisionHeading = "修改后段落",
-  revisionLabel = "完整修改稿",
+  revisionHeading = "改后全段",
+  revisionLabel = "改后全段",
 }: ParagraphReviewEditorProps) {
   const [instructions, setInstructions] = useState<Record<string, string>>({});
   const paragraphs = [...ocr.paragraphs]
@@ -70,7 +70,7 @@ export function ParagraphReviewEditor({
   return (
     <div className="paragraph-review-editor">
       {showCharacterCounts ? <div className="paragraph-review-total">
-        示范文总字数 <strong>{totalCharacters}</strong> 字（含标点）
+        {report.rewrittenEssay ? "完整范文" : "改后全段"}总字数 <strong>{totalCharacters}</strong> 字（含标点）
       </div> : null}
       {report.rewrittenEssay ? <section className="paragraph-review-unit" aria-label="完整范文">
         <div className="paragraph-review-heading">
@@ -108,7 +108,7 @@ export function ParagraphReviewEditor({
               <div className="paragraph-review-heading">
                 <h3>第 {paragraphNumber} 段</h3>
                 {showCharacterCounts ? <span>
-                  示范文 <strong>{countTextCharactersIncludingPunctuation(paragraphReview.revisedText)}</strong> 字（含标点）
+                  改后全段 <strong>{countTextCharactersIncludingPunctuation(paragraphReview.revisedText)}</strong> 字（含标点）
                 </span> : null}
               </div>
               {showSourceCrops ? <ParagraphCropPreview
@@ -119,24 +119,11 @@ export function ParagraphReviewEditor({
               /> : null}
 
               {showSuggestions ? <>
-                <h4>【修改建议】</h4>
+                <h4>【修改动作】</h4>
                 <div className="paragraph-suggestion-list">
                   {paragraphReview.suggestions.map((suggestion, suggestionIndex) => (
                     <fieldset className="paragraph-suggestion" key={suggestionIndex}>
                       <legend>建议 {suggestionIndex + 1}</legend>
-                      <label>问题描述
-                        <input
-                          aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条问题描述`}
-                          value={suggestion.problem}
-                          disabled={disabled || rewriting}
-                          onChange={(event) => updateParagraph(paragraph.id, (current) => ({
-                            ...current,
-                            suggestions: current.suggestions.map((item, index) => index === suggestionIndex
-                              ? { ...item, problem: event.target.value }
-                              : item),
-                          }))}
-                        />
-                      </label>
                       <label>修改动作
                         <input
                           aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改动作`}
@@ -146,19 +133,6 @@ export function ParagraphReviewEditor({
                             ...current,
                             suggestions: current.suggestions.map((item, index) => index === suggestionIndex
                               ? { ...item, advice: event.target.value }
-                              : item),
-                          }))}
-                        />
-                      </label>
-                      <label>修改示例
-                        <textarea
-                          aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改示例`}
-                          value={suggestion.example}
-                          disabled={disabled || rewriting}
-                          onChange={(event) => updateParagraph(paragraph.id, (current) => ({
-                            ...current,
-                            suggestions: current.suggestions.map((item, index) => index === suggestionIndex
-                              ? { ...item, example: event.target.value }
                               : item),
                           }))}
                         />

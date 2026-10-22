@@ -8,8 +8,6 @@ const exportMocks = vi.hoisted(() => ({
   events: [] as string[],
   createPdf: vi.fn(),
   createDocx: vi.fn(),
-  buildDelivery: vi.fn(),
-  paginate: vi.fn(),
   triggerDownload: vi.fn(),
   markExported: vi.fn(),
 }));
@@ -22,14 +20,6 @@ vi.mock("./pdf-download", () => ({
 
 vi.mock("./docx-download", () => ({
   createReviewDocx: exportMocks.createDocx,
-}));
-
-vi.mock("./delivery-document", () => ({
-  buildDeliveryDocument: exportMocks.buildDelivery,
-}));
-
-vi.mock("./delivery-pagination", () => ({
-  paginateDeliveryDocument: exportMocks.paginate,
 }));
 
 import {
@@ -168,12 +158,6 @@ describe("双格式导出编排", () => {
     exportMocks.events.length = 0;
     exportMocks.createPdf.mockResolvedValue(new Blob(["pdf"], { type: "application/pdf" }));
     exportMocks.createDocx.mockResolvedValue(new Blob(["docx"]));
-    exportMocks.buildDelivery.mockImplementation(async (item: ReviewView) => ({
-      title: item.config.title,
-      studentName: item.studentName,
-      paragraphs: [],
-    }));
-    exportMocks.paginate.mockReturnValue([]);
     exportMocks.triggerDownload.mockImplementation((_blob: Blob, filename: string) => {
       exportMocks.events.push(`download:${filename}`);
     });
@@ -199,10 +183,6 @@ describe("双格式导出编排", () => {
       exportMocks.events.push("render:pdf");
       return new Blob(["pdf"], { type: "application/pdf" });
     });
-    exportMocks.buildDelivery.mockImplementation(async () => {
-      exportMocks.events.push("build:delivery");
-      return { title: item.config.title, studentName: item.studentName, paragraphs: [] };
-    });
     exportMocks.createDocx.mockImplementation(async () => {
       exportMocks.events.push("render:docx");
       return new Blob(["docx"]);
@@ -220,18 +200,39 @@ describe("双格式导出编排", () => {
     ] : [
       "fetch:/api/reviews/review-1",
       "fetch:/api/reviews/export-check",
-      "build:delivery",
       "render:docx",
       `download:${reviewFilename(item, format)}`,
       "marked:review-1",
     ]);
     if (format === "docx") {
-      expect(exportMocks.paginate).toHaveBeenCalledOnce();
-      expect(exportMocks.createDocx).toHaveBeenCalledWith(
-        expect.objectContaining({ title: item.config.title }),
-        [],
-      );
+      expect(exportMocks.createDocx).toHaveBeenCalledWith(expect.objectContaining({
+        id: item.id,
+        studentName: item.studentName,
+        config: expect.objectContaining({ title: item.config.title }),
+      }));
     }
+  });
+
+  it("批量 Word 按输入顺序生成每一篇，不走旧的裁图交付", async () => {
+    const reviews = [
+      review("review-2", 4, "第二篇", "乙同学"),
+      review("review-1", 3, "第一篇", "甲同学"),
+    ];
+    mockNewExportApi(reviews);
+    exportMocks.createDocx.mockImplementation(async (item: ReviewView) => {
+      exportMocks.events.push(`render:${item.id}`);
+      return new Blob([item.id]);
+    });
+
+    await downloadReviewArchive(["review-2", "review-1"], "docx");
+
+    expect(exportMocks.createDocx.mock.calls.map(([item]) => item.id)).toEqual(["review-2", "review-1"]);
+    expect(exportMocks.createPdf).not.toHaveBeenCalled();
+    expect(exportMocks.events.slice(-3)).toEqual([
+      "download:作文批改批量导出-Word.zip",
+      "marked:review-2",
+      "marked:review-1",
+    ]);
   });
 
   it("批量按输入顺序构建所有文件后再下载和逐篇标记", async () => {

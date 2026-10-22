@@ -1,3 +1,5 @@
+import { uprightRecognitionImage } from "../images/upright-recognition";
+
 const MAX_INLINE_AI_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export interface AiImageObject {
@@ -5,8 +7,7 @@ export interface AiImageObject {
   mimeType: string;
 }
 
-function toBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
+function toBase64(bytes: Uint8Array): string {
   const chunkSize = 0x8000;
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
@@ -28,7 +29,8 @@ export async function loadInlineAiImageUrls(bucket: R2Bucket, images: AiImageObj
     if (!object) throw new Error("AI_IMAGE_UNAVAILABLE");
     totalSize += object.size;
     if (totalSize > MAX_INLINE_AI_IMAGE_BYTES) throw new Error("AI_INLINE_IMAGE_TOO_LARGE");
-    urls.push(`data:${image.mimeType};base64,${toBase64(await object.arrayBuffer())}`);
+    const upright = await uprightRecognitionImage(new Uint8Array(await object.arrayBuffer()), image.mimeType);
+    urls.push(`data:${upright.mimeType};base64,${toBase64(upright.bytes)}`);
   }
   return urls;
 }

@@ -1,13 +1,20 @@
-import { deliveryReadiness } from "@/src/delivery/readiness";
-import {
-  isLegacyEvaluationReport,
-  paragraphEvaluationReportSchema,
-  type ParagraphSuggestion,
-} from "@/src/domain/contracts";
-import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
-
 import { apiFetch } from "./api";
-import type { ReviewImageView, ReviewView } from "./types";
+import {
+  buildExportReportContent,
+  EXPORT_KAITI_FACE,
+  EXPORT_KAITI_FONT,
+  exportDocumentTitle,
+  exportFontSample,
+  exportOriginalImageUrl,
+  exportParagraphRuns,
+  ExportContentError,
+  rewrittenEssayHeading,
+  rewrittenEssayLineText,
+  type ExportParagraph,
+  type ExportReportContent,
+  type ExportTextRun,
+} from "./export-report-content";
+import type { ReviewView } from "./types";
 
 const PDF_WIDTH = 841.89;
 const PDF_HEIGHT = 595.28;
@@ -20,8 +27,6 @@ const BOX_PADDING = 7;
 const MAX_TEXT_PT = 10.5;
 const MIN_TEXT_PT = 7;
 const FONT_STEP_PT = 0.25;
-const KAITI_FONT_FACE = '"LXGW WenKai"';
-const KAITI_FONT = `${KAITI_FONT_FACE}, "KaiTi", "STKaiti", "Kaiti SC", serif`;
 const TEXT_COLOR = "#000000";
 const SUGGESTION_COLOR = "#c00000";
 const CHANGE_COLOR = "#1f4e78";
@@ -32,20 +37,7 @@ type CanvasPage = {
   context: CanvasRenderingContext2D;
 };
 
-type PdfParagraph = {
-  suggestions: ParagraphSuggestion[];
-  revisionRuns: PdfRevisionRun[];
-};
-
-type PdfRevisionRun = {
-  text: string;
-  changed: boolean;
-};
-
-type PdfPage = {
-  image: ReviewImageView;
-  paragraphs: PdfParagraph[];
-};
+type PdfPage = ExportReportContent["pages"][number];
 
 type Rectangle = {
   x: number;
@@ -76,7 +68,7 @@ type RichTextLine = {
 
 type PositionedTextBox = Rectangle & {
   fontPt: number;
-  paragraph: PdfParagraph;
+  paragraph: ExportParagraph;
 };
 
 type LoadedImage = {
@@ -96,18 +88,8 @@ export class ReviewPdfError extends Error {
   }
 }
 
-function safeFilenamePart(value: string, fallback: string) {
-  return value
-    .replace(/[\\/:*?"<>|]/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(0, 60) || fallback;
-}
-
 function reviewPdfTitle(review: ReviewView) {
-  const student = safeFilenamePart(review.studentName, "未填写学生姓名");
-  const title = safeFilenamePart(review.config.title, "未命名作文");
-  return `${student}${title}`;
+  return exportDocumentTitle(review);
 }
 
 function reviewPdfFilename(review: ReviewView) {
@@ -116,17 +98,6 @@ function reviewPdfFilename(review: ReviewView) {
 
 function graphemes(value: string): string[] {
   return Array.from(graphemeSegmenter.segment(value), ({ segment }) => segment);
-}
-
-function buildPdfRevisionRuns(source: string, revised: string): PdfRevisionRun[] {
-  const runs = buildSentenceRevisionRuns(source, revised).map((run) => ({
-    text: run.text,
-    changed: run.kind === "inserted",
-  }));
-  if (runs.map((run) => run.text).join("") !== revised) {
-    throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "示范文本未能完整排版，请重试");
-  }
-  return runs;
 }
 
 function createCanvasPage(): CanvasPage {
@@ -151,11 +122,11 @@ function setKaitiFont(
   sizePt: number,
   weight: 400 | 700,
 ) {
-  context.font = `${weight} ${sizePt}px ${KAITI_FONT}`;
+  context.font = `${weight} ${sizePt}px ${EXPORT_KAITI_FONT}`;
 }
 
 function imageUrl(reviewId: string, imageId: number) {
-  return `/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${imageId}&variant=original`;
+  return exportOriginalImageUrl(reviewId, imageId);
 }
 
 async function loadOriginalImage(reviewId: string, imageId: number): Promise<LoadedImage> {
@@ -173,82 +144,28 @@ async function loadOriginalImage(reviewId: string, imageId: number): Promise<Loa
   }
 }
 
-function buildPdfPages(review: ReviewView): PdfPage[] {
-  const readiness = deliveryReadiness(review);
-  if (!readiness.ready) {
-    throw new ReviewPdfError(
-      readiness.code === "LEGACY_REPORT" ? "LEGACY_REPORT" : "PDF_CONTENT_INCOMPLETE",
-      readiness.message,
-    );
+function styledRun(run: ExportTextRun): RichTextRun {
+  if (run.style === "suggestion") {
+    return { text: run.text, color: SUGGESTION_COLOR, weight: 700, underline: false };
   }
-  if (!review.ocr || review.ocr.version !== 2) {
-    throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "需要自然段识别结果");
+  if (run.style === "demonstration") {
+    return { text: run.text, color: TEXT_COLOR, weight: 700, underline: false };
   }
-
-  const report = paragraphEvaluationReportSchema.parse(review.report);
-  const reportByParagraph = new Map(
-    report.paragraphReviews.map((paragraph) => [paragraph.paragraphId, paragraph]),
-  );
-  const paragraphsByPage = new Map<number, PdfParagraph[]>();
-
-  for (const paragraph of [...review.ocr.paragraphs].sort(
-    (left, right) => left.paragraphIndex - right.paragraphIndex,
-  )) {
-    const paragraphReport = reportByParagraph.get(paragraph.id);
-    const pageIndex = paragraph.segments[0]?.pageIndex;
-    if (!paragraphReport || pageIndex === undefined) {
-      throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "逐段批改内容不完整");
-    }
-    const pageParagraphs = paragraphsByPage.get(pageIndex) ?? [];
-    pageParagraphs.push({
-      suggestions: paragraphReport.suggestions,
-      revisionRuns: buildPdfRevisionRuns(paragraph.text, paragraphReport.revisedText),
-    });
-    paragraphsByPage.set(pageIndex, pageParagraphs);
+  if (run.style === "changed") {
+    return { text: run.text, color: CHANGE_COLOR, weight: 400, underline: true };
   }
-
-  return [...review.images]
-    .sort((left, right) => left.position - right.position)
-    .map((image) => ({
-      image,
-      paragraphs: paragraphsByPage.get(image.position) ?? [],
-    }));
+  return { text: run.text, color: TEXT_COLOR, weight: 400, underline: false };
 }
 
-function paragraphRuns(paragraph: PdfParagraph): RichTextRun[] {
-  const suggestionText = paragraph.suggestions.map((suggestion) => (
-    `${suggestion.problem}；${suggestion.advice}；${suggestion.example}`
-  )).join("\n");
-  const runs: RichTextRun[] = [{
-    text: `修改建议：${suggestionText}\n`,
-    color: SUGGESTION_COLOR,
-    weight: 700,
-    underline: false,
-  }, {
-    text: "示范文本：",
-    color: TEXT_COLOR,
-    weight: 700,
-    underline: false,
-  }];
-
-  for (const run of paragraph.revisionRuns) {
-    runs.push({
-      text: run.text,
-      color: run.changed ? CHANGE_COLOR : TEXT_COLOR,
-      weight: 400,
-      underline: run.changed,
-    });
-  }
-  return runs;
+function paragraphRuns(paragraph: ExportParagraph): RichTextRun[] {
+  return exportParagraphRuns(paragraph).map(styledRun);
 }
 
-async function loadExportKaiti(pages: PdfPage[], rewrittenEssay: string[] = []) {
-  const text = pages.flatMap(({ paragraphs }) => (
-    paragraphs.flatMap((paragraph) => paragraphRuns(paragraph).map((run) => run.text))
-  )).join("") + rewrittenEssay.join("") + (rewrittenEssay.length ? "按要求重写的完整范文（续）" : "");
+async function loadExportKaiti(content: ExportReportContent) {
+  const text = exportFontSample(content);
   await Promise.all([
-    window.document.fonts.load(`400 16px ${KAITI_FONT_FACE}`, text),
-    window.document.fonts.load(`700 16px ${KAITI_FONT_FACE}`, text),
+    window.document.fonts.load(`400 16px ${EXPORT_KAITI_FACE}`, text),
+    window.document.fonts.load(`700 16px ${EXPORT_KAITI_FACE}`, text),
   ]);
 }
 
@@ -360,7 +277,7 @@ function wrapRichText(
 
 function textBoxHeight(
   context: CanvasRenderingContext2D,
-  paragraph: PdfParagraph,
+  paragraph: ExportParagraph,
   width: number,
   fontPt: number,
 ) {
@@ -376,7 +293,7 @@ function textBoxHeight(
 
 function regionLayout(
   context: CanvasRenderingContext2D,
-  paragraphs: PdfParagraph[],
+  paragraphs: ExportParagraph[],
   region: Rectangle,
   fontPt: number,
 ): PositionedTextBox[] | null {
@@ -405,7 +322,7 @@ function regionLayout(
 
 function layoutAtFontSize(
   context: CanvasRenderingContext2D,
-  paragraphs: PdfParagraph[],
+  paragraphs: ExportParagraph[],
   regions: Rectangle[],
   fontPt: number,
 ): PositionedTextBox[] | null {
@@ -433,7 +350,7 @@ function layoutAtFontSize(
 
 function layoutTextBoxes(
   context: CanvasRenderingContext2D,
-  paragraphs: PdfParagraph[],
+  paragraphs: ExportParagraph[],
   regions: Rectangle[],
 ): PositionedTextBox[] {
   if (paragraphs.length === 0) return [];
@@ -443,7 +360,7 @@ function layoutTextBoxes(
   }
   throw new ReviewPdfError(
     "PDF_CONTENT_INCOMPLETE",
-    "完整段落内容无法放入照片页空白区域，请缩短修改建议后重试",
+    "完整段落内容无法放入照片页空白区域，请缩短修改动作后重试",
   );
 }
 
@@ -524,13 +441,13 @@ function drawRewrittenEssayPages(paragraphs: string[]): HTMLCanvasElement[] {
     paintPageBackground(page.context);
     setKaitiFont(page.context, 18, 700);
     page.context.fillStyle = TEXT_COLOR;
-    page.context.fillText(`按要求重写的完整范文${canvases.length ? "（续）" : ""}`, margin, margin);
+    page.context.fillText(rewrittenEssayHeading(canvases.length > 0), margin, margin);
     y = margin + 40;
     canvases.push(page.canvas);
   };
   nextPage();
   paragraphs.forEach((text) => {
-    const lines = wrapRichText(page.context, [{ text: `　　${text}`, color: TEXT_COLOR, weight: 400, underline: false }], PDF_WIDTH - margin * 2, fontPt);
+    const lines = wrapRichText(page.context, [{ text: rewrittenEssayLineText(text), color: TEXT_COLOR, weight: 400, underline: false }], PDF_WIDTH - margin * 2, fontPt);
     // Keep a paragraph together when possible; long paragraphs may continue on a new page.
     if (y + lines.length * lineHeight > PDF_HEIGHT - margin && lines.length * lineHeight <= PDF_HEIGHT - margin * 2 - 40) nextPage();
     for (const line of lines) {
@@ -549,20 +466,22 @@ function drawRewrittenEssayPages(paragraphs: string[]): HTMLCanvasElement[] {
   return canvases;
 }
 
-export async function createReviewPdf(review: ReviewView): Promise<Blob> {
-  if (!review.report || review.images.length === 0) {
-    throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "批改尚未完成，暂不能导出 PDF");
+function exportContentOrPdfError(review: ReviewView): ExportReportContent {
+  try {
+    return buildExportReportContent(review);
+  } catch (error) {
+    if (error instanceof ExportContentError) {
+      throw new ReviewPdfError(error.code, error.message);
+    }
+    throw error;
   }
-  if (isLegacyEvaluationReport(review.report)) {
-    throw new ReviewPdfError(
-      "LEGACY_REPORT",
-      "旧版示范段落报告需要完整重新分析后才能导出新格式",
-    );
-  }
+}
 
-  const pages = buildPdfPages(review);
-  const rewrittenEssay = paragraphEvaluationReportSchema.parse(review.report).rewrittenEssay ?? [];
-  await loadExportKaiti(pages, rewrittenEssay);
+export async function createReviewPdf(review: ReviewView): Promise<Blob> {
+  const content = exportContentOrPdfError(review);
+  const pages = content.pages;
+  const rewrittenEssay = content.rewrittenEssay;
+  await loadExportKaiti(content);
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4", compress: true });
   pdf.setProperties({ title: reviewPdfTitle(review) });

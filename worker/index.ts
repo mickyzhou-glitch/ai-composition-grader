@@ -70,6 +70,7 @@ const reanalysisBusinessCodes = new Set<ReanalysisSkipCode>([
   "REVIEW_NOT_FOUND",
   "REVISION_CONFLICT",
   "OCR_NOT_CURRENT",
+  "IMAGES_MISSING",
   "ANALYSIS_ACTIVE",
   "REVIEW_UNAVAILABLE",
 ]);
@@ -762,7 +763,8 @@ export default {
             ).bind(job.review_id).all<{ id: number }>();
             const reader = new D1ReviewReader(env.DB);
             const images = await Promise.all(results.map(async ({ id }) => {
-              const file = await reader.imageObjectKeyForAi(job.review_id, id, "ai");
+              const file = await reader.imageObjectKeyForAi(job.review_id, id, "original")
+                ?? await reader.imageObjectKeyForAi(job.review_id, id, "ai");
               if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
               return { key: file.key, mimeType: file.contentType };
             }));

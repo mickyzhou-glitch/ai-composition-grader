@@ -62,6 +62,7 @@ export const REANALYSIS_SKIP_REASONS = {
   REVIEW_NOT_FOUND: "作文不存在或已不可用",
   REVISION_CONFLICT: "作文已更新，请重新预览",
   OCR_NOT_CURRENT: "识别原文不存在或已失效",
+  IMAGES_MISSING: "原始图片不存在，无法重新识别",
   ANALYSIS_ACTIVE: "作文正在分析中",
   REVIEW_UNAVAILABLE: "作文当前状态不能重新分析",
 } as const;

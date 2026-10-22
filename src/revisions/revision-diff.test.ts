@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRevisionRuns } from "./revision-diff";
+import { buildRevisionRuns, buildSentenceRevisionRuns } from "./revision-diff";
 
 describe("buildRevisionRuns", () => {
   it("将删除和新增文字标红，修改稿标点保持黑色", () => {
@@ -147,6 +147,26 @@ describe("buildRevisionRuns", () => {
     expect(buildRevisionRuns(`你好${sourcePunctuation}`, "你好！")).toEqual([
       { kind: "unchanged", text: "你好" },
       { kind: "punctuation", text: "！" },
+    ]);
+  });
+});
+
+describe("buildSentenceRevisionRuns", () => {
+  it("只把修改或新增的整句标为插入，未改句子保持原样，删除句不出现", () => {
+    const revised = "我终于走上台。灯光很亮。我听见自己的呼吸。";
+    expect(buildSentenceRevisionRuns(
+      "我慢慢走上台。灯光很亮。",
+      revised,
+    )).toEqual([
+      { kind: "inserted", text: "我终于走上台。" },
+      { kind: "unchanged", text: "灯光很亮。" },
+      { kind: "inserted", text: "我听见自己的呼吸。" },
+    ]);
+    expect(buildSentenceRevisionRuns("我很高兴。", "我很高兴！")).toEqual([
+      { kind: "inserted", text: "我很高兴！" },
+    ]);
+    expect(buildSentenceRevisionRuns("我很高兴。天很蓝。", "天很蓝。")).toEqual([
+      { kind: "unchanged", text: "天很蓝。" },
     ]);
   });
 });

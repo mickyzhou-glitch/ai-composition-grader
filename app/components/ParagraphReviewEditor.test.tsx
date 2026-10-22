@@ -73,16 +73,30 @@ describe("ParagraphReviewEditor", () => {
     const paragraph = container.querySelector("[data-paragraph-id='paragraph-1']")!;
     const text = paragraph.textContent ?? "";
     expect(text.indexOf("第 1 段")).toBeLessThan(text.indexOf("原文裁图 1"));
-    expect(text.indexOf("原文裁图 1")).toBeLessThan(text.indexOf("【修改建议】"));
-    expect(text.indexOf("【修改建议】")).toBeLessThan(text.indexOf("【修改后段落】"));
-    expect(screen.getByLabelText("第 1 段第 1 条问题描述")).toHaveValue("描写普通");
+    expect(text.indexOf("原文裁图 1")).toBeLessThan(text.indexOf("【修改动作】"));
+    expect(text.indexOf("【修改动作】")).toBeLessThan(text.indexOf("【改后全段】"));
+    expect(screen.queryByLabelText("第 1 段第 1 条问题描述")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("第 1 段第 1 条修改示例")).not.toBeInTheDocument();
     expect(screen.getByLabelText("第 1 段第 1 条修改动作")).toHaveValue("补充程度");
-    expect(screen.getByLabelText("第 1 段第 1 条修改示例")).toHaveValue("我非常高兴。");
+    expect(screen.queryByText("描写普通")).not.toBeInTheDocument();
+    expect(screen.queryByText("我非常高兴。")).not.toBeInTheDocument();
     expect(paragraph.querySelector("del")).toBeNull();
-    expect(screen.getByLabelText("示范文整句标色预览")).toHaveTextContent("我非常高兴！");
-    expect(paragraph.querySelector(".revision-preview__changed-sentence")).toHaveStyle({ color: "#1F4E78" });
+    expect(screen.getByLabelText("改后全段整句下划线预览")).toHaveTextContent("我非常高兴！");
+    expect(paragraph.querySelector(".revision-preview__changed-sentence")).toHaveStyle({
+      color: "#1F4E78",
+      textDecoration: "underline",
+    });
 
-    fireEvent.change(screen.getByLabelText("第 1 段完整修改稿"), {
+    fireEvent.change(screen.getByLabelText("第 1 段第 1 条修改动作"), {
+      target: { value: "写清高兴的程度" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      paragraphReviews: [expect.objectContaining({
+        suggestions: [expect.objectContaining({ advice: "写清高兴的程度" })],
+      })],
+    }));
+
+    fireEvent.change(screen.getByLabelText("第 1 段改后全段"), {
       target: { value: "我很高兴。" },
     });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -107,13 +121,15 @@ describe("ParagraphReviewEditor", () => {
       onChange={onChange}
     />);
 
-    expect(screen.getByLabelText("第 1 段第 1 条问题描述")).toHaveValue("保留");
+    expect(screen.getByLabelText("第 1 段第 1 条修改动作")).toHaveValue("保留真实感受");
+    expect(screen.queryByText("保留")).not.toBeInTheDocument();
+    expect(screen.queryByText("我很高兴。")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除第 1 段第 1 条建议" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "新增第 1 段建议" }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       paragraphReviews: [expect.objectContaining({ suggestions: expect.arrayContaining([
-        expect.objectContaining({ problem: "保留" }),
-        { problem: "", advice: "", example: "" },
+        expect.objectContaining({ advice: "保留真实感受" }),
+        { advice: "" },
       ]) })],
     }));
   });
@@ -133,7 +149,9 @@ describe("ParagraphReviewEditor", () => {
       revisionLabel="完整示范文"
     />);
 
+    expect(screen.queryByText("【修改动作】")).not.toBeInTheDocument();
     expect(screen.queryByText("【修改建议】")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("第 1 段第 1 条修改动作")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("第 1 段第 1 条问题描述")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除第 1 段第 1 条建议" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "新增第 1 段建议" })).not.toBeInTheDocument();
@@ -166,5 +184,32 @@ describe("ParagraphReviewEditor", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "按要求重写第 1 段" }));
     expect(onRewriteParagraph).toHaveBeenCalledWith("paragraph-1", "补充听觉细节");
+  });
+
+  it("改后全段里未改的句子不下划线，修改和新增的整句下划线", () => {
+    const { container } = render(<ParagraphReviewEditor
+      reviewId="review-1"
+      report={{
+        ...report,
+        paragraphReviews: [{
+          ...report.paragraphReviews[0],
+          revisedText: "我非常高兴！天很蓝。",
+        }],
+      }}
+      ocr={{
+        ...ocr,
+        paragraphs: [{ ...ocr.paragraphs[0], text: "我很高兴。天很蓝。" }],
+      }}
+      images={[{ id: 1, position: 0 }]}
+      disabled={false}
+      onChange={vi.fn()}
+    />);
+
+    const paragraph = container.querySelector("[data-paragraph-id='paragraph-1']")!;
+    const changed = [...paragraph.querySelectorAll(".revision-preview__changed-sentence")];
+    expect(changed.map((node) => node.textContent)).toEqual(["我非常高兴！"]);
+    expect(changed[0]).toHaveStyle({ textDecoration: "underline" });
+    expect(paragraph.textContent).toContain("天很蓝。");
+    expect(paragraph.querySelector(".revision-preview")?.textContent).toBe("我非常高兴！天很蓝。");
   });
 });

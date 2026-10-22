@@ -3,7 +3,7 @@ import {
   isParagraphEvaluationReport,
 } from "../domain/contracts";
 import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mode";
-import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
+import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import {
   formatRevisionTeacherGuidance,
   normalizeAssignmentTitle,
@@ -101,23 +101,6 @@ function asIso(value: number | string): string {
   return new Date(asEpoch(value)).toISOString();
 }
 
-function currentOcr(
-  checkpoint: string | null | undefined,
-  imageRevision: number,
-): OcrCheckpoint | null {
-  if (!checkpoint) return null;
-  try {
-    const parsed = ocrCheckpointSchema.safeParse(JSON.parse(checkpoint));
-    return parsed.success && parsed.data.sourceRevision === imageRevision ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-function hasCurrentOcr(checkpoint: string | null | undefined, imageRevision: number): boolean {
-  return currentOcr(checkpoint, imageRevision) !== null;
-}
-
 function parsedReport(report: string | null): unknown {
   if (!report) return null;
   try {
@@ -128,12 +111,19 @@ function parsedReport(report: string | null): unknown {
 }
 
 function reanalysisMode(row: ReviewRow): AnalysisMode {
-  const checkpoint = currentOcr(row.ocr_checkpoint, row.image_revision);
-  if (!checkpoint) throw new D1ReanalysisError("OCR_NOT_CURRENT", publicReview(row));
-  const requested = checkpoint.version === 2 && isParagraphEvaluationReport(parsedReport(row.report))
+  const checkpoint = readStoredOcrCheckpoint(row.ocr_checkpoint, row.image_revision);
+  const requested = checkpoint?.version === 2 && isParagraphEvaluationReport(parsedReport(row.report))
     ? "content_only"
     : "full";
   return analysisModeForCheckpoint(requested, checkpoint);
+}
+
+function ocrGuard(mode: AnalysisMode): string {
+  return mode === "content_only"
+    ? `AND json_valid(ocr_checkpoint) = 1
+          AND json_extract(ocr_checkpoint, '$.version') = 2
+          AND json_extract(ocr_checkpoint, '$.sourceRevision') = image_revision`
+    : "";
 }
 
 function configTitle(config: string): string {
@@ -239,10 +229,10 @@ export class D1Reanalysis {
       }
       const review = publicReview(row);
       let skipCode: ReanalysisSkipCode | null = null;
-      if (row.deleting_at !== null || Number(row.image_count) < 1) {
+      if (row.deleting_at !== null) {
         skipCode = "REVIEW_UNAVAILABLE";
-      } else if (!hasCurrentOcr(row.ocr_checkpoint, row.image_revision)) {
-        skipCode = "OCR_NOT_CURRENT";
+      } else if (Number(row.image_count) < 1) {
+        skipCode = "IMAGES_MISSING";
       } else if (activeReviewIds.has(reviewId)) {
         skipCode = "ANALYSIS_ACTIVE";
       } else if (!isAnalyzable(row.status)) {
@@ -419,8 +409,7 @@ export class D1Reanalysis {
     if (!row) throw new D1ReanalysisError("REVIEW_NOT_FOUND");
     if (row.deleting_at !== null) throw new D1ReanalysisError("REVIEW_UNAVAILABLE");
     if (row.revision !== expectedRevision) throw new D1ReanalysisError("REVISION_CONFLICT");
-    if (Number(row.image_count) < 1) throw new D1ReanalysisError("REVIEW_UNAVAILABLE");
-    if (!hasCurrentOcr(row.ocr_checkpoint, row.image_revision)) throw new D1ReanalysisError("OCR_NOT_CURRENT");
+    if (Number(row.image_count) < 1) throw new D1ReanalysisError("IMAGES_MISSING");
     if (hasActiveJob(row)) throw new D1ReanalysisError("ANALYSIS_ACTIVE");
     if (!isAnalyzable(row.status)) throw new D1ReanalysisError("REVIEW_UNAVAILABLE");
   }
@@ -430,8 +419,7 @@ export class D1Reanalysis {
     const review = publicReview(row);
     if (row.deleting_at !== null) throw new D1ReanalysisError("REVIEW_UNAVAILABLE", review);
     if (row.revision !== item.expectedRevision) throw new D1ReanalysisError("REVISION_CONFLICT", review);
-    if (Number(row.image_count) < 1) throw new D1ReanalysisError("REVIEW_UNAVAILABLE", review);
-    if (!hasCurrentOcr(row.ocr_checkpoint, row.image_revision)) throw new D1ReanalysisError("OCR_NOT_CURRENT", review);
+    if (Number(row.image_count) < 1) throw new D1ReanalysisError("IMAGES_MISSING", review);
     if (hasActiveJob(row)) throw new D1ReanalysisError("ANALYSIS_ACTIVE", review);
     if (!isAnalyzable(row.status)) throw new D1ReanalysisError("REVIEW_UNAVAILABLE", review);
     return review;
@@ -453,8 +441,7 @@ export class D1Reanalysis {
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
           AND status IN ('draft', 'ready_for_review', 'exported', 'failed')
           AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
-          AND json_valid(ocr_checkpoint) = 1
-          AND json_extract(ocr_checkpoint, '$.sourceRevision') = image_revision
+          ${ocrGuard(mode)}
           AND NOT EXISTS (
             SELECT 1 FROM analysis_jobs
             WHERE review_id = reviews.id AND status IN ('queued', 'running')
@@ -497,8 +484,7 @@ export class D1Reanalysis {
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
           AND status IN ('draft', 'ready_for_review', 'exported', 'failed')
           AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
-          AND json_valid(ocr_checkpoint) = 1
-          AND json_extract(ocr_checkpoint, '$.sourceRevision') = image_revision
+          ${ocrGuard(mode)}
           AND NOT EXISTS (
             SELECT 1 FROM analysis_jobs
             WHERE review_id = reviews.id AND status IN ('queued', 'running')

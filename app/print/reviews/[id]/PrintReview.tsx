@@ -9,7 +9,7 @@ function sectionHeading(
   if (block.kind === "paragraph-heading") {
     return `【${block.essayParagraphNumber ? "完整范文·" : ""}第 ${block.essayParagraphNumber ?? block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`;
   }
-  const title = block.kind === "suggestion-heading" ? "修改建议" : "修改后段落";
+  const title = block.kind === "suggestion-heading" ? "修改动作" : "改后全段";
   return `【${title}${block.continued ? "（续）" : ""}】`;
 }
 
@@ -66,9 +66,7 @@ export function PrintReview({
                 if (!suggestion) throw new TypeError("修改建议不完整");
                 return <ol className={styles.suggestions} start={block.suggestionIndex + 1} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
                   <li>
-                    <p><b>问题：</b>{suggestion.problem}</p>
-                    <p><b>动作：</b>{suggestion.advice}</p>
-                    <p><b>示例：</b>{suggestion.example}</p>
+                    <p>{suggestion.advice}</p>
                   </li>
                 </ol>;
               }

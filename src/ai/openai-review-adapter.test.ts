@@ -428,6 +428,11 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("动作描写不够具体");
     expect(serialized).toContain("我攥紧衣角，深吸一口气走上台。");
     expect(serialized).toContain("补充听觉细节");
+    expect(serialized).toContain("不要写问题描述，也不要写修改示例");
+    expect(serialized).toContain("一两句话");
+    expect(serialized).toContain("改后全段");
+    expect(serialized).toContain("逐句比对");
+    expect(serialized).toContain("下划线");
     expect(serialized).toContain(config.title);
     expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
   });

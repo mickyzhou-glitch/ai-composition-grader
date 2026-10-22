@@ -143,7 +143,7 @@ describe("PDF 文件下载", () => {
 
     await downloadReviewPdf("review-1");
 
-    const modelText = "修改建议：动作略快；补充听觉；我听见急促的呼吸声。\n示范文本：我终于，走上台。";
+    const modelText = "修改动作：补充听觉\n改后全段：我终于，走上台。";
     expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', modelText);
     expect(fontLoad).toHaveBeenCalledWith('700 16px "LXGW WenKai"', modelText);
     expect(renderEvents.slice(0, 3)).toEqual(["font", "font", "canvas"]);
@@ -159,7 +159,8 @@ describe("PDF 文件下载", () => {
     expect(pdfMock.addPage).not.toHaveBeenCalled();
     expect(context.drawImage).toHaveBeenCalled();
     expect(paintedRects).toContainEqual({ color: "#e7d4a8" });
-    expect(paintedText.find(({ text }) => text.includes("动作略快"))).toMatchObject({ color: "#c00000" });
+    expect(paintedText.find(({ text }) => text.includes("补充听觉"))).toMatchObject({ color: "#c00000" });
+    expect(paintedText.some(({ text }) => text.includes("动作略快") || text.includes("我听见急促的呼吸声"))).toBe(false);
     expect(paintedText.find(({ text }) => text.includes("终于"))).toMatchObject({ color: "#1f4e78", font: expect.stringContaining("LXGW WenKai") });
     expect(strokedLines).toContainEqual({ color: "#1f4e78" });
     expect(paintedText.some(({ text }) => text.includes("慢慢"))).toBe(false);

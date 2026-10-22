@@ -237,6 +237,7 @@ const reanalysisErrorResponses: Record<
   REVIEW_NOT_FOUND: { status: 404, message: "批改记录不存在" },
   REVISION_CONFLICT: { status: 409, message: "作文已更新，请重新预览" },
   OCR_NOT_CURRENT: { status: 409, message: "识别原文不存在或已失效" },
+  IMAGES_MISSING: { status: 409, message: "原始图片不存在，无法重新识别" },
   ANALYSIS_ACTIVE: { status: 409, message: "作文正在分析中" },
   REVIEW_UNAVAILABLE: { status: 409, message: "作文当前状态不能重新分析" },
   FRAMEWORK_NOT_FOUND: { status: 409, message: "没有找到同名的已保存题目框架" },

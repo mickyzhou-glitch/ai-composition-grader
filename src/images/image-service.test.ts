@@ -13,6 +13,7 @@ import {
   ImageService,
   type ImageRepository,
 } from "./image-service";
+import { chooseUprightQuarterTurn, type LuminanceImage } from "./upright-orientation";
 
 const OWNER_ID = "local-admin";
 
@@ -354,6 +355,31 @@ describe("ImageService", () => {
     expect([...data.subarray(gridPixel, gridPixel + 3)]).not.toEqual([255, 255, 255]);
   });
 
+  async function essayJpeg(turns: 0 | 90 | 180 | 270 = 0) {
+    const width = 110;
+    const height = 150;
+    const pixels = Buffer.alloc(width * height, 255);
+    for (const line of [
+      { y: 18, x0: 14, x1: 78 },
+      { y: 34, x0: 14, x1: 46 },
+      { y: 50, x0: 14, x1: 88 },
+      { y: 66, x0: 14, x1: 40 },
+      { y: 82, x0: 14, x1: 70 },
+      { y: 98, x0: 14, x1: 58 },
+    ]) {
+      for (let thickness = -1; thickness <= 1; thickness += 1) {
+        for (let x = line.x0; x <= line.x1; x += 1) pixels[(line.y + thickness) * width + x] = 12;
+      }
+    }
+    const upright = await sharp(pixels, { raw: { width, height, channels: 1 } }).jpeg({ quality: 95 }).toBuffer();
+    return turns === 0 ? upright : sharp(upright).rotate(turns).toBuffer();
+  }
+
+  async function storedLuminance(originalPath: string): Promise<LuminanceImage> {
+    const { data, info } = await sharp(await readFile(originalPath)).greyscale().raw().toBuffer({ resolveWithObject: true });
+    return { width: info.width, height: info.height, luminance: data };
+  }
+
   it("上传时按 EXIF 自动方向纠正尺寸", async () => {
     const oriented = await sharp({
       create: { width: 400, height: 200, channels: 3, background: "white" },
@@ -367,6 +393,59 @@ describe("ImageService", () => {
     ]);
 
     expect(repository.images[0]).toMatchObject({ width: 200, height: 400 });
+    const saved = repository.images[0];
+    const metadata = await sharp(await readFile(path.join(
+      store.rootDirectory,
+      OWNER_ID,
+      "reviews",
+      "review-1",
+      saved.originalPath,
+    ))).metadata();
+    expect(metadata).toMatchObject({ width: 200, height: 400 });
+    expect(metadata.orientation === undefined || metadata.orientation === 1).toBe(true);
+  });
+
+  it("已是正方向的文字图保持原像素，横置或倒置的文字图会转正后保存", async () => {
+    const upright = await essayJpeg();
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
+      { originalName: "upright.jpg", mimeType: "image/jpeg", data: upright },
+    ]);
+    const uprightPath = path.join(
+      store.rootDirectory, OWNER_ID, "reviews", "review-1", repository.images[0].originalPath,
+    );
+    expect(Buffer.compare(await readFile(uprightPath), upright)).toBe(0);
+
+    for (const turn of [90, 180, 270] as const) {
+      repository.images = [];
+      repository.revision = 0;
+      const sideways = await essayJpeg(turn);
+      await service.upload(OWNER_ID, "review-1", repository.revision, [
+        { originalName: "sideways.jpg", mimeType: "image/jpeg", data: sideways },
+      ]);
+      const saved = repository.images[0];
+      const originalPath = path.join(store.rootDirectory, OWNER_ID, "reviews", "review-1", saved.originalPath);
+      const metadata = await sharp(await readFile(originalPath)).metadata();
+      expect(metadata.width).toBeLessThan(metadata.height ?? 0);
+      expect(chooseUprightQuarterTurn(await storedLuminance(originalPath))).toBe(0);
+      expect(saved.width).toBeLessThan(saved.height);
+    }
+  });
+
+  it("EXIF 把正的文字标成横图时，保存的原图和批注底图仍然是转正后的文字", async () => {
+    const tagged = await sharp(await essayJpeg()).withMetadata({ orientation: 6 }).toBuffer();
+    await service.upload(OWNER_ID, "review-1", repository.revision, [
+      { originalName: "tagged.jpg", mimeType: "image/jpeg", data: tagged },
+    ]);
+    const saved = repository.images[0];
+    const originalPath = path.join(store.rootDirectory, OWNER_ID, "reviews", "review-1", saved.originalPath);
+    const metadata = await sharp(await readFile(originalPath)).metadata();
+    expect(metadata.width).toBeLessThan(metadata.height ?? 0);
+    expect(metadata.orientation === undefined || metadata.orientation === 1).toBe(true);
+    expect(chooseUprightQuarterTurn(await storedLuminance(originalPath))).toBe(0);
+    const annotation = await sharp(await readFile(path.join(
+      store.rootDirectory, OWNER_ID, "reviews", "review-1", saved.annotationPath,
+    ))).metadata();
+    expect(annotation.width).toBeLessThan(annotation.height ?? 0);
   });
 
   it("按 90 度旋转后应用 0..1 归一化裁剪并重新处理", async () => {

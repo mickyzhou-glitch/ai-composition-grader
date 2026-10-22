@@ -18,6 +18,8 @@ vi.mock("../lib/review-export", () => ({
   downloadLegacyCachedPdf: reviewExports.legacy,
 }));
 
+import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
+
 import Home from "./page";
 
 const review = {
@@ -333,5 +335,101 @@ describe("历史首页", () => {
 
     expect(reviewExports.legacy).toHaveBeenCalledWith(legacy);
     expect(screen.getByText("旧版示范段落报告需要完整重新分析后才能导出新格式")).toBeVisible();
+  });
+
+  it("一键重新批改当前筛选下的失败作文，并按上限分批显示进度和结果", async () => {
+    const failed = Array.from({ length: BATCH_REANALYSIS_LIMIT + 1 }, (_, index) => ({
+      ...review,
+      id: `failed-${index}`,
+      status: "failed",
+      report: null,
+      className: "六（1）班",
+      studentName: `学生${index}`,
+      revision: 4,
+      config: { title: `失败作文${index}` },
+    }));
+    const hidden = {
+      ...failed[0],
+      id: "other-class",
+      className: "六（2）班",
+      config: { title: "其他班失败" },
+    };
+    const previews: string[][] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews") return json([...failed, hidden, review]);
+      if (url === "/api/reviews/batch-reanalysis/preview" && init?.method === "POST") {
+        const reviewIds = (JSON.parse(String(init.body)) as { reviewIds: string[] }).reviewIds;
+        previews.push(reviewIds);
+        return json({
+          matched: reviewIds.map((reviewId) => ({
+            reviewId,
+            studentName: "学生",
+            title: "失败作文",
+            expectedRevision: 4,
+            assignmentId: "assignment-1",
+            assignmentUpdatedAt: "2026-08-22T09:30:00.000Z",
+          })),
+          skipped: [],
+        });
+      }
+      if (url === "/api/reviews/batch-reanalysis" && init?.method === "POST") {
+        const items = (JSON.parse(String(init.body)) as { items: Array<{ reviewId: string }> }).items;
+        return json({
+          submitted: items.map((item) => ({ reviewId: item.reviewId, jobId: `job-${item.reviewId}`, revision: 5 })),
+          skipped: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await screen.findByRole("button", { name: `一键重新批改失败作文（${BATCH_REANALYSIS_LIMIT + 2}）` });
+    await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（1）班");
+    await user.click(screen.getByRole("button", { name: `一键重新批改失败作文（${BATCH_REANALYSIS_LIMIT + 1}）` }));
+
+    expect(await screen.findByText(`重新批改结束：已提交 ${BATCH_REANALYSIS_LIMIT + 1} 篇。`)).toBeVisible();
+    expect(previews).toEqual([
+      failed.slice(0, BATCH_REANALYSIS_LIMIT).map(({ id }) => id),
+      [failed[BATCH_REANALYSIS_LIMIT].id],
+    ]);
+    expect(previews.flat()).not.toContain("other-class");
+    expect(previews.flat()).not.toContain(review.id);
+  });
+
+  it("一键重新批改时保留原图缺失的跳过原因", async () => {
+    const failed = {
+      ...review,
+      id: "failed-1",
+      status: "failed",
+      report: null,
+      studentName: "林晓",
+      config: { title: "失败作文" },
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews") return json([failed]);
+      if (url === "/api/reviews/batch-reanalysis/preview" && init?.method === "POST") {
+        return json({
+          matched: [],
+          skipped: [{
+            reviewId: "failed-1",
+            studentName: "林晓",
+            title: "失败作文",
+            code: "IMAGES_MISSING",
+            reason: "原始图片不存在，无法重新识别",
+          }],
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    await user.click(await screen.findByRole("button", { name: "一键重新批改失败作文（1）" }));
+
+    expect(await screen.findByText("重新批改结束：已提交 0 篇，跳过 1 篇")).toBeVisible();
+    expect(screen.getByText("林晓：原始图片不存在，无法重新识别")).toBeVisible();
   });
 });

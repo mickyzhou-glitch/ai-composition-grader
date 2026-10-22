@@ -220,6 +220,18 @@ describe("ReviewRepository", () => {
     });
   });
 
+  it("无法解析或已失效的识别原文视为缺失，记录仍可读取", () => {
+    repository.create(OWNER_ID, { id: "review-1", config });
+    sqlite.prepare("UPDATE reviews SET image_revision = 2, ocr_checkpoint = ? WHERE id = ?")
+      .run(JSON.stringify({ sourceRevision: 1 }), "review-1");
+
+    expect(repository.getById(OWNER_ID, "review-1")?.ocr).toBeNull();
+    expect(repository.getAnalysisSource(OWNER_ID, "review-1")).toEqual({
+      imageRevision: 2,
+      checkpoint: null,
+    });
+  });
+
   it("在一个同步读事务内聚合 review 快照", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const database = drizzle(sqlite, { schema });

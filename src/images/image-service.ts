@@ -17,6 +17,7 @@ import {
 } from "../db/review-repository";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import { InMemoryReviewLock, type ReviewLock } from "../services/review-lock";
+import { chooseUprightQuarterTurn } from "./upright-orientation";
 
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_INPUT_PIXELS = 60_000_000;
@@ -304,17 +305,28 @@ export class ImageService {
     for (const [position, file] of files.entries()) {
       this.validateUpload(file);
       const decoded = await this.decode(file);
+      const baked = await this.bakeUpright(file.data, decoded);
+      const storedData = baked?.data ?? file.data;
+      const storedMime = baked?.mimeType ?? file.mimeType;
+      const storedFormat = baked?.format ?? decoded.format;
+      const oriented = baked
+        ? await this.decode({
+          originalName: file.originalName,
+          mimeType: storedMime,
+          data: storedData,
+        })
+        : decoded;
       const token = this.createId();
-      const originalFilename = `${token}-original.${canonicalExtension(decoded.format)}`;
+      const originalFilename = `${token}-original.${canonicalExtension(storedFormat)}`;
       const annotationFilename = `${token}-annotation.jpg`;
       const aiFilename = `${token}-ai.jpg`;
-      const outputs = await this.transform(file.data, decoded, 0, null);
+      const outputs = await this.transform(storedData, oriented, 0, null);
 
       prepared.push({
         record: {
           position,
           originalName: file.originalName,
-          mimeType: file.mimeType,
+          mimeType: storedMime,
           originalPath: relativeImagePath(originalFilename),
           annotationPath: relativeImagePath(annotationFilename),
           aiPath: relativeImagePath(aiFilename),
@@ -324,7 +336,7 @@ export class ImageService {
           crop: null,
         },
         files: [
-          { filename: originalFilename, data: file.data },
+          { filename: originalFilename, data: storedData },
           { filename: annotationFilename, data: outputs.annotation },
           { filename: aiFilename, data: outputs.ai },
         ],
@@ -574,6 +586,44 @@ export class ImageService {
       }
       throw new ImageServiceError("INVALID_IMAGE", "图片内容无法解码", 422);
     }
+  }
+
+  private async bakeUpright(
+    data: Uint8Array,
+    decoded: DecodedImage,
+  ): Promise<{ data: Uint8Array; mimeType: string; format: DecodedImage["format"] } | null> {
+    const sample = await sharp(data, {
+      failOn: "error",
+      limitInputPixels: MAX_INPUT_PIXELS,
+    })
+      .autoOrient()
+      .resize({ width: 240, height: 240, fit: "inside", withoutEnlargement: true })
+      .greyscale()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const turn = chooseUprightQuarterTurn({
+      width: sample.info.width,
+      height: sample.info.height,
+      luminance: sample.data,
+    });
+    const exifNeedsBake = decoded.orientation !== undefined && decoded.orientation > 1;
+    if (turn === 0 && !exifNeedsBake) return null;
+    let pipeline = sharp(data, {
+      failOn: "error",
+      limitInputPixels: MAX_INPUT_PIXELS,
+    }).autoOrient();
+    if (turn !== 0) pipeline = pipeline.rotate(turn);
+    const format = decoded.format === "heif" ? "jpeg" : decoded.format;
+    const encoded = format === "png"
+      ? await pipeline.png().toBuffer()
+      : format === "webp"
+        ? await pipeline.webp({ quality: 92 }).toBuffer()
+        : await pipeline.jpeg({ quality: 92, chromaSubsampling: "4:4:4" }).toBuffer();
+    return {
+      data: new Uint8Array(encoded),
+      mimeType: format === "jpeg" ? "image/jpeg" : `image/${format}`,
+      format,
+    };
   }
 
   private async transform(

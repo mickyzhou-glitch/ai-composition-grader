@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { validateGeneratedReportSemantics } from "../ai/review-semantics";
-import type { AssignmentConfig } from "./contracts";
+import { isParagraphEvaluationReport, type AssignmentConfig } from "./contracts";
 import { ReportValidationError, validateReport } from "./report-validation";
 import { createOcrCheckpointV2, type OcrCheckpointV1 } from "../ocr/contracts";
 
@@ -139,6 +139,19 @@ describe("validateReport paragraph coverage", () => {
         paragraphReviews[1],
       ],
     }, { config, ocr: checkpoint })).toThrow();
+  });
+
+  it("旧建议可以只保留修改动作", () => {
+    const adviceOnly = paragraphReviews.map((review) => ({
+      ...review,
+      suggestions: review.suggestions.map((suggestion) => ({ advice: suggestion.advice })),
+    }));
+
+    const validated = validateReport({
+      ...paragraphReport,
+      paragraphReviews: adviceOnly,
+    }, { config, ocr: checkpoint });
+    expect(isParagraphEvaluationReport(validated) ? validated.paragraphReviews : []).toEqual(adviceOnly);
   });
 
   it("拒绝空 revisedText", () => {

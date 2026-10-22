@@ -1,8 +1,6 @@
 import { isLegacyEvaluationReport } from "@/src/domain/contracts";
 
 import { apiFetch } from "./api";
-import { buildDeliveryDocument } from "./delivery-document";
-import { paginateDeliveryDocument } from "./delivery-pagination";
 import { createReviewDocx } from "./docx-download";
 import {
   createReviewPdf,
@@ -68,9 +66,7 @@ async function assertReviewsExportable(reviews: ReviewView[]): Promise<void> {
 
 async function createExportFile(review: ReviewView, format: ExportFormat): Promise<Blob> {
   if (format === "pdf") return createReviewPdf(review);
-  const delivery = await buildDeliveryDocument(review);
-  const pages = paginateDeliveryDocument(delivery);
-  return createReviewDocx(delivery, pages);
+  return createReviewDocx(review);
 }
 
 function isMemoryFailure(error: unknown): boolean {
