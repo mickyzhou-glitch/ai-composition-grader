@@ -25,6 +25,23 @@ describe("D1AnalysisJobs", () => {
     });
   });
 
+  it("超时或中止时说明停在哪一步", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "job-1", review_id: "review-1", status: "failed", progress_stage: "reading_images",
+            error_code: "ANALYSIS_ABORTED", created_at: 1_700_000_000_000, finished_at: 1_700_000_000_100,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
+      message: "分析在「读取图片」步骤超时或被中止，请重新分析",
+    });
+  });
+
   it("把图片批改的 403 说明为模型或网关不支持视觉输入", async () => {
     const database = {
       prepare: vi.fn(() => ({

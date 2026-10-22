@@ -1,3 +1,4 @@
+import { analysisInterruptedMessage } from "./analysis-failure";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
@@ -36,8 +37,8 @@ function view(row: JobRow) {
   if (!statuses.has(row.status) || !stages.has(row.progress_stage)) throw new TypeError("Invalid analysis job");
   const failedMessage = row.error_code === "AI_SETTINGS_INCOMPLETE"
     ? "请联系管理员检查 AI 服务设置后再试"
-    : row.error_code === "ANALYSIS_TIMEOUT"
-      ? "分析超时或已中断，请重新分析"
+    : row.error_code === "ANALYSIS_TIMEOUT" || row.error_code === "ANALYSIS_ABORTED"
+      ? analysisInterruptedMessage(row.progress_stage)
     : row.error_code?.startsWith("AI_INVALID_RESPONSE_rewritten_essay_chars_")
       ? "AI 生成的范文未满足指定字数，请重新生成整篇批改"
     : row.error_code?.startsWith("AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_")

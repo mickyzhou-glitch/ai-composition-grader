@@ -1,5 +1,3 @@
-import { uprightRecognitionImage } from "../images/upright-recognition";
-
 const MAX_INLINE_AI_IMAGE_BYTES = 12 * 1024 * 1024;
 
 export interface AiImageObject {
@@ -21,6 +19,7 @@ function toBase64(bytes: Uint8Array): string {
  * image remains private in R2; only its data is sent to the configured AI API.
  */
 export async function loadInlineAiImageUrls(bucket: R2Bucket, images: AiImageObject[]): Promise<string[]> {
+  const started = Date.now();
   let totalSize = 0;
   const urls: string[] = [];
   for (const image of images) {
@@ -29,8 +28,16 @@ export async function loadInlineAiImageUrls(bucket: R2Bucket, images: AiImageObj
     if (!object) throw new Error("AI_IMAGE_UNAVAILABLE");
     totalSize += object.size;
     if (totalSize > MAX_INLINE_AI_IMAGE_BYTES) throw new Error("AI_INLINE_IMAGE_TOO_LARGE");
-    const upright = await uprightRecognitionImage(new Uint8Array(await object.arrayBuffer()), image.mimeType);
-    urls.push(`data:${upright.mimeType};base64,${toBase64(upright.bytes)}`);
+    // Bytes are already upright when uploaded from the browser. Do not decode
+    // or rotate them here; a full JPEG re-encode blows the Worker CPU budget.
+    const bytes = new Uint8Array(await object.arrayBuffer());
+    urls.push(`data:${image.mimeType};base64,${toBase64(bytes)}`);
   }
+  console.info(JSON.stringify({
+    event: "analysis_images_inlined",
+    count: images.length,
+    bytes: totalSize,
+    durationMs: Date.now() - started,
+  }));
   return urls;
 }
