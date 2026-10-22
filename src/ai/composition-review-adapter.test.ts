@@ -296,6 +296,9 @@ describe("CompositionReviewAdapter", () => {
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("不要写问题描述，也不要写修改示例");
     expect(prompt).toContain("一两句话");
+    expect(prompt).toContain("改后全段");
+    expect(prompt).toContain("逐句比对");
+    expect(prompt).toContain("下划线");
     expect(prompt).not.toContain("problem、advice、example");
     expect(prompt).toContain("revisedText");
   });

@@ -138,7 +138,7 @@ describe("复核页", () => {
 
     expect(await screen.findByRole("heading", { name: "逐段修改" })).toBeInTheDocument();
     expect(screen.getByTestId("page-crop-1")).toBeInTheDocument();
-    const revised = screen.getByLabelText("第 1 段完整修改稿");
+    const revised = screen.getByLabelText("第 1 段改后全段");
     await user.clear(revised);
     await user.type(revised, "我听见自己的呼吸声，然后走上台。");
     await user.click(screen.getByRole("button", { name: "保存复核" }));
@@ -179,7 +179,7 @@ describe("复核页", () => {
       paragraphReviews: paragraphReview.report.paragraphReviews,
       instruction: "补充听觉细节",
     });
-    expect(screen.getByLabelText("第 1 段完整修改稿")).toHaveValue(rewritten.revisedText);
+    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
   });
 
   it("逐段报告整篇重生成使用当前 OCR 的 content_only 模式", async () => {
@@ -506,8 +506,8 @@ describe("复核页", () => {
     render(<ReviewPage />);
 
     const exportButton = await screen.findByRole("button", { name: "导出" });
-    await user.clear(screen.getByLabelText("第 1 段完整修改稿"));
-    await user.type(screen.getByLabelText("第 1 段完整修改稿"), "导出时保存的修改");
+    await user.clear(screen.getByLabelText("第 1 段改后全段"));
+    await user.type(screen.getByLabelText("第 1 段改后全段"), "导出时保存的修改");
 
     expect(exportButton).toBeEnabled();
     await user.click(exportButton);
@@ -582,14 +582,14 @@ describe("复核页", () => {
     const user = userEvent.setup();
     render(<ReviewPage />);
 
-    await user.clear(await screen.findByLabelText("第 1 段完整修改稿"));
-    await user.type(screen.getByLabelText("第 1 段完整修改稿"), "需要保留的修改");
+    await user.clear(await screen.findByLabelText("第 1 段改后全段"));
+    await user.type(screen.getByLabelText("第 1 段改后全段"), "需要保留的修改");
     await user.click(screen.getByRole("button", { name: "导出" }));
     await user.click(screen.getByRole("menuitem", { name: "PDF" }));
 
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("保存失败，请重试"));
     expect(reviewExports.single).not.toHaveBeenCalled();
-    expect(screen.getByLabelText("第 1 段完整修改稿")).toHaveValue("需要保留的修改");
+    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("需要保留的修改");
     expect(screen.getByRole("button", { name: "导出" })).toBeEnabled();
   });
 

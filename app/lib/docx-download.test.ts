@@ -144,7 +144,7 @@ describe("Word 逐段批改文档", () => {
     });
   });
 
-  it("生成与 PDF 相同的建议、示范文本和原图顺序", async () => {
+  it("生成与 PDF 相同的修改动作、改后全段和原图顺序", async () => {
     installBrowserExport();
     const { blob, documentXml } = await unpack(fixture());
 
@@ -155,15 +155,18 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("【修改建议");
     expect(documentXml).not.toContain("【修改后段落");
     expect(documentXml).not.toContain("问题：");
-    expect(documentXml).not.toContain("动作：");
+    expect(documentXml).not.toContain("问题描述");
+    expect(documentXml).not.toContain("修改示例");
     expect(documentXml).not.toContain("示例：");
     expect(documentXml).not.toContain("<w:numPr>");
-    expect(documentXml).toContain("修改建议：补充登台前的具体动作。");
+    expect(documentXml).toContain("修改动作：补充登台前的具体动作。");
     expect(documentXml).toContain("保留。");
     expect(documentXml).not.toContain("开头略显概括。");
     expect(documentXml).not.toContain("手心的汗把稿纸浸出了一道浅痕。");
     expect(documentXml).not.toContain("我终于迈出了第一步。");
-    expect(documentXml).toContain("示范文本：");
+    expect(documentXml).toContain("改后全段：");
+    expect(documentXml).not.toContain("示范文本：");
+    expect(documentXml).not.toContain("修改建议：");
     expect(documentXml).toContain("我攥紧稿纸走，登上舞台。");
     expect(documentXml).toContain("把感受落到对勇气的新理解。");
     expect(documentXml).not.toContain("结尾与题目呼应不足。");
@@ -199,5 +202,43 @@ describe("Word 逐段批改文档", () => {
     expect(coreXml).toContain("张小明那一次，我读懂了勇气");
     expect(coreXml).toContain("作文逐段批改");
     expect(coreXml).not.toMatch(/openai|deepseek|api[_ -]?key|\/Users\//iu);
+  });
+
+  it("改后全段只给修改或新增的句子加下划线", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const ocr = review.ocr;
+    if (!ocr || ocr.version !== 2) throw new Error("fixture ocr");
+    ocr.pages[0].text = "我慢慢走上台。灯光很亮。";
+    ocr.paragraphs[0].text = "我慢慢走上台。灯光很亮。";
+    const report = review.report as {
+      paragraphReviews: Array<{
+        revisedText: string;
+        suggestions: Array<{ problem?: string; advice: string; example?: string }>;
+      }>;
+    };
+    report.paragraphReviews[0].suggestions = [{
+      problem: "动作略快",
+      advice: "写清迈步的感觉",
+      example: "我听见自己的呼吸。",
+    }];
+    report.paragraphReviews[0].revisedText = "我终于走上台。灯光很亮。我听见自己的呼吸。";
+    const { documentXml } = await unpack(review);
+    const runXml = (text: string) => {
+      const token = `<w:t xml:space="preserve">${text}</w:t>`;
+      const at = documentXml.indexOf(token);
+      const start = documentXml.lastIndexOf("<w:r>", at);
+      return documentXml.slice(start, documentXml.indexOf("</w:r>", at));
+    };
+
+    expect(documentXml).toContain("修改动作：写清迈步的感觉");
+    expect(documentXml).toContain("改后全段：");
+    expect(documentXml).not.toContain("动作略快");
+    expect(documentXml).not.toContain("问题描述");
+    expect(documentXml).not.toContain("修改示例");
+    expect(documentXml).not.toContain("示范文本");
+    expect(runXml("灯光很亮。")).not.toContain("<w:u ");
+    expect(runXml("我终于走上台。")).toContain('<w:u w:val="single"');
+    expect(runXml("我听见自己的呼吸。")).toContain('<w:u w:val="single"');
   });
 });

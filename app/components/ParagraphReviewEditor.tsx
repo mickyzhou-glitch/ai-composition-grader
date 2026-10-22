@@ -38,8 +38,8 @@ export function ParagraphReviewEditor({
   rewritingParagraphId = null,
   showSourceCrops = true,
   showCharacterCounts = false,
-  revisionHeading = "修改后段落",
-  revisionLabel = "完整修改稿",
+  revisionHeading = "改后全段",
+  revisionLabel = "改后全段",
 }: ParagraphReviewEditorProps) {
   const [instructions, setInstructions] = useState<Record<string, string>>({});
   const paragraphs = [...ocr.paragraphs]
@@ -68,7 +68,7 @@ export function ParagraphReviewEditor({
   return (
     <div className="paragraph-review-editor">
       {showCharacterCounts ? <div className="paragraph-review-total">
-        示范文总字数 <strong>{totalCharacters}</strong> 字（含标点）
+        {report.rewrittenEssay ? "完整范文" : "改后全段"}总字数 <strong>{totalCharacters}</strong> 字（含标点）
       </div> : null}
       {report.rewrittenEssay ? <section className="paragraph-review-unit" aria-label="完整范文">
         <div className="paragraph-review-heading">
@@ -106,7 +106,7 @@ export function ParagraphReviewEditor({
               <div className="paragraph-review-heading">
                 <h3>第 {paragraphNumber} 段</h3>
                 {showCharacterCounts ? <span>
-                  示范文 <strong>{countTextCharactersIncludingPunctuation(paragraphReview.revisedText)}</strong> 字（含标点）
+                  改后全段 <strong>{countTextCharactersIncludingPunctuation(paragraphReview.revisedText)}</strong> 字（含标点）
                 </span> : null}
               </div>
               {showSourceCrops ? <ParagraphCropPreview
@@ -116,7 +116,7 @@ export function ParagraphReviewEditor({
                 segments={paragraph.segments}
               /> : null}
 
-              <h4>【修改建议】</h4>
+              <h4>【修改动作】</h4>
               <div className="paragraph-suggestion-list">
                 {paragraphReview.suggestions.map((suggestion, suggestionIndex) => (
                   <fieldset className="paragraph-suggestion" key={suggestionIndex}>

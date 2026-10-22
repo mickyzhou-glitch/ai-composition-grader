@@ -16,7 +16,7 @@ export function RevisionPreview({
   return (
     <div
       className={`revision-preview${sentenceHighlight ? " revision-preview--sentence" : ""}`}
-      aria-label={sentenceHighlight ? "示范文整句标色预览" : "修改稿红黑预览"}
+      aria-label={sentenceHighlight ? "改后全段整句下划线预览" : "修改稿红黑预览"}
     >
       {runs.map((run, index) => {
         const changedSentence = sentenceHighlight && run.kind === "inserted";
@@ -31,7 +31,11 @@ export function RevisionPreview({
         return <span
           className={changedSentence ? "revision-preview__changed-sentence" : undefined}
           key={`${index}:${run.text}`}
-          style={{ color }}
+          style={{
+            color,
+            textDecoration: changedSentence ? "underline" : undefined,
+            textUnderlineOffset: changedSentence ? "3px" : undefined,
+          }}
         >{run.text}</span>;
       })}
     </div>

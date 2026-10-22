@@ -37,7 +37,7 @@ export function BatchReviewReportEditor({
       <div className="report-editor batch-report-editor">
         <header className="report-version-heading batch-report-heading">
           <p className="eyebrow">逐段审核</p>
-          <h2>修改意见与示范文</h2>
+          <h2>修改动作与改后全段</h2>
         </header>
         <ParagraphReviewEditor
           reviewId={reviewId}
@@ -48,8 +48,6 @@ export function BatchReviewReportEditor({
           onChange={onChange}
           showSourceCrops={false}
           showCharacterCounts
-          revisionHeading={report.rewrittenEssay ? "原文对应段落修改稿" : "示范文"}
-          revisionLabel={report.rewrittenEssay ? "段落修改稿" : "完整示范文"}
         />
       </div>
     );

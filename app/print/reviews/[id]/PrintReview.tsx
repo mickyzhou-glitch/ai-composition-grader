@@ -9,7 +9,7 @@ function sectionHeading(
   if (block.kind === "paragraph-heading") {
     return `【${block.essayParagraphNumber ? "完整范文·" : ""}第 ${block.essayParagraphNumber ?? block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`;
   }
-  const title = block.kind === "suggestion-heading" ? "修改建议" : "修改后段落";
+  const title = block.kind === "suggestion-heading" ? "修改动作" : "改后全段";
   return `【${title}${block.continued ? "（续）" : ""}】`;
 }
 

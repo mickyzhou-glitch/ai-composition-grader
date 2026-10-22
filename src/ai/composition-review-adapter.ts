@@ -128,7 +128,7 @@ function outputTemplate(input: AnalyzeOcrTextInput): string {
       paragraphReviews: input.paragraphs.map(({ id }) => ({
         paragraphId: id,
         suggestions: [{ advice: "用一两句话说明这一段怎么改" }],
-        revisedText: "仅对应此原文段的完整修改稿",
+        revisedText: "该段按修改动作改完后的完整段落",
       })),
       parentFeedbacks: [
         { style: "warm", title: "亲切详细", content: "按前述家长称呼规则撰写反馈" },
@@ -161,9 +161,9 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
     "paragraphReviews 必须与输入 paragraphs 数量、paragraphId 和顺序完全一致，每个 paragraphId 恰好出现一次。",
     paragraphArrayRule(input),
-    "每段 suggestions 必须有 1 至 4 项；每项只写 advice，用一两句话说明具体怎么改。不要写问题描述，也不要写修改示例。",
+    "每段 suggestions 必须有 1 至 4 项；每项只写 advice，也就是修改动作，用一两句话说明具体怎么改。不要写问题描述，也不要写修改示例。",
     "原文已经很好时，advice 仍须用一两句话说明要保留的具体写法。不得只写空泛判断。",
-    "每段 revisedText 必须是该段完整且非空的修改稿，不是局部句子；修改稿须保留学生的核心事实、人物关系和关键经历，不得为了文采编造内容。",
+    "每段 revisedText 是该段的改后全段：按修改动作改完后的完整段落，必须非空，不能只写被改的句子。没有改动的句子必须与该段原文逐字相同；被修改或新增的内容必须写成完整句子。导出时会把改后全段与原段逐句比对，只给改动或新增的句子加下划线。改后全段须保留学生的核心事实、人物关系和关键经历，不得为了文采编造内容。",
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 paragraphId、category、anchorText、comment、isHighlight。paragraphId 必须来自输入，按输入段落顺序排列；anchorText 必须逐字来自对应段落原文，无法确定时不要返回。",
     "根对象、report 和所有嵌套对象都不得添加结构中未列明的字段；不得额外返回作文标题、总字数或旧版范文字段。完整范文只能放在 rewrittenEssay 数组中。",

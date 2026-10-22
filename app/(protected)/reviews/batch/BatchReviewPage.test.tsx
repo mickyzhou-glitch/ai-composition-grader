@@ -183,9 +183,9 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
 
-    expect(await screen.findByRole("heading", { name: "修改意见与示范文" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "修改动作与改后全段" })).toBeVisible();
     expect(screen.queryByTestId("page-crop-1")).not.toBeInTheDocument();
-    const revised = screen.getByLabelText("第 1 段完整示范文");
+    const revised = screen.getByLabelText("第 1 段改后全段");
     await user.clear(revised);
     await user.type(revised, "我听见急促的呼吸声，终于走上台。");
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));

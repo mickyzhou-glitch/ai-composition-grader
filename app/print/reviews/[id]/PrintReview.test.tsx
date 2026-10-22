@@ -33,11 +33,11 @@ describe("A4 打印稿", () => {
     expect(within(sheet as HTMLElement).getByRole("heading", { name: "为自己鼓掌" })).toBeVisible();
     expect(within(sheet as HTMLElement).getByRole("img", { name: "第 1 段原文裁图，第 1 页" }))
       .toHaveAttribute("src", "blob:paragraph-1");
-    expect(sheet).toHaveTextContent("【修改建议】");
+    expect(sheet).toHaveTextContent("【修改动作】");
     expect(sheet).toHaveTextContent("补充听觉");
     expect(sheet).not.toHaveTextContent("动作略快");
     expect(sheet).not.toHaveTextContent("我听见呼吸声");
-    expect(sheet).toHaveTextContent("【修改后段落】");
+    expect(sheet).toHaveTextContent("【改后全段】");
     expect(container.querySelector('[data-run-kind="deleted"]')).toBeNull();
     expect(sheet).not.toHaveTextContent("慢慢");
     expect(container.querySelector('[data-run-kind="inserted"]')).toHaveTextContent("终于");
@@ -58,6 +58,6 @@ describe("A4 打印稿", () => {
 
     expect(container.querySelectorAll("[data-print-section]").length).toBeGreaterThan(1);
     expect(screen.getAllByText("【第 1 段（续）】").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("【修改后段落（续）】").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("【改后全段（续）】").length).toBeGreaterThan(0);
   });
 });

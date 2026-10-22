@@ -360,7 +360,7 @@ function layoutTextBoxes(
   }
   throw new ReviewPdfError(
     "PDF_CONTENT_INCOMPLETE",
-    "完整段落内容无法放入照片页空白区域，请缩短修改建议后重试",
+    "完整段落内容无法放入照片页空白区域，请缩短修改动作后重试",
   );
 }
 

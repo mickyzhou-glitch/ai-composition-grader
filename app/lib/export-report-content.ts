@@ -12,8 +12,8 @@ import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 
 export const EXPORT_KAITI_FACE = '"LXGW WenKai"';
 export const EXPORT_KAITI_FONT = `${EXPORT_KAITI_FACE}, "KaiTi", "STKaiti", "Kaiti SC", serif`;
-export const SUGGESTION_LABEL = "修改建议：";
-export const DEMONSTRATION_LABEL = "示范文本：";
+export const ACTION_LABEL = "修改动作：";
+export const REVISED_PARAGRAPH_LABEL = "改后全段：";
 export const REWRITTEN_ESSAY_TITLE = "按要求重写的完整范文";
 export const REWRITTEN_ESSAY_INDENT = "　　";
 
@@ -118,8 +118,8 @@ function suggestionText(suggestions: ParagraphSuggestion[]) {
 
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {
   return [
-    { text: `${SUGGESTION_LABEL}${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" },
-    { text: DEMONSTRATION_LABEL, style: "demonstration" },
+    { text: `${ACTION_LABEL}${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" },
+    { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" },
     ...paragraph.revisionRuns.map((run) => ({
       text: run.text,
       style: run.changed ? "changed" as const : "plain" as const,
@@ -141,7 +141,7 @@ function buildExportRevisionRuns(source: string, revised: string): ExportRevisio
     changed: run.kind === "inserted",
   }));
   if (runs.map((run) => run.text).join("") !== revised) {
-    throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "示范文本未能完整排版，请重试");
+    throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "改后全段未能完整排版，请重试");
   }
   return runs;
 }
