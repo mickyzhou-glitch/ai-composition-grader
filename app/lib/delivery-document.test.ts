@@ -160,6 +160,28 @@ describe("buildDeliveryDocument", () => {
     });
   });
 
+  it("范文段数多于原文时，无对应原文的段不裁图、整段按新增划线", async () => {
+    const essay = ["第一段原文。", "新增一段。", "第二段原文。"];
+    const followReport = {
+      ...report,
+      rewrittenEssay: essay,
+      paragraphReviews: [
+        { paragraphId: "paragraph-1", sourceParagraphStart: 1, sourceParagraphEnd: 1, suggestions: [{ advice: "本段无需修改" }], revisedText: essay[0]! },
+        { paragraphId: "paragraph-3", noSourceParagraph: true as const, suggestions: [{ advice: "整段新增。" }], revisedText: essay[1]! },
+        { paragraphId: "paragraph-2", sourceParagraphStart: 2, sourceParagraphEnd: 2, suggestions: [{ advice: "本段无需修改" }], revisedText: essay[2]! },
+      ],
+    };
+    const document = await buildDeliveryDocument({ ...review, report: followReport }, dependencies());
+
+    expect(document.paragraphs.filter((paragraph) => !paragraph.essayParagraphNumber)).toHaveLength(3);
+    expect(document.paragraphs[1]).toMatchObject({
+      paragraphNumber: 2,
+      sourceLabel: "原文无对应段，整段新增",
+      crops: [],
+      revisionRuns: buildSentenceRevisionRuns("", essay[1]!),
+    });
+  });
+
   it("同段多条建议导出时合并成一条，段落数不变", async () => {
     const groupedReport = {
       ...report,

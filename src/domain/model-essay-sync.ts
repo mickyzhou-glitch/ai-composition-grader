@@ -5,7 +5,7 @@ import {
   type ParagraphSuggestion,
 } from "./contracts";
 import { UNCHANGED_PARAGRAPH_ACTION } from "./paragraph-actions";
-import { splitEssayIntoReviewParagraphs } from "./essay-paragraph-sync";
+import { buildModelParagraphReviews, splitEssayIntoReviewParagraphs } from "./essay-paragraph-sync";
 import {
   paragraphReviewCoverageMessage,
   paragraphReviewUsesGroups,
@@ -249,7 +249,50 @@ function finishChange(
  * 段数相同只覆盖改后全段；段数不同则把完整范文切成老师结构段数（默认五段），两边写成同一份。
  * 未审核、已删除、已经逐字一致的不改。
  */
-export function planModelEssaySync(source: ModelEssaySyncSource): ModelEssaySyncPlan {
+export interface ModelEssaySyncOptions {
+  /**
+   * 段数一律以完整范文为准，不受原文段数限制。
+   * 原文段数不够时，对不上原文的范文段标为原文无对应段，导出时整段按新增划线。
+   */
+  followModelParagraphs?: boolean;
+}
+
+function followModelPlan(
+  source: ModelEssaySyncSource,
+  report: ParagraphEvaluationReport,
+  essay: readonly string[],
+): ModelEssaySyncPlan {
+  const reviews = report.paragraphReviews;
+  if (essay.some((text) => text.trim().length === 0 || /[\r\n]/u.test(text))) {
+    return { status: "blocked", reason: "完整范文里有空段或段内换行" };
+  }
+  const ocrParagraphIds = source.ocrParagraphIds?.length
+    ? [...source.ocrParagraphIds]
+    : inferOcrParagraphIds(reviews);
+  if (!ocrParagraphIds) {
+    return { status: "blocked", reason: "段数不同，但读不到原文段落，无法重排段落范文" };
+  }
+  const paragraphReviews = buildModelParagraphReviews(reviews, essay, ocrParagraphIds);
+  if (paragraphReviewCoverageMessage(paragraphReviews, ocrParagraphIds)) {
+    return { status: "blocked", reason: "按范文分段后无法按原文顺序覆盖" };
+  }
+  const sourceless = paragraphReviews.filter((review) => review.noSourceParagraph).length;
+  const note = sourceless > 0
+    ? `原文只有 ${ocrParagraphIds.length} 段，${sourceless} 段范文没有对应原文，按整段新增处理`
+    : `原文 ${ocrParagraphIds.length} 段按顺序分到 ${essay.length} 段`;
+  return finishChange(
+    source,
+    essay.length,
+    reviews.length,
+    `段数不同：段落范文 ${reviews.length} 段改为完整范文的 ${essay.length} 段，正文不改。${note}。两边改为逐字相同。改后第 1 段起「${clip(essay[0] ?? "")}」。`,
+    { ...report, paragraphReviews },
+  );
+}
+
+export function planModelEssaySync(
+  source: ModelEssaySyncSource,
+  options: ModelEssaySyncOptions = {},
+): ModelEssaySyncPlan {
   if (source.teacherReviewedAt == null || source.deletingAt != null) return { status: "out_of_scope" };
   const parsed = paragraphEvaluationReportSchema.safeParse(asJson(source.report));
   if (!parsed.success) return { status: "skipped", reason: "不是可读取的逐段批改报告" };
@@ -273,6 +316,8 @@ export function planModelEssaySync(source: ModelEssaySyncSource): ModelEssaySync
       },
     );
   }
+
+  if (options.followModelParagraphs) return followModelPlan(source, parsed.data, essay);
 
   const target = modelEssayParagraphCount(source.structureRequirements);
   const texts = essay.length === target ? [...essay] : splitEssayIntoReviewParagraphs(essay, target);

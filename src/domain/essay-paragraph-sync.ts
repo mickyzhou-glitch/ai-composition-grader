@@ -1,4 +1,10 @@
-import type { ParagraphEvaluationReport } from "./contracts";
+import type { ParagraphEvaluationReport, ParagraphReview, ParagraphSuggestion } from "./contracts";
+import { UNCHANGED_PARAGRAPH_ACTION } from "./paragraph-actions";
+import {
+  NO_SOURCE_PARAGRAPH_ACTION,
+  allocateSourceRanges,
+  paragraphReviewUsesGroups,
+} from "./paragraph-review-groups";
 
 const sentenceTerminal = /[.!?。！？…](?:["'”’」』】）》〉）])*\s*$/u;
 
@@ -24,34 +30,103 @@ export function splitEssayIntoReviewParagraphs(
   return groupUnits(units, reviewCount);
 }
 
+/** 逐段与完整范文段数或文字不同就算不一致。分段一律以完整范文为准。 */
 export function essayDiffersFromParagraphReviews(
   report: Pick<ParagraphEvaluationReport, "rewrittenEssay" | "paragraphReviews">,
 ): boolean {
   const essay = report.rewrittenEssay;
   if (!essay?.length) return false;
-  const texts = splitEssayIntoReviewParagraphs(essay, report.paragraphReviews.length);
-  if (!texts) return true;
-  return report.paragraphReviews.some((review, index) => review.revisedText !== texts[index]);
+  if (essay.length !== report.paragraphReviews.length) return true;
+  return report.paragraphReviews.some((review, index) => review.revisedText !== essay[index]);
 }
 
+/** 原有报告里各段在原文中的段号（1 起）。读不到时返回 null。 */
+function reviewSourceNumbers(review: ParagraphReview, reviewIndex: number, grouped: boolean): number[] {
+  if (!grouped) return [reviewIndex + 1];
+  if (review.noSourceParagraph) return [];
+  const start = review.sourceParagraphStart ?? 0;
+  const end = review.sourceParagraphEnd ?? 0;
+  const numbers: number[] = [];
+  for (let number = start; number <= end && number > 0; number += 1) numbers.push(number);
+  return numbers;
+}
+
+function mergedSuggestions(covered: readonly ParagraphReview[]): ParagraphSuggestion[] {
+  if (covered.length === 1) return covered[0]!.suggestions.slice(0, 4);
+  const lines = covered.flatMap((review) => review.suggestions.map((item) => item.advice.trim())).filter(Boolean);
+  const unique = [...new Set(lines)];
+  if (unique.length === 0) return [{ advice: UNCHANGED_PARAGRAPH_ACTION }];
+  if (unique.length === 1) return [{ advice: unique[0]! }];
+  return [{ advice: unique.map((line, index) => `${index + 1}. ${line}`).join("\n") }];
+}
+
+/**
+ * 按完整范文的段数重建逐段：第 i 段改后全段就是范文第 i 段。
+ * 原文段数够时连续均分覆盖全部原文；不够时原文段均匀摊开，其余段标为原文无对应段（整段新增）。
+ * 原文段数与范文相同时保持一一对应，不写段号范围。
+ */
+export function buildModelParagraphReviews(
+  existing: readonly ParagraphReview[],
+  essay: readonly string[],
+  ocrParagraphIds: readonly string[],
+): ParagraphReview[] {
+  const grouped = paragraphReviewUsesGroups(existing);
+  const ranges = allocateSourceRanges(ocrParagraphIds.length, essay.length);
+  let extra = ocrParagraphIds.length;
+  const taken = new Set(ocrParagraphIds);
+  const nextExtraId = () => {
+    let id: string;
+    do {
+      extra += 1;
+      id = `paragraph-${extra}`;
+    } while (taken.has(id));
+    taken.add(id);
+    return id;
+  };
+  return essay.map((text, index) => {
+    const range = ranges[index] ?? null;
+    if (!range) {
+      return {
+        paragraphId: nextExtraId(),
+        suggestions: [{ advice: NO_SOURCE_PARAGRAPH_ACTION }],
+        revisedText: text,
+        noSourceParagraph: true as const,
+      };
+    }
+    const covered = existing.filter((review, reviewIndex) => (
+      reviewSourceNumbers(review, reviewIndex, grouped).some((number) => number >= range.start && number <= range.end)
+    ));
+    const review: ParagraphReview = {
+      paragraphId: ocrParagraphIds[range.start - 1] ?? `paragraph-${range.start}`,
+      suggestions: covered.length ? mergedSuggestions(covered) : [{ advice: UNCHANGED_PARAGRAPH_ACTION }],
+      revisedText: text,
+    };
+    if (ocrParagraphIds.length === essay.length) return review;
+    return { ...review, sourceParagraphStart: range.start, sourceParagraphEnd: range.end };
+  });
+}
+
+/**
+ * 「同步到逐段」：以完整范文为准。段数相同只覆盖改后全段；段数不同按范文段数重建逐段。
+ * 重建需要原文段落 id；没有传入时只在段数相同时覆盖文字。
+ */
 export function applyEssayToParagraphReviews(
   report: ParagraphEvaluationReport,
+  ocrParagraphIds?: readonly string[],
 ): ParagraphEvaluationReport {
   const essay = report.rewrittenEssay;
   if (!essay?.length) return report;
-  const texts = splitEssayIntoReviewParagraphs(essay, report.paragraphReviews.length);
-  if (!texts) return report;
-  if (report.paragraphReviews.every((review, index) => review.revisedText === texts[index])) {
-    return report;
+  if (essay.length === report.paragraphReviews.length) {
+    if (report.paragraphReviews.every((review, index) => review.revisedText === essay[index])) return report;
+    return {
+      ...report,
+      paragraphReviews: report.paragraphReviews.map((review, index) => (
+        review.revisedText === essay[index] ? review : { ...review, revisedText: essay[index]! }
+      )),
+    };
   }
-  return {
-    ...report,
-    paragraphReviews: report.paragraphReviews.map((review, index) => (
-      review.revisedText === texts[index]
-        ? review
-        : { ...review, revisedText: texts[index] ?? review.revisedText }
-    )),
-  };
+  if (!ocrParagraphIds?.length) return report;
+  return { ...report, paragraphReviews: buildModelParagraphReviews(report.paragraphReviews, essay, ocrParagraphIds) };
 }
 
 function groupUnits(units: readonly string[], groups: number): string[] {

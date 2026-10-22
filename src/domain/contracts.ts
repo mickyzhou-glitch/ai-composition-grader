@@ -227,7 +227,15 @@ export const paragraphReviewSchema = z.object({
   // Inclusive 1-based positions in the original natural-paragraph order.
   sourceParagraphStart: z.number().int().min(1).max(99).optional(),
   sourceParagraphEnd: z.number().int().min(1).max(99).optional(),
+  // 完整范文段数多于原文时，没有原文对应的段。整段按新增处理。
+  noSourceParagraph: z.literal(true).optional(),
 }).strict().superRefine((value, context) => {
+  if (value.noSourceParagraph && (value.sourceParagraphStart !== undefined || value.sourceParagraphEnd !== undefined)) {
+    context.addIssue({
+      code: "custom",
+      message: "a paragraph without source cannot have a source range",
+    });
+  }
   const hasStart = value.sourceParagraphStart !== undefined;
   const hasEnd = value.sourceParagraphEnd !== undefined;
   if (hasStart !== hasEnd) {

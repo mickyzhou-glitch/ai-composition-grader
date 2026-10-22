@@ -204,4 +204,38 @@ describe("以完整范文统一段落范文", () => {
     })).toEqual(["paragraph-1", "paragraph-2"]);
     expect(ocrParagraphIdsFromCheckpoint(null)).toBeNull();
   });
+
+  it("--follow-model-paragraphs：原文只有 4 段时也按完整范文五段统一，多出的段整段新增", () => {
+    const fiveEssay = ["一段。", "二段。", "三段。", "四段。", "五段。"];
+    const ids = ["paragraph-1", "paragraph-2", "paragraph-3", "paragraph-4"];
+    const source = {
+      id: "review-four",
+      studentName: "于梓悦",
+      title: "这件事打动了我",
+      report: report(fiveEssay, ["旧一", "旧二", "旧三", "旧四"]),
+      ocrParagraphIds: ids,
+    };
+    expect(reviewed(source).status).toBe("blocked");
+    const plan = planModelEssaySync(
+      { teacherReviewedAt: "2026-08-22T06:00:00.000Z", ...source },
+      { followModelParagraphs: true },
+    );
+    expect(plan.status).toBe("change");
+    if (plan.status !== "change") return;
+    const reviews = plan.change.report.paragraphReviews;
+    expect(plan.change.afterEssayCount).toBe(5);
+    expect(plan.change.afterReviewCount).toBe(5);
+    expect(plan.change.report.rewrittenEssay).toEqual(fiveEssay);
+    expect(reviews.map((item) => item.revisedText)).toEqual(fiveEssay);
+    expect(reviews.filter((item) => item.noSourceParagraph)).toHaveLength(1);
+    expect(reviews.filter((item) => !item.noSourceParagraph).map((item) => item.sourceParagraphStart))
+      .toEqual([1, 2, 3, 4]);
+    expect(paragraphReviewCoverageMessage(reviews, ids)).toBeNull();
+    expect(plan.change.summary).toContain("整段新增");
+    const again = planModelEssaySync(
+      { teacherReviewedAt: "2026-08-22T06:00:00.000Z", ...source, report: plan.change.report },
+      { followModelParagraphs: true },
+    );
+    expect(again.status).toBe("unchanged");
+  });
 });

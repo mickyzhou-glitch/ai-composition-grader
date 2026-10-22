@@ -1,3 +1,5 @@
+import { buildModelParagraphReviews } from "../domain/essay-paragraph-sync";
+import { allocateSourceRanges, paragraphReviewUsesGroups } from "../domain/paragraph-review-groups";
 import OpenAI from "openai";
 import { z } from "zod";
 
@@ -46,7 +48,7 @@ export interface CompositionReviewResult {
 
 const CONTENT_RESULT_SCHEMA = [
   "根对象={report:ParagraphEvaluationReport,annotationAnchors:ParagraphAnnotationAnchor[]}",
-  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},rewrittenEssay:string[],paragraphReviews:{paragraphId:string,suggestions:{advice:string}[],revisedText:string,sourceParagraphStart?:number,sourceParagraphEnd?:number}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
+  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},rewrittenEssay:string[],paragraphReviews:{paragraphId:string,suggestions:{advice:string}[],revisedText:string,sourceParagraphStart?:number,sourceParagraphEnd?:number,noSourceParagraph?:true}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
   "ParagraphAnnotationAnchor={paragraphId:string,category:typo|punctuation|sentence|expression|structure|highlight,anchorText:string,comment:string,isHighlight:boolean}",
 ].join("\n");
 
@@ -103,12 +105,30 @@ function rewriteParagraphCount(input: AnalyzeOcrTextInput): number {
     ?? expectedSampleParagraphCount(input.config);
 }
 
-/** Teacher-specified structure length, when the original paragraphs can be grouped into it. */
+/**
+ * 逐段建议一律按完整范文段数归组。原文段数不够时，对不上原文的组标 noSourceParagraph。
+ * 原文与范文段数相同时仍一一对应，不归组。
+ */
 function structureGroupCount(input: AnalyzeOcrTextInput): number | undefined {
-  const count = explicitParagraphCount(input.teacherGuidance ?? "")
-    ?? explicitParagraphCount(input.config.structureRequirements, true);
-  if (count === undefined || count < 1 || count > input.paragraphs.length) return undefined;
+  const count = rewriteParagraphCount(input);
+  if (count < 1 || count === input.paragraphs.length) return undefined;
   return count;
+}
+
+function modelParagraphSlots(input: AnalyzeOcrTextInput, groups: number) {
+  const ranges = allocateSourceRanges(input.paragraphs.length, groups);
+  let extra = input.paragraphs.length;
+  return ranges.map((range) => {
+    if (range) {
+      return {
+        paragraphId: input.paragraphs[range.start - 1]?.id ?? `paragraph-${range.start}`,
+        sourceParagraphStart: range.start,
+        sourceParagraphEnd: range.end,
+      };
+    }
+    extra += 1;
+    return { paragraphId: `paragraph-${extra}`, noSourceParagraph: true as const };
+  });
 }
 
 function paragraphArrayRule(input: AnalyzeOcrTextInput): string {
@@ -124,20 +144,6 @@ function paragraphArrayRule(input: AnalyzeOcrTextInput): string {
   return `paragraphReviews 必须恰好 ${input.paragraphs.length} 项，paragraphId 必须依次为 ${JSON.stringify(input.paragraphs.map(({ id }) => id))}；rewrittenEssay 必须恰好 ${rewriteParagraphCount(input)} 项。${shorter}`;
 }
 
-function evenParagraphRanges(paragraphCount: number, groupCount: number): Array<{ start: number; end: number }> {
-  const base = Math.floor(paragraphCount / groupCount);
-  let remainder = paragraphCount % groupCount;
-  let start = 1;
-  return Array.from({ length: groupCount }, () => {
-    const size = base + (remainder > 0 ? 1 : 0);
-    if (remainder > 0) remainder -= 1;
-    const end = start + size - 1;
-    const range = { start, end };
-    start = end + 1;
-    return range;
-  });
-}
-
 function outputTemplate(input: AnalyzeOcrTextInput): string {
   const diagnosis = { finding: "依据原文写具体发现", action: "写可执行的修改方法" };
   const groups = structureGroupCount(input);
@@ -146,10 +152,8 @@ function outputTemplate(input: AnalyzeOcrTextInput): string {
     (_, index) => `按教师要求撰写的第${index + 1}自然段正文`,
   );
   const paragraphReviews = groups
-    ? evenParagraphRanges(input.paragraphs.length, groups).map((range, index) => ({
-      paragraphId: input.paragraphs[range.start - 1]?.id ?? `paragraph-${range.start}`,
-      sourceParagraphStart: range.start,
-      sourceParagraphEnd: range.end,
+    ? modelParagraphSlots(input, groups).map((slot, index) => ({
+      ...slot,
       suggestions: [{ advice: "这一组的全部修改动作。多处时写成 1. 2. 分行；无需修改时写本段无需修改" }],
       revisedText: essay[index],
     }))
@@ -198,6 +202,9 @@ function reviewAlignmentRule(input: AnalyzeOcrTextInput): string {
   return [
     `老师指定了 ${groups} 个结构段。逐段建议必须按这 ${groups} 个结构段归组，不能按原文 ${input.paragraphs.length} 个自然段逐段各写一条。`,
     "把原文自然段按阅读顺序归入各结构段：连续的多个自然段可以并进同一组，每组至少一个自然段。各组首尾相接，覆盖全部原文，不能漏段、重叠或打乱顺序。",
+    ...(groups > input.paragraphs.length
+      ? [`原文只有 ${input.paragraphs.length} 段，少于范文的 ${groups} 段。按输出模板给出的 paragraphId、sourceParagraphStart/End 和 noSourceParagraph 原样返回：标 noSourceParagraph 的组没有对应原文，整段为新增，修改动作写明本段为新增内容。`]
+      : []),
     "第 i 组 paragraphReviews 对应 rewrittenEssay 的第 i 段。paragraphId 用该组第一个原文段落的 id。sourceParagraphStart 和 sourceParagraphEnd 是该组覆盖的原文段号，从 1 计，含两端。界面会标注“对应原文第 x–y 段”。",
     "每组 revisedText 必须与 rewrittenEssay 同一位置的那一段逐字相同，这样改后全段和完整范文始终对应。",
   ].join("\n");
@@ -363,14 +370,43 @@ function assertStructureGroups(
 ): ParagraphEvaluationReport {
   const groups = structureGroupCount(input);
   const reviews = report.paragraphReviews;
-  const usesGroups = reviews.some((review) => (
-    review.sourceParagraphStart !== undefined || review.sourceParagraphEnd !== undefined
-  ));
+  const usesGroups = paragraphReviewUsesGroups(reviews);
   if (!groups) {
     if (usesGroups) throw new Error("paragraphReviews must exactly match validated paragraph IDs in order");
     return report;
   }
+  const essay = report.rewrittenEssay ?? [];
+  if (
+    !usesGroups
+    && reviews.length === input.paragraphs.length
+    && reviews.every((review, index) => review.paragraphId === input.paragraphs[index]?.id)
+    && essay.length === groups
+  ) {
+    // 模型仍按原文自然段返回：由程序按完整范文段数重新归组，改后全段取范文对应段。
+    return {
+      ...report,
+      paragraphReviews: buildModelParagraphReviews(reviews, essay, input.paragraphs.map(({ id }) => id)),
+    };
+  }
   if (reviews.length !== groups) throw new Error(`paragraph_review_group_count_expected_${groups}`);
+  if (groups > input.paragraphs.length) {
+    // 原文不够分：位置由程序按范文段数确定，模型给的范围不作数。
+    const slots = modelParagraphSlots(input, groups);
+    const placed: ParagraphEvaluationReport = {
+      ...report,
+      paragraphReviews: reviews.map((review, index) => ({
+        suggestions: review.suggestions,
+        revisedText: report.rewrittenEssay?.[index] ?? review.revisedText,
+        ...slots[index]!,
+      })),
+    };
+    placed.paragraphReviews.forEach((review, index) => {
+      if (review.revisedText !== placed.rewrittenEssay?.[index]) {
+        throw new Error(`paragraph_review_revised_mismatch_${index + 1}`);
+      }
+    });
+    return placed;
+  }
   let cursor = 0;
   reviews.forEach((review) => {
     const start = review.sourceParagraphStart;

@@ -7,6 +7,7 @@ import { and, asc, eq, isNotNull, isNull, sql } from "drizzle-orm";
 
 import { openAppDatabase } from "../src/db/client";
 import { reviews } from "../src/db/schema";
+import { evaluationReportSchema } from "../src/domain/contracts";
 import {
   ocrParagraphIdsFromCheckpoint,
   planModelEssaySync,
@@ -142,7 +143,7 @@ export function syncRowFromRecord(record: Record<string, unknown>): SyncEssayRow
   };
 }
 
-function planRows(rows: readonly SyncEssayRow[]): {
+function planRows(rows: readonly SyncEssayRow[], followModelParagraphs = false): {
   unchanged: number;
   planned: PlannedRow[];
   skipped: SyncHeld[];
@@ -153,7 +154,7 @@ function planRows(rows: readonly SyncEssayRow[]): {
   const blocked: SyncHeld[] = [];
   let unchanged = 0;
   for (const row of rows) {
-    const plan = planModelEssaySync(row);
+    const plan = planModelEssaySync(row, { followModelParagraphs });
     if (plan.status === "unchanged" || plan.status === "out_of_scope") {
       if (plan.status === "unchanged") unchanged += 1;
       continue;
@@ -230,12 +231,13 @@ export function syncModelEssays(
     apply: boolean;
     now?: Date;
     backupPath?: string;
+    followModelParagraphs?: boolean;
     writeBackup?: (filePath: string, backup: SyncBackupFile) => void;
   },
 ): SyncSummary {
   const now = options.now ?? new Date();
   const rows = store.listReviewed();
-  const { unchanged, planned, skipped, blocked } = planRows(rows);
+  const { unchanged, planned, skipped, blocked } = planRows(rows, options.followModelParagraphs === true);
   let backupPath: string | null = null;
   let applied = 0;
   if (options.apply && planned.length > 0) {
@@ -354,7 +356,7 @@ function sqliteStore(database: AppDatabase): EssayStore {
     },
     writeReport(row, report, now) {
       const result = database.update(reviews).set({
-        report,
+        report: evaluationReportSchema.parse(report),
         revision: sql`${reviews.revision} + 1`,
         updatedAt: now,
         pdfFilename: null,
@@ -370,7 +372,7 @@ function sqliteStore(database: AppDatabase): EssayStore {
     },
     restore(entry) {
       const result = database.update(reviews).set({
-        report: entry.report,
+        report: evaluationReportSchema.parse(entry.report),
         revision: entry.revision,
         updatedAt: entry.updatedAt == null ? new Date() : new Date(entry.updatedAt),
         pdfFilename: entry.pdfFilename,
@@ -518,6 +520,7 @@ function usage(): string {
     "      远程 D1 写入必须同时带 --confirm 上线（本脚本不会自行对生产执行写入）。",
     "默认读写 APP_DATABASE_PATH 指向的本地 SQLite，不连接生产 D1。",
     "段数相同：改后全段改成完整范文的对应段。段数不同：按老师结构段数（没写明就是五段）重切，两边逐字相同。",
+    "--follow-model-paragraphs：段数一律以完整范文为准；原文段数不够时，对不上原文的段整段按新增处理。",
     "--apply 会先把原报告导出成 JSON，再用 --rollback 该文件恢复。",
   ].join("\n");
 }
@@ -533,10 +536,11 @@ if (isDirectRun()) {
   const dryRun = argv.includes("--dry-run");
   const apply = argv.includes("--apply");
   const remote = argv.includes("--d1");
+  const followModelParagraphs = argv.includes("--follow-model-paragraphs");
   const rollbackPath = readOption(argv, "--rollback");
   const backupPath = readOption(argv, "--backup");
   const confirm = readOption(argv, "--confirm");
-  const known = new Set(["--dry-run", "--apply", "--d1", "--rollback", "--backup", "--confirm"]);
+  const known = new Set(["--dry-run", "--apply", "--d1", "--rollback", "--backup", "--confirm", "--follow-model-paragraphs"]);
   const unexpected = argv.filter((argument, index) => {
     if (known.has(argument)) return false;
     const previous = argv[index - 1];
@@ -564,6 +568,7 @@ if (isDirectRun()) {
         const summary = syncModelEssays(store, {
           apply,
           backupPath,
+          followModelParagraphs,
         });
         process.stdout.write(`${formatSyncSummary(summary)}\n`);
       }

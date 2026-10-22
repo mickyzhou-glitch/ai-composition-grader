@@ -113,7 +113,7 @@ export async function buildDeliveryDocument(
     const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
     if (
       groups.length !== (grouped ? report.paragraphReviews.length : review.ocr.paragraphs.length)
-      || groups.some((group) => group.paragraphs.length === 0)
+      || groups.some((group) => (group.paragraphs.length === 0 && !group.review.noSourceParagraph))
     ) {
       throw new DeliveryBuildError(
         "PARAGRAPH_COVERAGE_MISMATCH",

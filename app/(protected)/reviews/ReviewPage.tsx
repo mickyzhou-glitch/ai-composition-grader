@@ -502,6 +502,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             paragraphId: paragraph.paragraphId,
             ...(paragraph.sourceParagraphStart !== undefined ? { sourceParagraphStart: paragraph.sourceParagraphStart } : {}),
             ...(paragraph.sourceParagraphEnd !== undefined ? { sourceParagraphEnd: paragraph.sourceParagraphEnd } : {}),
+            ...(paragraph.noSourceParagraph ? { noSourceParagraph: true as const } : {}),
           }
           : paragraph
       ));

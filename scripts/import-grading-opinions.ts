@@ -12,6 +12,7 @@ import {
   parseRevisionTeacherGuidance,
 } from "../src/grading-opinions/standing-guidance";
 import { MAX_REVISION_FIELD_CHARS } from "../src/reanalysis/contracts";
+import { executeRemoteD1, type D1StatementResult } from "./sync-model-essays";
 
 export interface ImportedOpinion {
   jobId: string;
@@ -209,6 +210,20 @@ export function previewStandingOpinionsByTitle(database: AppDatabase): TitleScop
     .where(eq(gradingOpinions.scope, "essay"))
     .orderBy(asc(gradingOpinions.sourceTitle), asc(gradingOpinions.createdAt), asc(gradingOpinions.id))
     .all();
+  return groupStandingCandidates(rows);
+}
+
+interface StandingCandidateRow {
+  id: string;
+  reason: string;
+  changeRequest: string;
+  body: string;
+  category: string;
+  sourceTitle: string;
+  sourceStudentName: string;
+}
+
+function groupStandingCandidates(rows: readonly StandingCandidateRow[]): TitleScopedOpinionPreview[] {
   const groups = new Map<string, TitleScopedOpinionPreview["opinions"]>();
   for (const row of rows) {
     const text = row.changeRequest.trim() || row.body.trim();
@@ -224,6 +239,75 @@ export function previewStandingOpinionsByTitle(database: AppDatabase): TitleScop
     groups.set(title, opinions);
   }
   return [...groups.entries()].map(([title, opinions]) => ({ title, count: opinions.length, opinions }));
+}
+
+function stringField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function jsonField(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return value;
+  }
+}
+
+export const D1_ESSAY_OPINIONS_SELECT = [
+  "SELECT id, reason, change_request, body, category, source_title, source_student_name, source_job_id, created_at",
+  "FROM grading_opinions WHERE scope = 'essay'",
+  "ORDER BY source_title, created_at, id",
+].join(" ");
+
+export const D1_HISTORICAL_JOBS_SELECT = [
+  "SELECT j.id AS job_id, j.teacher_guidance, j.created_at, r.student_name, r.config",
+  "FROM analysis_jobs j INNER JOIN reviews r ON r.id = j.review_id",
+  "WHERE j.teacher_guidance IS NOT NULL",
+  "ORDER BY j.created_at, j.id",
+].join(" ");
+
+/**
+ * 只读：从生产 D1 列出按题目分组的历史共性意见。
+ * 包括已存档的「仅当前文章」意见，以及尚未导入、仍留在分析任务里的旧退回说明（id 以 job: 开头）。
+ * 只执行 SELECT，不写入。
+ */
+export function previewStandingOpinionsByTitleFromD1(
+  execute: (statement: string) => D1StatementResult,
+): TitleScopedOpinionPreview[] {
+  const archived = execute(D1_ESSAY_OPINIONS_SELECT).rows;
+  const archivedJobIds = new Set(archived.map((row) => stringField(row.source_job_id)).filter(Boolean));
+  const candidates: Array<StandingCandidateRow & { createdAt: number }> = archived.map((row) => ({
+    id: stringField(row.id),
+    reason: stringField(row.reason),
+    changeRequest: stringField(row.change_request),
+    body: stringField(row.body),
+    category: stringField(row.category),
+    sourceTitle: stringField(row.source_title),
+    sourceStudentName: stringField(row.source_student_name),
+    createdAt: Number(row.created_at) || 0,
+  }));
+  for (const job of execute(D1_HISTORICAL_JOBS_SELECT).rows) {
+    const jobId = stringField(job.job_id);
+    if (!jobId || archivedJobIds.has(jobId)) continue;
+    const parsed = parseRevisionTeacherGuidance(stringField(job.teacher_guidance));
+    const described = parsed ? describeGradingOpinion(parsed.reason, parsed.changeRequest) : null;
+    if (!described) continue;
+    candidates.push({
+      id: `job:${jobId}`,
+      reason: described.reason,
+      changeRequest: described.changeRequest,
+      body: described.body,
+      category: described.category,
+      sourceTitle: opinionSourceTitle(jsonField(job.config)),
+      sourceStudentName: stringField(job.student_name),
+      createdAt: Number(job.created_at) || 0,
+    });
+  }
+  candidates.sort((a, b) => (
+    a.sourceTitle.localeCompare(b.sourceTitle) || a.createdAt - b.createdAt || a.id.localeCompare(b.id)
+  ));
+  return groupStandingCandidates(candidates);
 }
 
 function storedOpinionFields(opinion: { reason: string; changeRequest: string; body: string }) {
@@ -242,11 +326,22 @@ function isDirectRun(): boolean {
 if (isDirectRun()) {
   const apply = process.argv.includes("--apply");
   const previewByTitle = process.argv.includes("--preview-standing-by-title");
+  const remote = process.argv.includes("--d1");
   const unknown = process.argv.slice(2).filter((argument) => (
-    argument !== "--apply" && argument !== "--preview-standing-by-title"
+    argument !== "--apply" && argument !== "--preview-standing-by-title" && argument !== "--d1"
   ));
-  if (unknown.length > 0 || (apply && previewByTitle)) {
-    process.stderr.write("用法：npm run import:grading-opinions -- [--apply | --preview-standing-by-title]\n默认只列出可纳入存档的历史退回说明。加上 --apply 才写入。--preview-standing-by-title 只按题目列出可归入长期规则的历史共性意见，不能和 --apply 一起用，也不会写入。不会连接生产库。\n");
+  if (remote && (apply || !previewByTitle)) {
+    process.stderr.write("--d1 只读，只能和 --preview-standing-by-title 一起用，不能带 --apply。\n");
+    process.exitCode = 2;
+  } else if (remote) {
+    try {
+      process.stdout.write(`${JSON.stringify({ apply: false, target: "d1", preview: previewStandingOpinionsByTitleFromD1(executeRemoteD1) })}\n`);
+    } catch (error) {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    }
+  } else if (unknown.length > 0 || (apply && previewByTitle)) {
+    process.stderr.write("用法：npm run import:grading-opinions -- [--apply | --preview-standing-by-title [--d1]]\n默认只列出可纳入存档的历史退回说明。加上 --apply 才写入。--preview-standing-by-title 只按题目列出可归入长期规则的历史共性意见，不能和 --apply 一起用，也不会写入。不会连接生产库。\n");
     process.exitCode = 2;
   } else {
     const opened = openAppDatabase(process.env.APP_DATABASE_PATH || undefined);

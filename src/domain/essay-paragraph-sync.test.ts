@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { ParagraphEvaluationReport } from "./contracts";
+import { paragraphEvaluationReportSchema, type ParagraphEvaluationReport } from "./contracts";
+import { paragraphReviewCoverageMessage } from "./paragraph-review-groups";
 import {
   applyEssayToParagraphReviews,
   essayDiffersFromParagraphReviews,
@@ -57,12 +58,29 @@ describe("完整范文切到逐段改后全段", () => {
     expect(splitEssayIntoReviewParagraphs(essay, 2)).toEqual(["甲。乙。丙。", "丁。戊。"]);
   });
 
-  it("范文只有两段、逐段有五框时按句子切成五段", () => {
+  it("范文只有两段、逐段有五框时，同步到逐段按范文改成两段", () => {
     const essay = ["甲。乙。丙。", "丁。戊。"];
     expect(splitEssayIntoReviewParagraphs(essay, 5)).toEqual(["甲。", "乙。", "丙。", "丁。", "戊。"]);
     const source = report(essay, ["旧一", "旧二", "旧三", "旧四", "旧五"]);
-    expect(applyEssayToParagraphReviews(source).paragraphReviews.map((item) => item.revisedText))
-      .toEqual(["甲。", "乙。", "丙。", "丁。", "戊。"]);
+    expect(applyEssayToParagraphReviews(source)).toBe(source);
+    const ids = ["paragraph-1", "paragraph-2", "paragraph-3", "paragraph-4", "paragraph-5"];
+    const synced = applyEssayToParagraphReviews(source, ids);
+    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(synced.paragraphReviews.map((item) => [item.sourceParagraphStart, item.sourceParagraphEnd]))
+      .toEqual([[1, 3], [4, 5]]);
+    expect(essayDiffersFromParagraphReviews(synced)).toBe(false);
+  });
+
+  it("原文段数少于范文时，同步到逐段仍按范文段数，多出的段标为原文无对应段", () => {
+    const essay = ["一。", "二。", "三。", "四。", "五。"];
+    const source = report(essay, ["旧一", "旧二", "旧三", "旧四"]);
+    const ids = ["paragraph-1", "paragraph-2", "paragraph-3", "paragraph-4"];
+    const synced = applyEssayToParagraphReviews(source, ids);
+    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(synced.paragraphReviews.map((item) => item.noSourceParagraph ?? false))
+      .toEqual([false, false, true, false, false]);
+    expect(paragraphReviewCoverageMessage(synced.paragraphReviews, ids)).toBeNull();
+    expect(paragraphEvaluationReportSchema.safeParse(synced).success).toBe(true);
   });
 
   it("句子不够五段时按字均分，短到无法覆盖则保持原样", () => {

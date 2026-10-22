@@ -181,7 +181,7 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     : review.ocr.paragraphs.length;
   if (
     groups.length !== expectedGroups
-    || groups.some((group) => group.paragraphs.length === 0 || group.pageIndex === undefined)
+    || groups.some((group) => (group.paragraphs.length === 0 && !group.review.noSourceParagraph) || group.pageIndex === undefined)
   ) {
     throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "逐段批改内容不完整");
   }

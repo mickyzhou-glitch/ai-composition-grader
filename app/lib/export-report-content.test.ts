@@ -194,6 +194,40 @@ describe("导出段落只含修改动作和改后全段", () => {
     expect(exportParagraphRuns(paragraph!).map((run) => run.text).join("")).toContain("我终于走上台。灯光很亮。");
   });
 
+  it("原文段数少于范文时，同步到逐段后导出不报错，无对应原文的段整段划线", () => {
+    const source = review();
+    const originals = ["甲句。", "乙句。"];
+    source.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+      paragraphs: originals.map((text, index) => ({
+        id: `paragraph-${index + 1}`,
+        paragraphIndex: index,
+        text,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.2 + index * 0.2, width: 0.5, height: 0.1 }],
+      })),
+    };
+    const essay = ["甲句。", "新增句。", "乙句。"];
+    source.report = applyEssayToParagraphReviews({
+      ...(source.report as ParagraphEvaluationReport),
+      rewrittenEssay: essay,
+      paragraphReviews: originals.map((text, index) => ({
+        paragraphId: `paragraph-${index + 1}`,
+        suggestions: [{ advice: "本段无需修改" }],
+        revisedText: text,
+      })),
+    }, ["paragraph-1", "paragraph-2"]);
+
+    const content = buildExportReportContent(source);
+    const exported = content.pages.flatMap((page) => page.paragraphs);
+    expect(exported).toHaveLength(3);
+    expect(exported[1]?.sourceLabel).toBe("原文无对应段，整段新增");
+    expect(exported[1]?.revisionRuns).toEqual([{ text: "新增句。", changed: true }]);
+    expect(exported[0]?.revisionRuns).toEqual([{ text: "甲句。", changed: false }]);
+  });
+
   it("导出使用已保存的改后全段，未同步的旧差异保持原样", () => {
     const source = review();
     const originals = ["甲句。", "乙句。"];

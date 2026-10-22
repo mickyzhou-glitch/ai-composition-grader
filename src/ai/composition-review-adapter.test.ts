@@ -1,3 +1,4 @@
+import { buildModelParagraphReviews } from "../domain/essay-paragraph-sync";
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
@@ -91,6 +92,11 @@ const report: ParagraphEvaluationReport = {
   parentFeedbacks,
 };
 
+/** 新批改一律按完整范文段数归组：2 段原文、5 段范文时得到 5 组，未对上原文的组整段新增。 */
+function byModelParagraphs(reviews: ParagraphEvaluationReport["paragraphReviews"], essay = report.rewrittenEssay!) {
+  return buildModelParagraphReviews(reviews, essay, paragraphs.map(({ id }) => id));
+}
+
 const validResult = {
   report,
   annotationAnchors: [{
@@ -175,7 +181,7 @@ describe("CompositionReviewAdapter", () => {
     await expect(harness.adapter.analyzeText({
       config: fiveParagraphConfig, paragraphs, studentName: "小艾",
       teacherGuidance: "[不合适原因]\n没有按五段式写\n[修改要求]\n欲扬先抑，抑少写、扬多写",
-    })).resolves.toMatchObject({ report: { rewrittenEssay, paragraphReviews: report.paragraphReviews } });
+    })).resolves.toMatchObject({ report: { rewrittenEssay, paragraphReviews: byModelParagraphs(report.paragraphReviews, rewrittenEssay) } });
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("必须落实");
     expect(prompt).toContain("rewrittenEssay");
@@ -215,7 +221,7 @@ describe("CompositionReviewAdapter", () => {
         painPoints: ["第一段动作描写不足", "第二段感悟略显概括"],
         commonIssues: [],
         revisionSuggestions: [],
-        paragraphReviews: report.paragraphReviews,
+        paragraphReviews: byModelParagraphs(report.paragraphReviews),
       },
       annotationAnchors: validResult.annotationAnchors,
     });
@@ -291,7 +297,7 @@ describe("CompositionReviewAdapter", () => {
       paragraphs,
       studentName: "小艾",
     })).resolves.toMatchObject({
-      report: { paragraphReviews: adviceOnly.report.paragraphReviews },
+      report: { paragraphReviews: byModelParagraphs(adviceOnly.report.paragraphReviews) },
     });
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("不要写问题描述，也不要写修改示例");
@@ -310,7 +316,10 @@ describe("CompositionReviewAdapter", () => {
       .resolves.toMatchObject({
         report: {
           paragraphReviews: [
-            report.paragraphReviews[0],
+            { paragraphId: "paragraph-1", suggestions: report.paragraphReviews[0]!.suggestions },
+            { noSourceParagraph: true },
+            { noSourceParagraph: true },
+            { noSourceParagraph: true },
             {
               paragraphId: "paragraph-2",
               suggestions: [{
@@ -460,10 +469,12 @@ describe("CompositionReviewAdapter", () => {
     const template = JSON.parse(prompt.split("输出 JSON 模板（说明字符串必须替换为实际内容）：\n")[1]);
     expect(Object.keys(template).sort()).toEqual(["annotationAnchors", "report"]);
     expect(template.report.paragraphReviews.map((item: { paragraphId: string }) => item.paragraphId))
-      .toEqual(paragraphs.map(({ id }) => id));
+      .toEqual(["paragraph-1", "paragraph-3", "paragraph-4", "paragraph-5", "paragraph-2"]);
+    expect(template.report.paragraphReviews.filter((item: { noSourceParagraph?: true }) => item.noSourceParagraph))
+      .toHaveLength(3);
     expect(template.report.rewrittenEssay).toHaveLength(5);
     expect(template.report.parentFeedbacks).toHaveLength(3);
-    expect(prompt).toContain("paragraphReviews 必须恰好 2 项");
+    expect(prompt).toContain("paragraphReviews 与 rewrittenEssay 都必须恰好 5 项");
   });
 
   it("后续修改意见位于初始写作规则之后，避免初始字数覆盖最新要求", async () => {
@@ -692,7 +703,7 @@ describe("CompositionReviewAdapter", () => {
     const harness = setup({ response: merged });
     const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
 
-    expect(result.report.paragraphReviews).toHaveLength(paragraphs.length);
+    expect(result.report.paragraphReviews).toHaveLength(report.rewrittenEssay!.length);
     expect(result.report.paragraphReviews[0]?.suggestions).toEqual([
       { advice: "1. 补听觉\n2. 补动作\n3. 收束主题" },
     ]);

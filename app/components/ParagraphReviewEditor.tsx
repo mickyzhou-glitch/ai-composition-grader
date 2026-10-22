@@ -83,7 +83,7 @@ export function ParagraphReviewEditor({
         <div className="paragraph-review-heading">
           <div className="essay-sync">
             <h3>按要求重写的完整范文</h3>
-            <button type="button" disabled={disabled} onClick={() => onChange(applyEssayToParagraphReviews(report))}>同步到逐段</button>
+            <button type="button" disabled={disabled} onClick={() => onChange(applyEssayToParagraphReviews(report, paragraphs.map(({ id }) => id)))}>同步到逐段</button>
             {essayOutOfSync ? <span className="essay-sync-hint">与逐段不一致</span> : null}
           </div>
           <span>共 {report.rewrittenEssay.length} 段 · {totalCharacters} 字（含标点）</span>

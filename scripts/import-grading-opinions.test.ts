@@ -9,7 +9,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { openAppDatabase } from "../src/db/client";
 import { gradingOpinions } from "../src/db/schema";
-import { importHistoricalGradingOpinions, previewStandingOpinionsByTitle } from "./import-grading-opinions";
+import {
+  D1_ESSAY_OPINIONS_SELECT,
+  importHistoricalGradingOpinions,
+  previewStandingOpinionsByTitle,
+  previewStandingOpinionsByTitleFromD1,
+} from "./import-grading-opinions";
 
 const NOW = new Date("2026-10-22T02:00:00.000Z");
 const LEGACY_HEADER = "以下是这位老师存档的长期批改要求，每次批改都必须遵守。与本次补充意见冲突时，以本次补充意见为准；与原文事实冲突时，以原文为准。";
@@ -225,5 +230,26 @@ describe("历史退回说明导入存档", () => {
     ]);
     expect(opened.db.select().from(gradingOpinions).all()).toHaveLength(5);
     expect(opened.db.select().from(gradingOpinions).where(eq(gradingOpinions.scope, "standing")).all()).toHaveLength(1);
+  });
+
+  it("--d1 预览只执行 SELECT，合并已存档意见和未导入的旧退回说明", () => {
+    const statements: string[] = [];
+    const execute = (statement: string) => {
+      statements.push(statement);
+      if (statement === D1_ESSAY_OPINIONS_SELECT) {
+        return { changes: 0, rows: [
+          { id: "op-1", reason: "", change_request: "严格五段", body: "严格五段", category: "结构", source_title: "我终于明白了", source_student_name: "小明", source_job_id: "job-archived", created_at: 1 },
+          { id: "op-2", reason: "", change_request: "写具体心理", body: "写具体心理", category: "内容", source_title: "我终于明白了", source_student_name: "小刚", source_job_id: null, created_at: 2 },
+        ] };
+      }
+      return { changes: 0, rows: [
+        { job_id: "job-archived", teacher_guidance: "[不合适原因]\n结构乱\n[修改要求]\n分五段", created_at: 3, student_name: "小明", config: JSON.stringify({ title: "我终于明白了" }) },
+      ] };
+    };
+    const preview = previewStandingOpinionsByTitleFromD1(execute);
+    expect(statements.every((statement) => statement.trimStart().startsWith("SELECT"))).toBe(true);
+    expect(preview).toEqual([
+      { title: "我终于明白了", count: 1, opinions: [{ id: "op-1", text: "严格五段", category: "结构", studentName: "小明" }] },
+    ]);
   });
 });
