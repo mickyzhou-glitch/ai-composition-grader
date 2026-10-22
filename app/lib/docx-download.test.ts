@@ -1,7 +1,14 @@
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createReviewDocx } from "./docx-download";
+import {
+  ACCENT3_BASE_HEX,
+  ACCENT3_LIGHTER_60_TINT,
+  BOX_FILL_HEX,
+  chooseBoxHalfPoints,
+  createReviewDocx,
+} from "./docx-download";
+import type { ExportParagraph } from "./export-report-content";
 import type { ExportReviewSource } from "./export-report-content";
 
 const PNG_BYTES = Uint8Array.from(
@@ -149,8 +156,8 @@ describe("Word 逐段批改文档", () => {
     const { blob, documentXml } = await unpack(fixture());
 
     expect(blob.type).toBe("application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-    expect(documentXml).toMatch(/<w:pgSz[^>]*w:w="11905"[^>]*w:h="16837"/u);
-    expect(documentXml).toMatch(/<w:pgMar[^>]*w:top="907"[^>]*w:right="1020"[^>]*w:bottom="907"[^>]*w:left="1020"/u);
+    expect(documentXml).toMatch(/<w:pgSz[^>]*w:w="16837"[^>]*w:h="11905"[^>]*w:orient="landscape"/u);
+    expect(documentXml).toMatch(/<w:pgMar[^>]*w:top="680"[^>]*w:right="680"[^>]*w:bottom="680"[^>]*w:left="680"/u);
     expect(documentXml).not.toContain("【第 ");
     expect(documentXml).not.toContain("【修改建议");
     expect(documentXml).not.toContain("【修改后段落");
@@ -174,6 +181,10 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).toContain("我明白了勇气。");
     expect(documentXml.indexOf("我攥紧稿纸走，登上舞台。")).toBeLessThan(documentXml.indexOf("我明白了勇气。"));
     expect(documentXml).toContain('w:fill="E7D4A8"');
+    expect(documentXml).toContain('w:themeColor="accent3"');
+    expect(documentXml).toContain('w:themeTint="66"');
+    expect(documentXml).toContain('w:themeFill="accent3"');
+    expect(documentXml).toContain('w:themeFillTint="66"');
     expect(documentXml).toContain('w:color w:val="C00000"');
     expect(documentXml).toContain('w:color w:val="1F4E78"');
     expect(documentXml).toContain('<w:u w:val="single"');
@@ -240,5 +251,96 @@ describe("Word 逐段批改文档", () => {
     expect(runXml("灯光很亮。")).not.toContain("<w:u ");
     expect(runXml("我终于走上台。")).toContain('<w:u w:val="single"');
     expect(runXml("我听见自己的呼吸。")).toContain('<w:u w:val="single"');
+  });
+
+  it("横向页上每段一个浅黄文本框，框数等于段数", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const paragraphs = ["开篇引入。", "先写犹豫。", "再写登台。", "点明勇气。", "收束全文。"];
+    review.images = [{ id: 11, position: 0, width: 1200, height: 1600, mimeType: "image/png" }];
+    review.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: paragraphs.join(""), readable: true, warnings: [] }],
+      paragraphs: paragraphs.map((text, index) => ({
+        id: `paragraph-${index + 1}`,
+        paragraphIndex: index,
+        text,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.1 + index * 0.12, width: 0.6, height: 0.1 }],
+      })),
+    };
+    review.report = {
+      ...(review.report as object),
+      paragraphReviews: paragraphs.map((text, index) => ({
+        paragraphId: `paragraph-${index + 1}`,
+        suggestions: [{ advice: `改好第 ${index + 1} 段。` }],
+        revisedText: text,
+      })),
+    };
+    const { zip, documentXml } = await unpack(review);
+    const theme = await zip.file("word/theme/theme1.xml")?.async("string");
+    const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
+    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+    const photoTables = [...documentXml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/gu)]
+      .filter((grid) => (grid[0].match(/<w:gridCol\b/gu) ?? []).length === 2);
+
+    expect(documentXml).toMatch(/w:orient="landscape"/u);
+    expect(photoTables).toHaveLength(1);
+    expect(boxes).toHaveLength(paragraphs.length);
+    expect(documentXml.match(/<w:drawing\b/gu)).toHaveLength(1);
+    expect(cells[0]).toContain("第 1 页作文原图");
+    expect(cells[0]).not.toContain("修改动作：");
+    for (const [index, box] of boxes.entries()) {
+      expect(box).toContain(`改好第 ${index + 1} 段。`);
+      expect(box).toContain("改后全段：");
+      expect(box).toContain(`w:fill="${BOX_FILL_HEX}"`);
+      expect(box).toContain('w:themeColor="accent3"');
+      expect(box).toContain(`w:themeTint="${ACCENT3_LIGHTER_60_TINT}"`);
+      expect(box).toContain('w:themeFill="accent3"');
+      expect(box).toContain(`w:themeFillTint="${ACCENT3_LIGHTER_60_TINT}"`);
+      expect(box).not.toContain("问题描述");
+      expect(box).not.toContain("修改示例");
+    }
+    expect(theme).toContain(`<a:accent3><a:srgbClr val="${ACCENT3_BASE_HEX}"/></a:accent3>`);
+    expect(await zip.file("[Content_Types].xml")?.async("string")).toContain("/word/theme/theme1.xml");
+  });
+
+  it("框内容过长时缩小字号并保留全文", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const revised = `我终于走上台。${"灯光一直很亮，我还是迈了出去。".repeat(80)}`;
+    review.images = [review.images[0]];
+    review.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: "我慢慢走，登上舞台。", readable: true, warnings: [] }],
+      paragraphs: [{
+        id: "paragraph-1",
+        paragraphIndex: 0,
+        text: "我慢慢走，登上舞台。",
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.6, height: 0.2 }],
+      }],
+    };
+    review.report = {
+      ...(review.report as object),
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        suggestions: [{ advice: "写清迈步。" }],
+        revisedText: revised,
+      }],
+    };
+    const paragraph: ExportParagraph = {
+      suggestions: [{ advice: "写清迈步。" }],
+      revisionRuns: [{ text: revised, changed: true }],
+    };
+    const halfPoints = chooseBoxHalfPoints([paragraph]);
+    const { documentXml } = await unpack(review);
+
+    expect(halfPoints).toBeLessThan(21);
+    expect(documentXml).toContain(revised);
+    expect(documentXml).toContain(`<w:sz w:val="${halfPoints}"`);
+    expect(documentXml).not.toContain('<w:sz w:val="21"');
   });
 });
