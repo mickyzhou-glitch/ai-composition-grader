@@ -26,3 +26,13 @@
 - `/api/health` 200（`status: ok`），`/login`、`/new`、`/reviews`、`/`、PDF worker 均 200。
 - 未登录访问 `/api/classes`、`/api/reviews` 返回 401。
 - 未用真实学生作文测试，未修改线上数据；已登录主流程回归未在本次执行。
+
+## 本日第二次发布：PR#3 Word 导出横向 A4 两栏
+
+- 源码：`main@841ec57`（PR#3：Word 导出改为横向 A4 两栏，每段一个浅黄文本框），发布前工作区干净
+- 新 Worker 版本：`4a07a198-0222-4cde-adcc-25b04af79753`（100% 流量）
+- 上一版本（回滚用）：`28b976e6-7200-48ec-bead-c33932915087`
+- Node 24.19.0（`npx -y node@24`），`npm run build` 后 `npx wrangler deploy`，一次成功；依赖无变化，未改 `package-lock.json`
+- D1：远程无待应用迁移，未动数据库
+- 冒烟（未登录）：`/api/health`、`/login`、`/new`、`/reviews`、`/`、PDF worker 均 200；`/api/classes`、`/api/reviews` 401；`/dev/package.json` 404
+- 未用真实学生作文，未改线上数据；Word 导出新版式需登录后人工导出确认，本次未执行
