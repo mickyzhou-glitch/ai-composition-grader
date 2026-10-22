@@ -94,3 +94,13 @@
 - Node 24.19.0，`npm run build` 后 `npx wrangler deploy`，一次成功；本次未动数据库
 - 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、PDF worker 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
 - 已登录在 WPS 打开实际导出未在本次执行；样例见 Mac 桌面 `样例-范文换行修复.docx`
+
+## 本日第五次发布：批量审核操作栏吸顶
+
+- 源码：`main@4e0aecd`，发布前工作区干净
+- 新 Worker 版本：`3c389de0-aac4-4d45-9557-cfd55210514b`（100% 流量）
+- 上一版本（回滚用）：`47975967-2bdf-46e8-b1fd-095385ded6f1`
+- 改动：批量审核页「不合适」「审核通过并进入下一篇」和保存提示移到三栏上方吸顶，底部不再重复；单篇复核页无底部栏，未改
+- Node 24.19.0，`npm run build` 后 `npx wrangler deploy`，一次成功；未动数据库
+- 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、PDF worker 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404；线上样式表已含 `batch-review-actionbar`
+- 已登录界面（桌面/窄屏）未在本次人工查看
