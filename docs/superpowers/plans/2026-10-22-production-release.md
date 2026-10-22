@@ -104,3 +104,13 @@
 - Node 24.19.0，`npm run build` 后 `npx wrangler deploy`，一次成功；未动数据库
 - 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、PDF worker 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404；线上样式表已含 `batch-review-actionbar`
 - 已登录界面（桌面/窄屏）未在本次人工查看
+
+## 本日第六次发布：审核通过时自动同步到逐段
+
+- 源码：`main@013c80d`，发布前工作区干净
+- 新 Worker 版本：`0dd827f8-4a79-45e0-80b8-9e40dd2574c5`（100% 流量）
+- 上一版本（回滚用）：`3c389de0-aac4-4d45-9557-cfd55210514b`
+- 改动：批量与单篇「审核通过」前自动执行「同步到逐段」逻辑，服务端审核通过接口同样同步；已一致不改；按钮与「与逐段不一致」提示保留
+- Node 24，`npm run build` 后 `npx wrangler deploy`，一次成功；未动数据库
+- 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、`/pdfjs/pdf.worker.min.mjs` 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
+- 已登录审核流程未在本次人工执行
