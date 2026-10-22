@@ -308,9 +308,15 @@ describe("BatchReviewPage", () => {
     expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(2);
     expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /修改动作/u })).not.toBeInTheDocument();
+    const essayParagraph = screen.getByLabelText("完整范文第 2 段");
+    await user.clear(essayParagraph);
+    await user.type(essayParagraph, "结尾改过。");
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改过。");
     const revised = screen.getByLabelText("第 1 段改后全段");
     await user.clear(revised);
     await user.type(revised, "我听见呼吸声，走上了台。天很蓝。");
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue("我听见呼吸声，走上了台。天很蓝。");
+    expect(screen.getByLabelText("完整范文第 2 段")).toHaveValue("结尾改过。");
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
 
     const teacherCall = fetchMock.mock.calls.find(([input]) => (
@@ -318,7 +324,7 @@ describe("BatchReviewPage", () => {
     ));
     expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
     expect(JSON.parse(String(teacherCall?.[1]?.body)).report).toMatchObject({
-      rewrittenEssay: essay,
+      rewrittenEssay: ["我听见呼吸声，走上了台。天很蓝。", "结尾改过。"],
       paragraphReviews: [
         {
           paragraphId: "paragraph-1",
@@ -330,7 +336,7 @@ describe("BatchReviewPage", () => {
           paragraphId: "paragraph-3",
           sourceParagraphStart: 3,
           sourceParagraphEnd: 3,
-          revisedText: essay[1],
+          revisedText: "结尾改过。",
         },
       ],
     });

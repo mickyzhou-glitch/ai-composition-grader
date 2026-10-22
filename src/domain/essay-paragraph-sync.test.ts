@@ -6,6 +6,8 @@ import {
   essayDiffersFromParagraphReviews,
   planReviewedEssayRepair,
   splitEssayIntoReviewParagraphs,
+  structureGroupsShareEssay,
+  writeGroupedParagraphText,
 } from "./essay-paragraph-sync";
 
 const diagnostics = {
@@ -97,6 +99,42 @@ describe("完整范文切到逐段改后全段", () => {
       paragraphId: "paragraph-3",
       revisedText: "结尾。",
     });
+  });
+});
+
+describe("结构归组后的双向同步", () => {
+  function grouped(essay: string[], revised: string[]) {
+    const source = report(essay, revised);
+    source.paragraphReviews = source.paragraphReviews.map((review, index) => ({
+      ...review,
+      sourceParagraphStart: index + 1,
+      sourceParagraphEnd: index + 1,
+    }));
+    return source;
+  }
+
+  it("改第 n 段时两边写成同一份文字，未改的旧差异保持原样", () => {
+    const source = grouped(["范文甲。", "范文乙。"], ["旧甲。", "旧乙。"]);
+    expect(structureGroupsShareEssay(source)).toBe(true);
+    expect(writeGroupedParagraphText(source, 0, "新甲。")).toMatchObject({
+      rewrittenEssay: ["新甲。", "范文乙。"],
+      paragraphReviews: [
+        { revisedText: "新甲。" },
+        { revisedText: "旧乙。" },
+      ],
+    });
+    expect(writeGroupedParagraphText(source, 1, "新乙。").paragraphReviews.map((item) => item.revisedText))
+      .toEqual(["旧甲。", "新乙。"]);
+    expect(writeGroupedParagraphText(source, 1, "新乙。").rewrittenEssay).toEqual(["范文甲。", "新乙。"]);
+  });
+
+  it("没有结构归组或段数不同时不改写任何一边", () => {
+    const ungrouped = report(["范文甲。", "范文乙。"], ["旧甲。", "旧乙。"]);
+    expect(structureGroupsShareEssay(ungrouped)).toBe(false);
+    expect(writeGroupedParagraphText(ungrouped, 0, "新甲。")).toBe(ungrouped);
+    const uneven = grouped(["只有一段。"], ["旧甲。", "旧乙。"]);
+    expect(structureGroupsShareEssay(uneven)).toBe(false);
+    expect(writeGroupedParagraphText(uneven, 0, "新甲。")).toBe(uneven);
   });
 });
 

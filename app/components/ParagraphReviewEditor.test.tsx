@@ -227,7 +227,7 @@ describe("ParagraphReviewEditor", () => {
     expect(paragraph.querySelector(".revision-preview")?.textContent).toBe("我非常高兴！天很蓝。");
   });
 
-  it("结构段归组后每组一个框，改后全段不再自动写回完整范文，下划线对照合并后的原文", () => {
+  it("结构段归组后每组一个框，改一边会同步另一边，下划线对照合并后的原文", () => {
     const onChange = vi.fn();
     const essay = ["我很高兴。天很蓝。", "结尾保留。"];
     render(<ParagraphReviewEditor
@@ -285,10 +285,90 @@ describe("ParagraphReviewEditor", () => {
       target: { value: "我非常高兴。天很蓝。" },
     });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      rewrittenEssay: essay,
+      rewrittenEssay: ["我非常高兴。天很蓝。", "结尾保留。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: "我非常高兴。天很蓝。" }),
         expect.objectContaining({ revisedText: "结尾保留。" }),
+      ],
+    }));
+
+    fireEvent.change(screen.getByLabelText("完整范文第 2 段"), {
+      target: { value: "结尾改过。" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      rewrittenEssay: [essay[0], "结尾改过。"],
+      paragraphReviews: [
+        expect.objectContaining({ revisedText: essay[0] }),
+        expect.objectContaining({ revisedText: "结尾改过。" }),
+      ],
+    }));
+  });
+
+  it("结构归组的旧差异不会在打开时改写，只同步正在编辑的那一段", () => {
+    const onChange = vi.fn();
+    render(<ParagraphReviewEditor
+      reviewId="review-1"
+      report={{
+        ...report,
+        rewrittenEssay: ["范文甲。", "范文乙。"],
+        paragraphReviews: [
+          {
+            paragraphId: "paragraph-1",
+            sourceParagraphStart: 1,
+            sourceParagraphEnd: 1,
+            suggestions: [{ advice: "改开篇" }],
+            revisedText: "旧甲。",
+          },
+          {
+            paragraphId: "paragraph-2",
+            sourceParagraphStart: 2,
+            sourceParagraphEnd: 2,
+            suggestions: [{ advice: "本段无需修改" }],
+            revisedText: "旧乙。",
+          },
+        ],
+      }}
+      ocr={{
+        ...ocr,
+        paragraphs: [
+          { ...ocr.paragraphs[0], text: "原文甲。" },
+          {
+            id: "paragraph-2",
+            paragraphIndex: 1,
+            text: "原文乙。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.4, width: 0.5, height: 0.1 }],
+          },
+        ],
+      }}
+      images={[]}
+      disabled={false}
+      onChange={onChange}
+    />);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue("范文甲。");
+    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("旧甲。");
+    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("第 1 段修改动作"), {
+      target: { value: "补一个动作" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      rewrittenEssay: ["范文甲。", "范文乙。"],
+      paragraphReviews: [
+        expect.objectContaining({ revisedText: "旧甲。", suggestions: [{ advice: "补一个动作" }] }),
+        expect.objectContaining({ revisedText: "旧乙。" }),
+      ],
+    }));
+
+    fireEvent.change(screen.getByLabelText("第 2 段改后全段"), {
+      target: { value: "新乙。" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      rewrittenEssay: ["范文甲。", "新乙。"],
+      paragraphReviews: [
+        expect.objectContaining({ revisedText: "旧甲。" }),
+        expect.objectContaining({ revisedText: "新乙。" }),
       ],
     }));
   });

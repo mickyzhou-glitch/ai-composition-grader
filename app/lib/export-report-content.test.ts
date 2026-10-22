@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyEssayToParagraphReviews } from "@/src/domain/essay-paragraph-sync";
+import { applyEssayToParagraphReviews, writeGroupedParagraphText } from "@/src/domain/essay-paragraph-sync";
 import type { ParagraphEvaluationReport } from "@/src/domain/contracts";
 
 import {
@@ -192,5 +192,50 @@ describe("导出段落只含修改动作和改后全段", () => {
       { text: "灯光很亮。", changed: false },
     ]);
     expect(exportParagraphRuns(paragraph!).map((run) => run.text).join("")).toContain("我终于走上台。灯光很亮。");
+  });
+
+  it("只同步编辑过的结构段，导出使用该段文字，未编辑的旧差异保持原样", () => {
+    const source = review();
+    const originals = ["甲句。", "乙句。"];
+    source.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+      paragraphs: originals.map((text, index) => ({
+        id: `paragraph-${index + 1}`,
+        paragraphIndex: index,
+        text,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.2 + index * 0.2, width: 0.5, height: 0.1 }],
+      })),
+    };
+    const stored = {
+      ...(source.report as ParagraphEvaluationReport),
+      rewrittenEssay: ["范文甲。", "范文乙。"],
+      paragraphReviews: [
+        {
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 1,
+          suggestions: [{ advice: "改开篇" }],
+          revisedText: "旧甲。",
+        },
+        {
+          paragraphId: "paragraph-2",
+          sourceParagraphStart: 2,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "本段无需修改" }],
+          revisedText: "旧乙。",
+        },
+      ],
+    };
+    source.report = writeGroupedParagraphText(stored, 0, "新甲。");
+
+    const content = buildExportReportContent(source);
+    const paragraphs = content.pages[0]?.paragraphs ?? [];
+    expect(paragraphs).toHaveLength(2);
+    expect(exportParagraphRuns(paragraphs[0]!).map((run) => run.text).join("")).toContain("新甲。");
+    expect(exportParagraphRuns(paragraphs[1]!).map((run) => run.text).join("")).toContain("旧乙。");
+    expect(paragraphs[1]?.revisionRuns.map((run) => run.text).join("")).toBe("旧乙。");
   });
 });

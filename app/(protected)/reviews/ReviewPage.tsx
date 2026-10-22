@@ -15,6 +15,7 @@ import {
   type ParagraphEvaluationReport,
   type ParagraphReview,
 } from "@/src/domain/contracts";
+import { structureGroupsShareEssay, writeGroupedParagraphText } from "@/src/domain/essay-paragraph-sync";
 import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -504,7 +505,13 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           }
           : paragraph
       ));
-      changeReport({ ...report, paragraphReviews });
+      const rewrittenIndex = paragraphReviews.findIndex((paragraph) => paragraph.paragraphId === paragraphId);
+      const withParagraphs = { ...report, paragraphReviews };
+      changeReport(
+        structureGroupsShareEssay(withParagraphs) && rewrittenIndex >= 0
+          ? writeGroupedParagraphText(withParagraphs, rewrittenIndex, paragraphReviews[rewrittenIndex]!.revisedText)
+          : withParagraphs,
+      );
       const paragraphNumber = review.ocr.paragraphs.find(
         ({ id }) => id === paragraphId,
       )?.paragraphIndex;

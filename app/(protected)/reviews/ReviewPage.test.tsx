@@ -182,7 +182,7 @@ describe("复核页", () => {
     expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
   });
 
-  it("结构段归组后按组展示，单段重写不改完整范文，同步按钮才覆盖改后全段", async () => {
+  it("结构段归组后改完整范文、改段落范文和单段重写都只同步这一段", async () => {
     const essay = ["我为自己鼓掌。天很蓝。", "我明白了。"];
     const grouped = {
       ...paragraphReview,
@@ -243,17 +243,17 @@ describe("复核页", () => {
     expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
     expect(screen.getByTestId("page-crop-1")).toBeInTheDocument();
     expect(screen.getByTestId("page-crop-2")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("完整范文第 2 段"), { target: { value: "结尾改了。" } });
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改了。");
+    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(essay[0]);
+    expect(screen.queryByText(/不能审核通过|不一致，不能/u)).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "重新生成第 1 段" }));
 
     expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
-    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue(essay[0]);
-    expect(screen.getByLabelText("完整范文第 2 段")).toHaveValue(essay[1]);
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
-    expect(screen.queryByText(/不能审核通过|不一致，不能/u)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "同步到逐段" }));
-    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(essay[0]);
-    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue(essay[1]);
-    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue(essay[0]);
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue(rewritten.revisedText);
+    expect(screen.getByLabelText("完整范文第 2 段")).toHaveValue("结尾改了。");
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改了。");
     expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
     expect(screen.getByText("对应原文第 1–2 段")).toBeInTheDocument();
   });
