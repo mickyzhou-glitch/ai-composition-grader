@@ -1,3 +1,4 @@
+import { normalizeAssignmentTitle } from "../reanalysis/contracts";
 import {
   describeScopedOpinion,
   isOpinionCategory,
@@ -59,10 +60,12 @@ const opinionColumns = `
 export async function listD1StandingOpinions(
   database: D1Database,
   ownerId: string,
+  title: string,
 ): Promise<StandingOpinionInput[]> {
+  const normalized = normalizeAssignmentTitle(title);
   const bound = database.prepare(`
     SELECT change_request AS text, paragraph_label AS paragraphLabel,
-      category, updated_at AS updatedAt
+      category, source_title AS sourceTitle, updated_at AS updatedAt
     FROM grading_opinions
     WHERE owner_id = ? AND scope = 'standing'
     ORDER BY updated_at DESC, created_at DESC, id DESC
@@ -74,7 +77,8 @@ export async function listD1StandingOpinions(
   const result = await bound.all();
   return (result.results ?? []).flatMap((row) => {
     const text = typeof row.text === "string" ? row.text.trim() : "";
-    if (!text) return [];
+    const sourceTitle = typeof row.sourceTitle === "string" ? row.sourceTitle : "";
+    if (!text || normalizeAssignmentTitle(sourceTitle) !== normalized) return [];
     const createdAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
     const category = typeof row.category === "string" && isOpinionCategory(row.category) ? row.category : undefined;
     const paragraphLabel = typeof row.paragraphLabel === "string" ? row.paragraphLabel : null;

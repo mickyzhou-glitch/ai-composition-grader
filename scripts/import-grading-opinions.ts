@@ -34,6 +34,17 @@ export interface ImportSummary {
   applied: number;
 }
 
+export interface TitleScopedOpinionPreview {
+  title: string;
+  count: number;
+  opinions: Array<{
+    id: string;
+    text: string;
+    category: string;
+    studentName: string;
+  }>;
+}
+
 type AppDatabase = ReturnType<typeof openAppDatabase>["db"];
 
 /**
@@ -187,6 +198,34 @@ export function importHistoricalGradingOpinions(
   };
 }
 
+const commonOpinionPattern = /共性|结构|段/u;
+
+/**
+ * 只读列出「仅当前文章」里看起来像共性意见的记录，按来源题目分组。
+ * 不改 scope，不写入。历史意见是否升成长期规则由老师看完这份清单再决定。
+ */
+export function previewStandingOpinionsByTitle(database: AppDatabase): TitleScopedOpinionPreview[] {
+  const rows = database.select().from(gradingOpinions)
+    .where(eq(gradingOpinions.scope, "essay"))
+    .orderBy(asc(gradingOpinions.sourceTitle), asc(gradingOpinions.createdAt), asc(gradingOpinions.id))
+    .all();
+  const groups = new Map<string, TitleScopedOpinionPreview["opinions"]>();
+  for (const row of rows) {
+    const text = row.changeRequest.trim() || row.body.trim();
+    if (row.category !== "结构" && !commonOpinionPattern.test(`${row.reason}${text}`)) continue;
+    const title = row.sourceTitle.trim() || "未填写题目";
+    const opinions = groups.get(title) ?? [];
+    opinions.push({
+      id: row.id,
+      text,
+      category: row.category,
+      studentName: row.sourceStudentName,
+    });
+    groups.set(title, opinions);
+  }
+  return [...groups.entries()].map(([title, opinions]) => ({ title, count: opinions.length, opinions }));
+}
+
 function storedOpinionFields(opinion: { reason: string; changeRequest: string; body: string }) {
   if (opinion.reason.trim() && opinion.changeRequest.trim()) {
     return { reason: opinion.reason.trim(), changeRequest: opinion.changeRequest.trim() };
@@ -202,15 +241,22 @@ function isDirectRun(): boolean {
 
 if (isDirectRun()) {
   const apply = process.argv.includes("--apply");
-  const unknown = process.argv.slice(2).filter((argument) => argument !== "--apply");
-  if (unknown.length > 0) {
-    process.stderr.write("用法：npm run import:grading-opinions -- [--apply]\n默认只列出可纳入存档的历史退回说明。加上 --apply 才写入。不会连接生产库。\n");
+  const previewByTitle = process.argv.includes("--preview-standing-by-title");
+  const unknown = process.argv.slice(2).filter((argument) => (
+    argument !== "--apply" && argument !== "--preview-standing-by-title"
+  ));
+  if (unknown.length > 0 || (apply && previewByTitle)) {
+    process.stderr.write("用法：npm run import:grading-opinions -- [--apply | --preview-standing-by-title]\n默认只列出可纳入存档的历史退回说明。加上 --apply 才写入。--preview-standing-by-title 只按题目列出可归入长期规则的历史共性意见，不能和 --apply 一起用，也不会写入。不会连接生产库。\n");
     process.exitCode = 2;
   } else {
     const opened = openAppDatabase(process.env.APP_DATABASE_PATH || undefined);
     try {
-      const summary = importHistoricalGradingOpinions(opened.db, { apply });
-      process.stdout.write(`${JSON.stringify(summary)}\n`);
+      if (previewByTitle) {
+        process.stdout.write(`${JSON.stringify({ apply: false, preview: previewStandingOpinionsByTitle(opened.db) })}\n`);
+      } else {
+        const summary = importHistoricalGradingOpinions(opened.db, { apply });
+        process.stdout.write(`${JSON.stringify(summary)}\n`);
+      }
     } finally {
       opened.close();
     }

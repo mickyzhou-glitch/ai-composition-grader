@@ -14,9 +14,34 @@ import { apiFetch, errorMessage } from "../lib/api";
 import { downloadLegacyCachedPdf, downloadReview, downloadReviewArchive, type ExportFormat } from "../lib/review-export";
 import { chunkItems } from "../lib/failed-regrade";
 import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, matchesHistoryStatus, reviewDisplayStatus, type HistoryStatusFilter } from "../lib/review-queue";
-import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, ReviewView } from "../lib/types";
+import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, PublicAnalysisJobView, ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal, isLegacyEvaluationReport } from "@/src/domain/contracts";
 import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
+
+const REGRADE_POLL_INTERVAL_MS = 1_000;
+const REGRADE_POLL_DEADLINE_MS = 12 * 60_000;
+
+async function pollRegradeJob(
+  reviewId: string,
+  jobId: string,
+): Promise<{ status: string; message: string | null }> {
+  const deadline = Date.now() + REGRADE_POLL_DEADLINE_MS;
+  while (Date.now() <= deadline) {
+    const payload = await apiFetch<{ job: PublicAnalysisJobView | null }>(
+      `/api/reviews/${encodeURIComponent(reviewId)}/analyze/status`,
+    );
+    const job = payload.job;
+    if (
+      job?.id === jobId
+      && (job.status === "failed" || job.status === "succeeded" || job.status === "canceled")
+    ) {
+      return { status: job.status, message: job.message };
+    }
+    if (Date.now() + REGRADE_POLL_INTERVAL_MS > deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, REGRADE_POLL_INTERVAL_MS));
+  }
+  return { status: "running", message: "等待这次分析结果超时" };
+}
 
 function reviewDate(value: string) {
   const date = new Date(value);
@@ -48,6 +73,7 @@ export default function Home() {
     total: number;
     submitted: number;
     skipped: BatchReanalysisPreview["skipped"];
+    failures: Array<{ reviewId: string; studentName: string; summary: string }>;
     error: string;
   } | null>(null);
 
@@ -249,11 +275,14 @@ export default function Home() {
   async function regradeFailed() {
     if (failedInView.length === 0 || reanalysisBusy || batchExporting || exporting) return;
     const ids = failedInView.map(({ id }) => id);
+    const names = new Map(failedInView.map((item) => [item.id, item.studentName || "未填写"]));
     const chunks = chunkItems(ids);
     const skipped: BatchReanalysisPreview["skipped"] = [];
+    const failures: Array<{ reviewId: string; studentName: string; summary: string }> = [];
+    const submittedJobs: Array<{ reviewId: string; jobId: string }> = [];
     let submitted = 0;
     let completed = 0;
-    setFailedRegrade({ running: true, completed: 0, total: ids.length, submitted: 0, skipped: [], error: "" });
+    setFailedRegrade({ running: true, completed: 0, total: ids.length, submitted: 0, skipped: [], failures: [], error: "" });
     setError("");
     try {
       for (const chunk of chunks) {
@@ -278,6 +307,7 @@ export default function Home() {
           });
           submitted += result.submitted.length;
           skipped.push(...result.skipped);
+          submittedJobs.push(...result.submitted.map(({ reviewId, jobId }) => ({ reviewId, jobId })));
           const submittedIds = new Set(result.submitted.map(({ reviewId }) => reviewId));
           setSelectedReviewIds((current) => {
             const next = new Set(current);
@@ -292,8 +322,19 @@ export default function Home() {
           total: ids.length,
           submitted,
           skipped: [...skipped],
+          failures: [],
           error: "",
         });
+      }
+      for (const item of submittedJobs) {
+        const outcome = await pollRegradeJob(item.reviewId, item.jobId);
+        if (outcome.status === "failed" || outcome.status === "running") {
+          failures.push({
+            reviewId: item.reviewId,
+            studentName: names.get(item.reviewId) ?? "未填写",
+            summary: outcome.message ?? "分析失败，请重新分析",
+          });
+        }
       }
       await load();
       setFailedRegrade({
@@ -302,6 +343,7 @@ export default function Home() {
         total: ids.length,
         submitted,
         skipped,
+        failures,
         error: "",
       });
     } catch (caught) {
@@ -311,6 +353,7 @@ export default function Home() {
         total: ids.length,
         submitted,
         skipped,
+        failures,
         error: errorMessage(caught),
       });
     }
@@ -384,9 +427,12 @@ export default function Home() {
               {failedRegrade && !failedRegrade.running ? <div className="history-limit-note" role="status">
                 <p>{failedRegrade.error
                   ? `重新批改中断：已提交 ${failedRegrade.submitted} 篇。${failedRegrade.error}`
-                  : `重新批改结束：已提交 ${failedRegrade.submitted} 篇${failedRegrade.skipped.length > 0 ? `，跳过 ${failedRegrade.skipped.length} 篇` : "。"}`}</p>
+                  : `重新批改结束：已提交 ${failedRegrade.submitted} 篇${failedRegrade.skipped.length > 0 ? `，跳过 ${failedRegrade.skipped.length} 篇` : "。"}${failedRegrade.failures.length > 0 ? `这次失败 ${failedRegrade.failures.length} 篇。` : ""}`}</p>
                 {failedRegrade.skipped.length > 0 ? <ul>
                   {failedRegrade.skipped.map((item) => <li key={`${item.reviewId}:${item.code}`}>{item.studentName ? `${item.studentName}：` : ""}{item.reason}</li>)}
+                </ul> : null}
+                {failedRegrade.failures.length > 0 ? <ul>
+                  {failedRegrade.failures.map((item) => <li key={item.reviewId}>{item.studentName}：{item.summary}</li>)}
                 </ul> : null}
               </div> : null}
             </div>
@@ -413,6 +459,10 @@ export default function Home() {
                     <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
                   </div>
                   <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
+                  {review.status === "failed" && review.analysisFailure ? <p>
+                    {review.analysisFailure.summary}
+                    {review.analysisFailure.detail ? <details><summary>查看原始信息</summary><p>{review.analysisFailure.detail}</p></details> : null}
+                  </p> : null}
                   <p>{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
                   <p className="muted">长期保留，可手动永久删除</p>
                 </div>

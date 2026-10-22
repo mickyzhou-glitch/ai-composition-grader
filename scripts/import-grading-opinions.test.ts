@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { openAppDatabase } from "../src/db/client";
 import { gradingOpinions } from "../src/db/schema";
-import { importHistoricalGradingOpinions } from "./import-grading-opinions";
+import { importHistoricalGradingOpinions, previewStandingOpinionsByTitle } from "./import-grading-opinions";
 
 const NOW = new Date("2026-10-22T02:00:00.000Z");
 const LEGACY_HEADER = "以下是这位老师存档的长期批改要求，每次批改都必须遵守。与本次补充意见冲突时，以本次补充意见为准；与原文事实冲突时，以原文为准。";
@@ -192,5 +192,38 @@ describe("历史退回说明导入存档", () => {
     expect(reopened.sqlite.prepare(`
       SELECT reason, change_request AS changeRequest FROM grading_opinions WHERE id = 'opinion-merged'
     `).get()).toEqual({ reason: "结构散", changeRequest: "严格五段" });
+  });
+
+  it("按来源题目列出历史共性意见，并且不写入", () => {
+    const opened = createDatabase();
+    const insert = opened.sqlite.prepare(`
+      INSERT INTO grading_opinions (
+        id, owner_id, body, reason, change_request, category, scope,
+        source_student_name, source_title, created_at, updated_at
+      ) VALUES (?, 'teacher-a', ?, '', ?, ?, ?, ?, ?, ?, ?)
+    `);
+    insert.run("essay-structure", "严格五段", "严格五段", "结构", "essay", "小明", "我终于明白了", NOW.valueOf(), NOW.valueOf());
+    insert.run("essay-common", "这是共性意见", "这是共性意见", "内容", "essay", "小红", "我终于明白了", NOW.valueOf() + 1, NOW.valueOf() + 1);
+    insert.run("essay-content", "写具体心理", "写具体心理", "内容", "essay", "小刚", "我终于明白了", NOW.valueOf() + 2, NOW.valueOf() + 2);
+    insert.run("essay-other-title", "开头点题", "开头点题", "结构", "essay", "小李", "另一篇题目", NOW.valueOf(), NOW.valueOf());
+    insert.run("standing-rule", "已经是长期规则", "已经是长期规则", "结构", "standing", "小明", "我终于明白了", NOW.valueOf(), NOW.valueOf());
+
+    expect(previewStandingOpinionsByTitle(opened.db)).toEqual([
+      {
+        title: "另一篇题目",
+        count: 1,
+        opinions: [{ id: "essay-other-title", text: "开头点题", category: "结构", studentName: "小李" }],
+      },
+      {
+        title: "我终于明白了",
+        count: 2,
+        opinions: [
+          { id: "essay-structure", text: "严格五段", category: "结构", studentName: "小明" },
+          { id: "essay-common", text: "这是共性意见", category: "内容", studentName: "小红" },
+        ],
+      },
+    ]);
+    expect(opened.db.select().from(gradingOpinions).all()).toHaveLength(5);
+    expect(opened.db.select().from(gradingOpinions).where(eq(gradingOpinions.scope, "standing")).all()).toHaveLength(1);
   });
 });

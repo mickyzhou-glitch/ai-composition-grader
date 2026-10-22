@@ -1,8 +1,4 @@
-import {
-  paragraphEvaluationReportSchema,
-  type ParagraphEvaluationReport,
-} from "./contracts";
-import { paragraphReviewUsesGroups } from "./paragraph-review-groups";
+import type { ParagraphEvaluationReport } from "./contracts";
 
 const sentenceTerminal = /[.!?。！？…](?:["'”’」』】）》〉）])*\s*$/u;
 
@@ -26,38 +22,6 @@ export function splitEssayIntoReviewParagraphs(
     : graphemes(essay.join(""));
   if (units.length < reviewCount) return null;
   return groupUnits(units, reviewCount);
-}
-
-/** 结构段已经和完整范文逐段对应时，第 n 段与第 n 个框是同一份文字。 */
-export function structureGroupsShareEssay(
-  report: Pick<ParagraphEvaluationReport, "rewrittenEssay" | "paragraphReviews">,
-): boolean {
-  return paragraphReviewUsesGroups(report.paragraphReviews)
-    && report.rewrittenEssay !== undefined
-    && report.rewrittenEssay.length === report.paragraphReviews.length;
-}
-
-/**
- * 只改正在编辑的那一段，同时写入完整范文和该段改后全段。
- * 没有结构归组、段数对不上，或这一段本来就相同，则原样返回。
- * 其他段保持原样，不改写历史里已经不一致的文字。
- */
-export function writeGroupedParagraphText(
-  report: ParagraphEvaluationReport,
-  index: number,
-  text: string,
-): ParagraphEvaluationReport {
-  if (!structureGroupsShareEssay(report)) return report;
-  const essay = report.rewrittenEssay;
-  const review = report.paragraphReviews[index];
-  if (!essay || !review || (essay[index] === text && review.revisedText === text)) return report;
-  return {
-    ...report,
-    rewrittenEssay: essay.map((current, currentIndex) => currentIndex === index ? text : current),
-    paragraphReviews: report.paragraphReviews.map((item, currentIndex) => (
-      currentIndex === index ? { ...item, revisedText: text } : item
-    )),
-  };
 }
 
 export function essayDiffersFromParagraphReviews(
@@ -87,38 +51,6 @@ export function applyEssayToParagraphReviews(
         ? review
         : { ...review, revisedText: texts[index] ?? review.revisedText }
     )),
-  };
-}
-
-export interface ReviewedEssaySource {
-  id: string;
-  studentName: string;
-  title: string;
-  teacherReviewedAt: Date | number | string | null;
-  deletingAt?: Date | number | string | null;
-  report: unknown;
-}
-
-export interface ReviewedEssayRepair {
-  id: string;
-  studentName: string;
-  title: string;
-  report: ParagraphEvaluationReport;
-}
-
-/** 只修复已经审核过、且改后全段与完整范文按同一切分对不上的作文。 */
-export function planReviewedEssayRepair(source: ReviewedEssaySource): ReviewedEssayRepair | null {
-  if (source.teacherReviewedAt == null || source.deletingAt != null) return null;
-  const parsed = paragraphEvaluationReportSchema.safeParse(source.report);
-  if (!parsed.success || !parsed.data.rewrittenEssay?.length) return null;
-  if (!essayDiffersFromParagraphReviews(parsed.data)) return null;
-  const report = applyEssayToParagraphReviews(parsed.data);
-  if (report === parsed.data) return null;
-  return {
-    id: source.id,
-    studentName: source.studentName,
-    title: source.title,
-    report,
   };
 }
 

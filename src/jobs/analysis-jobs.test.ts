@@ -453,7 +453,8 @@ describe("AnalysisJobService", () => {
       reviewId: "review-a",
       status: "failed",
       progressStage: "reading_images",
-      message: "分析暂未完成，请稍后重试",
+      message: "模型或代理返回 500，停在「读取图片」，请稍后重新分析",
+      detail: "请稍后重试",
       createdAt: now.toISOString(),
       finishedAt: now.toISOString(),
     });

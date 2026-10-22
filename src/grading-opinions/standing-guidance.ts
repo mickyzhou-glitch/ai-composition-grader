@@ -12,7 +12,7 @@ export function isOpinionScope(value: string): value is OpinionScope {
 }
 
 export const STANDING_GUIDANCE_HEADER =
-  "以下是这位老师存档的长期批改要求，已归纳成规则清单，每次批改都必须遵守。与本次补充意见冲突时，以本次补充意见为准；与原文事实冲突时，以原文为准。";
+  "以下是这位老师存档的长期批改要求，已按题目归纳成规则清单，只对题目相同的作文生效，每次批改都必须遵守。与本次补充意见冲突时，以本次补充意见为准；与原文事实冲突时，以原文为准。";
 
 export interface StandingOpinionInput {
   text: string;

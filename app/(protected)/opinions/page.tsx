@@ -67,6 +67,21 @@ function repeatedTexts(opinions: GradingOpinion[]): Array<{ text: string; count:
   return [...counts.values()].filter((item) => item.count > 1);
 }
 
+function titleOf(opinion: GradingOpinion): string {
+  return opinion.sourceTitle.trim() || "未填写题目";
+}
+
+function groupByTitle(opinions: GradingOpinion[]): Array<{ title: string; opinions: GradingOpinion[] }> {
+  const groups = new Map<string, GradingOpinion[]>();
+  for (const opinion of opinions) {
+    const title = titleOf(opinion);
+    const current = groups.get(title) ?? [];
+    current.push(opinion);
+    groups.set(title, current);
+  }
+  return [...groups.entries()].map(([title, items]) => ({ title, opinions: items }));
+}
+
 function OpinionStats({
   label,
   opinions,
@@ -82,6 +97,18 @@ function OpinionStats({
       <span>共 {opinions.length} 条</span>
       {counts.map(({ category, count }) => <span key={category}>{category} {count} 次</span>)}
       {repeats.map((item) => <span key={item.text}>相同内容「{item.text}」{item.count} 次</span>)}
+      {groupByTitle(opinions).map((group) => {
+        const groupCounts = categoryCounts(group.opinions);
+        const groupRepeats = repeatedTexts(group.opinions);
+        return (
+          <div key={group.title}>
+            <h3>题目：{group.title}</h3>
+            <span>共 {group.opinions.length} 条</span>
+            {groupCounts.map(({ category, count }) => <span key={`${group.title}:${category}`}>{category} {count} 次</span>)}
+            {groupRepeats.map((item) => <span key={`${group.title}:${item.text}`}>相同内容「{item.text}」{item.count} 次</span>)}
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -164,7 +191,7 @@ export default function GradingOpinionsPage() {
         <div className="page-title">
           <p className="eyebrow">长期批改要求</p>
           <h1>长期批改规则</h1>
-          <p>这里只管理退回弹窗第一框「结构问题 / 共性问题」。这些规则对之后所有作文的批改和重新批改生效。第二框「内容建议」只留在对应作文下，不在这里修改。</p>
+          <p>这里只管理退回弹窗第一框「结构问题 / 共性问题」。这些规则按作文题目保存，只对题目相同的作文生效。第二框「内容建议」只留在对应作文下，不在这里修改。</p>
         </div>
         {error ? <ErrorBanner message={error} /> : null}
         {loading ? <p className="loading-note" role="status">正在读取批改规则…</p> : null}
@@ -172,7 +199,9 @@ export default function GradingOpinionsPage() {
         {!loading ? <OpinionStats label="仅当前文章统计" opinions={essay} /> : null}
         {!loading && standing.length === 0 ? <p className="muted">还没有长期批改规则。</p> : null}
         <div className="opinion-list">
-          {standing.map((opinion) => {
+          {groupByTitle(standing).map((group) => <section key={group.title} aria-label={`题目：${group.title}`}>
+            <h2>题目：{group.title}</h2>
+            {group.opinions.map((opinion) => {
             const draft = draftOf(opinion);
             const unchanged = draft.text.trim() === opinion.text && draft.category === asCategory(opinion.category);
             const incomplete = draft.text.trim() === "";
@@ -228,7 +257,8 @@ export default function GradingOpinionsPage() {
                 </div>
               </article>
             );
-          })}
+            })}
+          </section>)}
         </div>
       </main>
     </div>

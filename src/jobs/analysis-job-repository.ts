@@ -5,7 +5,7 @@ import { and, asc, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
 import type { AppDatabase } from "../db/client";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema } from "../ocr/contracts";
-import { standingOpinions } from "../grading-opinions/grading-opinion-repository";
+import { opinionSourceTitle, standingOpinions } from "../grading-opinions/grading-opinion-repository";
 import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import {
@@ -219,6 +219,7 @@ export class AnalysisJobRepository {
           deletingAt: reviews.deletingAt,
           imageRevision: reviews.imageRevision,
           ocrCheckpoint: reviews.ocrCheckpoint,
+          config: reviews.config,
         })
         .from(reviews)
         .where(and(eq(reviews.id, reviewId), eq(reviews.ownerId, ownerId)))
@@ -265,7 +266,7 @@ export class AnalysisJobRepository {
       assertId(id, "job id");
       const storedGuidance = guidanceWithStandingOpinions(
         normalizedGuidance,
-        standingOpinions(transaction, ownerId),
+        standingOpinions(transaction, ownerId, opinionSourceTitle(review.config)),
       );
       try {
         transaction.insert(analysisJobs).values({

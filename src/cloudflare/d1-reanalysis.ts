@@ -328,7 +328,7 @@ export class D1Reanalysis {
     const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
     const standingIssue = input.commonIssue ? describeScopedOpinion(input.commonIssue) : null;
     const essaySuggestion = input.contentSuggestion ? describeScopedOpinion(input.contentSuggestion) : null;
-    const standing = await listD1StandingOpinions(this.database, ownerId);
+    const standing = await listD1StandingOpinions(this.database, ownerId, configTitle(row!.config));
     if (standingIssue) {
       standing.unshift({
         text: standingIssue.text,
@@ -430,7 +430,7 @@ export class D1Reanalysis {
     const now = Date.now();
     const teacherGuidance = guidanceWithStandingOpinions(
       null,
-      await listD1StandingOpinions(this.database, ownerId),
+      await listD1StandingOpinions(this.database, ownerId, review.title),
     );
     const statements = this.commitStatements(
       ownerId,

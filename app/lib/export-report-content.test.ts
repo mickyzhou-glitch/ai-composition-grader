@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { applyEssayToParagraphReviews, writeGroupedParagraphText } from "@/src/domain/essay-paragraph-sync";
+import { applyEssayToParagraphReviews } from "@/src/domain/essay-paragraph-sync";
 import type { ParagraphEvaluationReport } from "@/src/domain/contracts";
 
 import {
@@ -194,7 +194,7 @@ describe("导出段落只含修改动作和改后全段", () => {
     expect(exportParagraphRuns(paragraph!).map((run) => run.text).join("")).toContain("我终于走上台。灯光很亮。");
   });
 
-  it("只同步编辑过的结构段，导出使用该段文字，未编辑的旧差异保持原样", () => {
+  it("导出使用已保存的改后全段，未同步的旧差异保持原样", () => {
     const source = review();
     const originals = ["甲句。", "乙句。"];
     source.ocr = {
@@ -229,7 +229,13 @@ describe("导出段落只含修改动作和改后全段", () => {
         },
       ],
     };
-    source.report = writeGroupedParagraphText(stored, 0, "新甲。");
+    source.report = {
+      ...stored,
+      rewrittenEssay: ["新甲。", "范文乙。"],
+      paragraphReviews: stored.paragraphReviews.map((review, index) => (
+        index === 0 ? { ...review, revisedText: "新甲。" } : review
+      )),
+    };
 
     const content = buildExportReportContent(source);
     const paragraphs = content.pages[0]?.paragraphs ?? [];

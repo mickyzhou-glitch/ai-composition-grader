@@ -4,10 +4,7 @@ import type { ParagraphEvaluationReport } from "./contracts";
 import {
   applyEssayToParagraphReviews,
   essayDiffersFromParagraphReviews,
-  planReviewedEssayRepair,
   splitEssayIntoReviewParagraphs,
-  structureGroupsShareEssay,
-  writeGroupedParagraphText,
 } from "./essay-paragraph-sync";
 
 const diagnostics = {
@@ -99,86 +96,5 @@ describe("完整范文切到逐段改后全段", () => {
       paragraphId: "paragraph-3",
       revisedText: "结尾。",
     });
-  });
-});
-
-describe("结构归组后的双向同步", () => {
-  function grouped(essay: string[], revised: string[]) {
-    const source = report(essay, revised);
-    source.paragraphReviews = source.paragraphReviews.map((review, index) => ({
-      ...review,
-      sourceParagraphStart: index + 1,
-      sourceParagraphEnd: index + 1,
-    }));
-    return source;
-  }
-
-  it("改第 n 段时两边写成同一份文字，未改的旧差异保持原样", () => {
-    const source = grouped(["范文甲。", "范文乙。"], ["旧甲。", "旧乙。"]);
-    expect(structureGroupsShareEssay(source)).toBe(true);
-    expect(writeGroupedParagraphText(source, 0, "新甲。")).toMatchObject({
-      rewrittenEssay: ["新甲。", "范文乙。"],
-      paragraphReviews: [
-        { revisedText: "新甲。" },
-        { revisedText: "旧乙。" },
-      ],
-    });
-    expect(writeGroupedParagraphText(source, 1, "新乙。").paragraphReviews.map((item) => item.revisedText))
-      .toEqual(["旧甲。", "新乙。"]);
-    expect(writeGroupedParagraphText(source, 1, "新乙。").rewrittenEssay).toEqual(["范文甲。", "新乙。"]);
-  });
-
-  it("没有结构归组或段数不同时不改写任何一边", () => {
-    const ungrouped = report(["范文甲。", "范文乙。"], ["旧甲。", "旧乙。"]);
-    expect(structureGroupsShareEssay(ungrouped)).toBe(false);
-    expect(writeGroupedParagraphText(ungrouped, 0, "新甲。")).toBe(ungrouped);
-    const uneven = grouped(["只有一段。"], ["旧甲。", "旧乙。"]);
-    expect(structureGroupsShareEssay(uneven)).toBe(false);
-    expect(writeGroupedParagraphText(uneven, 0, "新甲。")).toBe(uneven);
-  });
-});
-
-describe("历史已审核作文修复", () => {
-  const essay = ["开篇改后。", "抑。", "扬。", "真相。", "结尾。"];
-
-  it("只改已审核且改后全段与范文不一致的作文", () => {
-    const mismatched = report(essay, ["开篇。", "抑。", "扬。", "真相。", "结尾。"]);
-    const repair = planReviewedEssayRepair({
-      id: "review-1",
-      studentName: "王若宁",
-      title: "为自己鼓掌",
-      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
-      report: mismatched,
-    });
-    expect(repair?.report.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
-    expect(planReviewedEssayRepair({
-      id: "review-2",
-      studentName: "张小明",
-      title: "为自己鼓掌",
-      teacherReviewedAt: null,
-      report: mismatched,
-    })).toBeNull();
-    expect(planReviewedEssayRepair({
-      id: "review-3",
-      studentName: "张小明",
-      title: "为自己鼓掌",
-      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
-      deletingAt: "2026-08-23T06:00:00.000Z",
-      report: mismatched,
-    })).toBeNull();
-    expect(planReviewedEssayRepair({
-      id: "review-4",
-      studentName: "张小明",
-      title: "为自己鼓掌",
-      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
-      report: report(essay, essay),
-    })).toBeNull();
-    expect(planReviewedEssayRepair({
-      id: "review-5",
-      studentName: "张小明",
-      title: "为自己鼓掌",
-      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
-      report: { sampleParagraphs: [{ title: "示例", text: "旧正文", suggestion: "补充" }] },
-    })).toBeNull();
   });
 });

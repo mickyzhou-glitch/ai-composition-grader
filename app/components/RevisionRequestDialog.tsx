@@ -65,16 +65,16 @@ export function RevisionRequestDialog({
           </div>
           <div className="revision-dialog-body">
             <label className="revision-dialog-field">
-              <span>结构问题 / 共性问题（所有文章适用）</span>
+              <span>结构问题 / 共性问题（仅同名作文）</span>
               <textarea
                 ref={commonIssueRef}
-                aria-label="结构问题 / 共性问题（所有文章适用）"
+                aria-label="结构问题 / 共性问题（仅同名作文）"
                 maxLength={MAX_FIELD_CHARS}
                 value={commonIssue}
                 disabled={submitting}
                 onChange={(event) => setCommonIssue(event.target.value)}
               />
-              <p className="revision-dialog-scope">永久存档为长期批改规则，之后所有作文的批改和重新批改都会遵守，本篇重新分析也会用到。</p>
+              <p className="revision-dialog-scope">永久存档为这个题目的长期批改规则，只对题目相同的作文生效，本篇重新分析也会用到。</p>
               <small>{commonIssue.length} / {MAX_FIELD_CHARS}</small>
             </label>
             <label className="revision-dialog-field">

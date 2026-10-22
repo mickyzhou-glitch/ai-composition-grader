@@ -52,11 +52,13 @@ export interface GradingOpinionUpdate {
   category?: OpinionCategory;
 }
 
-export function standingOpinions(database: OpinionReader, ownerId: string): StandingOpinionInput[] {
+export function standingOpinions(database: OpinionReader, ownerId: string, title: string): StandingOpinionInput[] {
+  const normalized = normalizeAssignmentTitle(title);
   return database.select({
     changeRequest: gradingOpinions.changeRequest,
     paragraphLabel: gradingOpinions.paragraphLabel,
     category: gradingOpinions.category,
+    sourceTitle: gradingOpinions.sourceTitle,
     updatedAt: gradingOpinions.updatedAt,
   }).from(gradingOpinions)
     .where(and(eq(gradingOpinions.ownerId, ownerId), eq(gradingOpinions.scope, "standing")))
@@ -64,7 +66,7 @@ export function standingOpinions(database: OpinionReader, ownerId: string): Stan
     .all()
     .flatMap((row) => {
       const text = row.changeRequest.trim();
-      if (!text) return [];
+      if (!text || normalizeAssignmentTitle(row.sourceTitle) !== normalized) return [];
       return [{
         text,
         paragraphLabel: row.paragraphLabel,

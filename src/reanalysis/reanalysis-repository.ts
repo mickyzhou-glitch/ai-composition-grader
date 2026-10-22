@@ -360,7 +360,7 @@ export class ReanalysisRepository {
       }
       const teacherGuidance = guidanceWithStandingOpinions(
         formattedGuidance,
-        standingOpinions(transaction, ownerId),
+        standingOpinions(transaction, ownerId, source.sourceTitle),
       );
 
       try {
@@ -507,7 +507,7 @@ export class ReanalysisRepository {
       );
       const now = this.now();
       const id = this.createId();
-      const teacherGuidance = guidanceWithStandingOpinions(null, standingOpinions(transaction, ownerId));
+      const teacherGuidance = guidanceWithStandingOpinions(null, standingOpinions(transaction, ownerId, title));
       try {
         transaction.insert(analysisJobs).values({
           id,

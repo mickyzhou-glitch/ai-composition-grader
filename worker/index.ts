@@ -14,6 +14,8 @@ import { D1GradingOpinions } from "../src/cloudflare/d1-grading-opinions";
 import { OPINION_CATEGORIES } from "../src/grading-opinions/standing-guidance";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { analysisFailureCode } from "../src/cloudflare/analysis-failure";
+import { ANALYSIS_JOB_METADATA_PREFIX } from "../src/jobs/analysis-job-metadata";
+import { sanitizeAnalysisDetail } from "../src/jobs/public-analysis-failure";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
 import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
@@ -884,9 +886,10 @@ export default {
       } catch (error) {
         const code = analysisFailureCode(error);
         const now = Date.now();
+        const detail = sanitizeAnalysisDetail(error instanceof Error ? error.message : "");
         await env.DB.batch([
           env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
-          env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").bind(code, now, job.id),
+          env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ?, message = CASE WHEN instr(COALESCE(message, ''), ?) = 1 THEN message ELSE ? END WHERE id = ? AND status = 'running'").bind(code, now, ANALYSIS_JOB_METADATA_PREFIX, detail, job.id),
         ]);
         console.warn(JSON.stringify({ event: "analysis_failed", jobId: job.id, code, elapsedMs: Date.now() - startedAt }));
       }

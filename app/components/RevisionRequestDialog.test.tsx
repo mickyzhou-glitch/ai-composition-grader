@@ -27,12 +27,13 @@ describe("RevisionRequestDialog", () => {
     const user = userEvent.setup();
     const { onSubmit } = renderDialog();
 
-    const commonIssue = screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" });
+    const commonIssue = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
     const contentSuggestion = screen.getByRole("textbox", { name: "内容建议（仅当前文章）" });
     const submit = screen.getByRole("button", { name: "提交后台修改并继续" });
 
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/永久存档为长期批改规则/)).toBeVisible();
+    expect(screen.getByText(/永久存档为这个题目的长期批改规则/)).toBeVisible();
+    expect(screen.getByText(/只对题目相同的作文生效/)).toBeVisible();
     expect(screen.getByText(/只用于本篇重新分析/)).toBeVisible();
     await user.type(commonIssue, "  严格五段  ");
     expect(submit).toBeEnabled();
@@ -53,7 +54,7 @@ describe("RevisionRequestDialog", () => {
     expect(screen.getByText("退回后台修改")).toBeVisible();
     expect(screen.getAllByText("0 / 500")).toHaveLength(2);
     expect(screen.getByText("退回失败，请重试")).toBeVisible();
-    const commonIssue = screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" });
+    const commonIssue = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
     const contentSuggestion = screen.getByRole("textbox", { name: "内容建议（仅当前文章）" });
     await user.click(commonIssue);
     await user.keyboard("失败时保留的规则");
@@ -74,7 +75,7 @@ describe("RevisionRequestDialog", () => {
     );
     expect(screen.getByRole("button", { name: "提交后台修改并继续" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "完全不能用" })).toBeDisabled();
-    expect(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" })).toHaveValue("失败时保留的规则");
+    expect(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" })).toHaveValue("失败时保留的规则");
     expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("失败时保留的建议");
   });
 
@@ -86,7 +87,7 @@ describe("RevisionRequestDialog", () => {
     expect(onReject).toHaveBeenCalledWith({ commonIssue: "", contentSuggestion: "" });
     expect(onSubmit).not.toHaveBeenCalled();
 
-    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（所有文章适用）" }), "  离题  ");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "  离题  ");
     await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "  不必改  ");
     await user.click(screen.getByRole("button", { name: "完全不能用" }));
     expect(onReject).toHaveBeenLastCalledWith({ commonIssue: "离题", contentSuggestion: "不必改" });

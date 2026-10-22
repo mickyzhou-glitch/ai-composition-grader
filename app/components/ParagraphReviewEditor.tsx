@@ -6,8 +6,6 @@ import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/co
 import {
   applyEssayToParagraphReviews,
   essayDiffersFromParagraphReviews,
-  structureGroupsShareEssay,
-  writeGroupedParagraphText,
 } from "@/src/domain/essay-paragraph-sync";
 import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
@@ -54,7 +52,6 @@ export function ParagraphReviewEditor({
     .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
   const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
   const groups = resolveReviewGroups(report.paragraphReviews, paragraphs);
-  const essayLinked = structureGroupsShareEssay(report);
   const essayOutOfSync = essayDiffersFromParagraphReviews(report);
   const totalCharacters = report.rewrittenEssay
     ? report.rewrittenEssay.reduce((total, text) => total + countTextCharactersIncludingPunctuation(text), 0)
@@ -69,19 +66,11 @@ export function ParagraphReviewEditor({
     paragraphId: string,
     update: (review: ParagraphReview) => ParagraphReview,
   ) {
-    const paragraphReviews = report.paragraphReviews.map((review) => (
-      review.paragraphId === paragraphId ? update(review) : review
-    ));
-    const index = paragraphReviews.findIndex((review) => review.paragraphId === paragraphId);
-    const nextReview = paragraphReviews[index];
-    const revisedChanged = nextReview?.revisedText !== report.paragraphReviews[index]?.revisedText;
-    if (revisedChanged && essayLinked && nextReview) {
-      onChange(writeGroupedParagraphText({ ...report, paragraphReviews }, index, nextReview.revisedText));
-      return;
-    }
     onChange({
       ...report,
-      paragraphReviews,
+      paragraphReviews: report.paragraphReviews.map((review) => (
+        review.paragraphId === paragraphId ? update(review) : review
+      )),
     });
   }
 
@@ -107,14 +96,9 @@ export function ParagraphReviewEditor({
             disabled={disabled}
             onChange={(event) => {
             const nextText = event.target.value;
-            if (essayLinked) {
-              onChange(writeGroupedParagraphText(report, index, nextText));
-              return;
-            }
-            const rewrittenEssay = report.rewrittenEssay!.map((current, i) => i === index ? nextText : current);
             onChange({
               ...report,
-              rewrittenEssay,
+              rewrittenEssay: report.rewrittenEssay!.map((current, i) => i === index ? nextText : current),
             });
           }}
           />

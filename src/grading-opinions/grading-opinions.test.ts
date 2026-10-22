@@ -159,6 +159,15 @@ describe("批改意见存档", () => {
     expect(stored.teacherGuidance).toContain("严格五段");
     expect(stored.teacherGuidance).not.toContain("写具体心理");
 
+    insertReview("review-other-title");
+    opened.sqlite.prepare("UPDATE reviews SET config = ? WHERE id = 'review-other-title'").run(JSON.stringify({
+      ...config,
+      title: "另一篇题目",
+    }));
+    jobs.createOrGet(OWNER, "review-other-title");
+    expect(opened.sqlite.prepare("SELECT teacher_guidance AS teacherGuidance FROM analysis_jobs WHERE review_id = 'review-other-title'").get())
+      .toEqual({ teacherGuidance: null });
+
     insertReview("review-other", OTHER);
     jobs.createOrGet(OTHER, "review-other");
     expect(opened.sqlite.prepare("SELECT teacher_guidance AS teacherGuidance FROM analysis_jobs WHERE review_id = 'review-other'").get())
@@ -307,7 +316,8 @@ describe("批改意见存档", () => {
       scope: "standing",
       category: "结构",
     });
-    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a")).resolves.toMatchObject([{ text: "改为五段" }]);
+    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a", "我终于明白了")).resolves.toMatchObject([{ text: "改为五段" }]);
+    await expect(listD1StandingOpinions(d1From(sqlite), "teacher-a", "另一篇题目")).resolves.toEqual([]);
     await expect(archive.delete("teacher-a", "opinion-1")).resolves.toBe(true);
     sqlite.close();
   });

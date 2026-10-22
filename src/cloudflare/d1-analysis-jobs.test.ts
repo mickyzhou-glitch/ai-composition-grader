@@ -5,7 +5,7 @@ import { D1AnalysisJobs } from "./d1-analysis-jobs";
 
 describe("D1AnalysisJobs", () => {
   it.each([
-    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "AI 返回格式异常，请重新分析"],
+    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "批改结果 JSON 解析失败，请重新分析"],
     ["AI_INVALID_RESPONSE_rewritten_essay_chars_3_min_180_actual_170", "AI 生成的范文未满足指定字数，请重新生成整篇批改"],
     ["AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_expected_5", "AI 生成的范文未满足指定段数，请重新生成整篇批改"],
   ])("准确说明生成失败原因：%s", async (errorCode, message) => {
@@ -448,6 +448,15 @@ describe("D1AnalysisJobs", () => {
               revision: 2,
               image_revision: 4,
               ocr_checkpoint: null,
+              config: JSON.stringify({
+                title: "我终于明白了",
+                grade: "六年级",
+                writingRequirements: "写一件事",
+                targetCharacters: 600,
+                structureRequirements: "五段",
+                scoringFocus: "细节",
+                templateType: "custom",
+              }),
               image_count: 1,
             };
             if (query.includes("ORDER BY created_at DESC")) return null;
@@ -466,8 +475,9 @@ describe("D1AnalysisJobs", () => {
             return query.includes("FROM grading_opinions")
               ? {
                 results: [
-                  { text: "严格五段", paragraphLabel: null, category: "结构", updatedAt: 20 },
-                  { text: "严格五段", paragraphLabel: null, category: "结构", updatedAt: 10 },
+                  { text: "严格五段", paragraphLabel: null, category: "结构", sourceTitle: "我终于明白了", updatedAt: 20 },
+                  { text: "严格五段", paragraphLabel: null, category: "结构", sourceTitle: "我终于明白了", updatedAt: 10 },
+                  { text: "别的题目", paragraphLabel: null, category: "结构", sourceTitle: "另一篇题目", updatedAt: 30 },
                 ],
               }
               : { results: [] };

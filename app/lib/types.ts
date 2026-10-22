@@ -45,6 +45,10 @@ export interface ReviewView {
   reportStale: boolean;
   hasPdf: boolean;
   pdfFilename: string | null;
+  analysisFailure?: {
+    summary: string;
+    detail: string | null;
+  } | null;
 }
 
 export type PublicAnalysisJobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
@@ -65,6 +69,7 @@ export interface PublicAnalysisJobView {
   status: PublicAnalysisJobStatus;
   progressStage: PublicAnalysisJobProgressStage;
   message: string | null;
+  detail: string | null;
   createdAt: string;
   finishedAt: string | null;
 }
