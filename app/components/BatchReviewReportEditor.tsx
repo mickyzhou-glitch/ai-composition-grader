@@ -48,6 +48,7 @@ export function BatchReviewReportEditor({
           onChange={onChange}
           showSourceCrops={false}
           showCharacterCounts
+          showSuggestions={false}
           revisionHeading={report.rewrittenEssay ? "原文对应段落修改稿" : "示范文"}
           revisionLabel={report.rewrittenEssay ? "段落修改稿" : "完整示范文"}
         />
