@@ -12,6 +12,7 @@ import {
   isParagraphEvaluationReport,
   paragraphEvaluationReportSchema,
 } from "./contracts";
+import { paragraphReviewCoverageMessage } from "./paragraph-review-groups";
 import { validateSampleWritingRequirements } from "./sample-writing-requirements";
 
 export class ReportValidationError extends Error {
@@ -22,7 +23,8 @@ export class ReportValidationError extends Error {
     readonly code:
       | "VALIDATION_ERROR"
       | "OCR_V2_REQUIRED"
-      | "PARAGRAPH_COVERAGE_MISMATCH" = "VALIDATION_ERROR",
+      | "PARAGRAPH_COVERAGE_MISMATCH"
+      | "REVIEW_REJECTED" = "VALIDATION_ERROR",
   ) {
     super(message);
     this.name = "ReportValidationError";
@@ -43,21 +45,9 @@ function validateParagraphCoverage(
   report: ParagraphEvaluationReport,
   expectedIds: readonly string[],
 ): void {
-  const actualIds = report.paragraphReviews.map(({ paragraphId }) => paragraphId);
-  if (new Set(actualIds).size !== actualIds.length) {
-    throw new ReportValidationError(
-      "paragraphReviews must use unique paragraphId values",
-      "PARAGRAPH_COVERAGE_MISMATCH",
-    );
-  }
-  if (
-    actualIds.length !== expectedIds.length
-    || actualIds.some((paragraphId, index) => paragraphId !== expectedIds[index])
-  ) {
-    throw new ReportValidationError(
-      "paragraphReviews paragraphId values must exactly match OCR paragraphs in order",
-      "PARAGRAPH_COVERAGE_MISMATCH",
-    );
+  const message = paragraphReviewCoverageMessage(report.paragraphReviews, expectedIds);
+  if (message) {
+    throw new ReportValidationError(message, "PARAGRAPH_COVERAGE_MISMATCH");
   }
 }
 

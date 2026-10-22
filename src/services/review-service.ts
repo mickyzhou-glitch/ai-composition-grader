@@ -29,7 +29,6 @@ import type {
   OcrCheckpointV2,
   OcrParagraphTextEdit,
 } from "../ocr/contracts";
-import { uprightRecognitionImage } from "../images/upright-recognition";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import type { ReviewFileStore } from "../storage/review-file-store";
 import type { RetentionService } from "../retention/retention-service";
@@ -518,8 +517,7 @@ export class ReviewService {
               try {
                 const filename = candidate.path.replace(/^images\//, "");
                 const data = await this.fileStore.readFile(ownerId, id, "images", filename);
-                const upright = await uprightRecognitionImage(data, candidate.mimeType);
-                return `data:${upright.mimeType};base64,${Buffer.from(upright.bytes).toString("base64")}`;
+                return `data:${candidate.mimeType};base64,${Buffer.from(data).toString("base64")}`;
               } catch (error) {
                 lastError = error;
               }

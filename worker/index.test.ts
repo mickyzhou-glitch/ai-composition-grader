@@ -126,6 +126,21 @@ describe("Cloudflare Worker", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it("未登录不能查看批改意见存档", async () => {
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/grading-opinions"), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: { code: "UNAUTHENTICATED" } });
+  });
+
+  it("老师可以查看自己的空批改意见存档", async () => {
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/grading-opinions", {
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, data: [] });
+  });
+
   it("课本导入拒绝无效图片并返回 400", async () => {
     const response = await worker.fetch(new Request("https://grader.workers.dev/api/assignment-guidance", {
       method: "POST", headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
@@ -858,7 +873,7 @@ describe("Cloudflare Worker", () => {
           sql.includes("FROM sessions INNER JOIN users") ? {
             id: "teacher-1", username: "teacher", role: "teacher", must_change_password: 0,
             expires_at: Date.now() + 60_000,
-          } : sql.includes("SELECT config, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews") ? {
+          } : sql.includes("SELECT config, status, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews") ? {
             config: JSON.stringify(reviewConfig), revision: 3,
           } : sql.includes("FROM reviews WHERE id") ? {
             id: "review-1", status: "ready_for_review", student_name: "张小明",
@@ -1112,6 +1127,40 @@ describe("Cloudflare Worker", () => {
     requestRevision.mockRestore();
   });
 
+  it("完全不能用返回审核不通过且不投递分析队列", async () => {
+    const database = authenticatedDatabase();
+    const jobs = queue();
+    const rejectReview = vi.spyOn(D1Reanalysis.prototype, "rejectReview").mockResolvedValue({
+      id: "review-1",
+      status: "rejected",
+      revision: 4,
+      rejectionReason: null,
+      rejectionChangeRequest: null,
+    });
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/reject", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ expectedRevision: 3 }),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      data: { status: "rejected", revision: 4 },
+    });
+    expect(jobs.send).not.toHaveBeenCalled();
+    expect(jobs.sendBatch).not.toHaveBeenCalled();
+    expect(rejectReview).toHaveBeenCalledWith("teacher-1", "review-1", {
+      expectedRevision: 3,
+      reason: "",
+      changeRequest: "",
+    });
+    rejectReview.mockRestore();
+  });
+
   it("revision request 成功后发送单条 Queue 并返回 202 no-store", async () => {
     const database = authenticatedDatabase();
     const jobs = queue();
@@ -1128,7 +1177,7 @@ describe("Cloudflare Worker", () => {
         cookie: "__Host-zuowen_session=session-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ expectedRevision: 3, reason: "原因", changeRequest: "要求" }),
+      body: JSON.stringify({ expectedRevision: 3, commonIssue: "原因", contentSuggestion: "要求" }),
     }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
 
     expect(response.status).toBe(202);
@@ -1202,7 +1251,7 @@ describe("Cloudflare Worker", () => {
         cookie: "__Host-zuowen_session=session-token",
         "content-type": "application/json",
       },
-      body: JSON.stringify({ expectedRevision: 3, reason: "原因", changeRequest: "要求" }),
+      body: JSON.stringify({ expectedRevision: 3, commonIssue: "原因", contentSuggestion: "要求" }),
     }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
     const body = await response.text();
 

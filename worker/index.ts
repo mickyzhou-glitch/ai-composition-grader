@@ -10,7 +10,12 @@ import {
   D1ReanalysisBatchError,
   D1ReanalysisError,
 } from "../src/cloudflare/d1-reanalysis";
+import { D1GradingOpinions } from "../src/cloudflare/d1-grading-opinions";
+import { OPINION_CATEGORIES } from "../src/grading-opinions/standing-guidance";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
+import { analysisFailureCode } from "../src/cloudflare/analysis-failure";
+import { ANALYSIS_JOB_METADATA_PREFIX } from "../src/jobs/analysis-job-metadata";
+import { sanitizeAnalysisDetail } from "../src/jobs/public-analysis-failure";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
 import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
@@ -39,7 +44,9 @@ import type { ReviewView } from "../app/lib/types";
 import {
   batchReanalysisCommitInputSchema,
   batchReanalysisPreviewInputSchema,
+  MAX_REVISION_FIELD_CHARS,
   REANALYSIS_SKIP_REASONS,
+  rejectReviewInputSchema,
   revisionRequestInputSchema,
   type ReanalysisSkipCode,
 } from "../src/reanalysis/contracts";
@@ -51,6 +58,11 @@ const editOcrParagraphsSchema = z.object({
     paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
     text: z.string().trim().min(1),
   }).strict()).min(1),
+}).strict();
+
+const gradingOpinionUpdateSchema = z.object({
+  text: z.string().trim().min(1).max(MAX_REVISION_FIELD_CHARS),
+  category: z.enum(OPINION_CATEGORIES).optional(),
 }).strict();
 
 const paragraphRewriteSchema = z.object({
@@ -306,6 +318,38 @@ export default {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).classes(user.id) }, { headers: { "cache-control": "no-store" } });
     }
+    if (url.pathname === "/api/grading-opinions" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const data = await new D1GradingOpinions(env.DB).list(user.id);
+      return Response.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
+    }
+    const gradingOpinionMatch = /^\/api\/grading-opinions\/([^/]+)$/u.exec(url.pathname);
+    if (gradingOpinionMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const opinionId = decodeURIComponent(gradingOpinionMatch[1]);
+      if (!reanalysisRouteIdPattern.test(opinionId)) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+      }
+      const opinions = new D1GradingOpinions(env.DB);
+      if (request.method === "DELETE") {
+        const deleted = await opinions.delete(user.id, opinionId);
+        return deleted
+          ? Response.json({ ok: true, data: { deleted: true } }, { headers: { "cache-control": "no-store" } })
+          : apiError("NOT_FOUND", "批改意见不存在", 404);
+      }
+      try {
+        const input = gradingOpinionUpdateSchema.parse(await request.json());
+        const updated = await opinions.update(user.id, opinionId, input);
+        return updated
+          ? Response.json({ ok: true, data: updated }, { headers: { "cache-control": "no-store" } })
+          : apiError("NOT_FOUND", "批改意见不存在", 404);
+      } catch (error) {
+        if (error instanceof ZodError || error instanceof SyntaxError || error instanceof TypeError) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        throw error;
+      }
+    }
     if (url.pathname === "/api/reviews" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).list(user.id) }, { headers: { "cache-control": "no-store" } });
@@ -380,12 +424,32 @@ export default {
           : apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
       } catch (error) {
         const revisionConflict = error instanceof Error && error.name === "RevisionConflictError";
+        const rejected = error instanceof Error && error.name === "ReviewRejectedError";
         return apiError(
-          revisionConflict ? "REVISION_CONFLICT" : "VALIDATION_ERROR",
-          revisionConflict ? "批改记录已更新，请刷新后重试" : "请求参数无效",
-          revisionConflict ? 409 : 400,
-          revisionConflict ? undefined : validationErrorDetails(error),
+          rejected ? "REVIEW_REJECTED" : revisionConflict ? "REVISION_CONFLICT" : "VALIDATION_ERROR",
+          rejected ? error.message : revisionConflict ? "批改记录已更新，请刷新后重试" : "请求参数无效",
+          rejected || revisionConflict ? 409 : 400,
+          rejected || revisionConflict ? undefined : validationErrorDetails(error),
         );
+      }
+    }
+    const rejectReviewMatch = /^\/api\/reviews\/([^/]+)\/reject$/u.exec(url.pathname);
+    if (rejectReviewMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let reviewId: string;
+      let input: ReturnType<typeof rejectReviewInputSchema.parse>;
+      try {
+        reviewId = decodeURIComponent(rejectReviewMatch[1]);
+        if (!reanalysisRouteIdPattern.test(reviewId)) throw new Error("INVALID_REANALYSIS_ID");
+        input = rejectReviewInputSchema.parse(await request.json());
+      } catch (error) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
+      }
+      try {
+        const rejected = await new D1Reanalysis(env.DB).rejectReview(user.id, reviewId, input);
+        return Response.json({ ok: true, data: rejected }, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        return reanalysisFailure(error);
       }
     }
     const revisionRequestMatch = /^\/api\/reviews\/([^/]+)\/revision-request$/u.exec(url.pathname);
@@ -697,7 +761,13 @@ export default {
   },
   async scheduled(_controller: ScheduledController, env: WorkerEnv): Promise<void> {
     const recovered = await new D1AnalysisJobs(env.DB).recoverExpired();
-    if (recovered > 0) console.info(JSON.stringify({ event: "analysis_timeout_recovery", recovered }));
+    if (recovered > 0) {
+      console.info(JSON.stringify({
+        event: "analysis_timeout_recovery",
+        recovered,
+        reason: "运行超过 10 分钟仍未结束，已标记为超时",
+      }));
+    }
   },
   async queue(batch: MessageBatch<{ jobId: string }>, env: WorkerEnv): Promise<void> {
     for (const message of batch.messages) {
@@ -755,25 +825,51 @@ export default {
           teacherGuidance: job.teacher_guidance ?? undefined,
           studentName: job.student_name || undefined,
         };
+        const logStep = async <T>(step: string, action: () => Promise<T>): Promise<T> => {
+          const stepStarted = Date.now();
+          try {
+            const value = await action();
+            console.info(JSON.stringify({
+              event: "analysis_step",
+              jobId: job.id,
+              step,
+              durationMs: Date.now() - stepStarted,
+              elapsedMs: Date.now() - startedAt,
+              ok: true,
+            }));
+            return value;
+          } catch (error) {
+            console.warn(JSON.stringify({
+              event: "analysis_step",
+              jobId: job.id,
+              step,
+              durationMs: Date.now() - stepStarted,
+              elapsedMs: Date.now() - startedAt,
+              ok: false,
+              reason: error instanceof Error ? error.message.slice(0, 180) : "unknown",
+            }));
+            throw error;
+          }
+        };
         const pipeline = new CloudAnalysisPipeline({
           readCheckpoint: (ownerId, reviewId) => ocr.readInternal(ownerId, reviewId),
-          loadImageUrls: async () => {
+          loadImageUrls: (currentJob) => logStep("load_images", async () => {
             const { results = [] } = await env.DB.prepare(
               "SELECT id FROM review_images WHERE review_id = ? ORDER BY position",
-            ).bind(job.review_id).all<{ id: number }>();
+            ).bind(currentJob.reviewId).all<{ id: number }>();
             const reader = new D1ReviewReader(env.DB);
             const images = await Promise.all(results.map(async ({ id }) => {
-              const file = await reader.imageObjectKeyForAi(job.review_id, id, "original")
-                ?? await reader.imageObjectKeyForAi(job.review_id, id, "ai");
+              const file = await reader.imageObjectKeyForAi(currentJob.reviewId, id, "original")
+                ?? await reader.imageObjectKeyForAi(currentJob.reviewId, id, "ai");
               if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
               return { key: file.key, mimeType: file.contentType };
             }));
             return loadInlineAiImageUrls(env.FILES, images);
-          },
-          recognize: (imageUrls) => vision.recognize({ imageUrls }),
+          }),
+          recognize: (imageUrls) => logStep("recognize", () => vision.recognize({ imageUrls })),
           saveRecognized: (ownerId, reviewId, sourceRevision, result) =>
-            ocr.saveRecognized(ownerId, reviewId, sourceRevision, result, job.id),
-          analyzeText: (input) => content.analyzeText(input),
+            logStep("save_ocr", () => ocr.saveRecognized(ownerId, reviewId, sourceRevision, result, job.id)),
+          analyzeText: (input) => logStep("generate_review", () => content.analyzeText(input)),
           updateStage: async (jobId, stage) => {
             const result = await env.DB.prepare(
               "UPDATE analysis_jobs SET progress_stage = ? WHERE id = ? AND status = 'running'",
@@ -781,26 +877,19 @@ export default {
             if (result.meta.changes !== 1) throw new CloudAnalysisConflictError("ANALYSIS_CONFLICT");
             console.info(JSON.stringify({ event: "analysis_stage", jobId, stage, elapsedMs: Date.now() - startedAt }));
           },
-          saveResult: async (currentJob, result) => {
-            await savePipelineResult(env.DB, currentJob, result);
-          },
-          saveUnreadable: async (currentJob, checkpoint) => {
-            await saveUnreadableResult(env.DB, currentJob, checkpoint.ocrRevision);
-          },
+          saveResult: (currentJob, result) => logStep("save_result", () => savePipelineResult(env.DB, currentJob, result)),
+          saveUnreadable: (currentJob, checkpoint) =>
+            logStep("save_unreadable", () => saveUnreadableResult(env.DB, currentJob, checkpoint.ocrRevision)),
         });
         await pipeline.run(pipelineJob);
         console.info(JSON.stringify({ event: "analysis_completed", jobId: job.id, elapsedMs: Date.now() - startedAt }));
       } catch (error) {
-        const code = error instanceof AiAdapterError && error.upstreamStatus
-          ? `AI_UPSTREAM_HTTP_${error.upstreamStatus}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
-          : error instanceof AiAdapterError
-            ? `${error.code}${error.upstreamCode ? `_${error.upstreamCode}` : ""}`
-          : error instanceof CloudAnalysisConflictError ? error.code
-          : error instanceof Error && ["AI_SETTINGS_INCOMPLETE", "OCR_NOT_FOUND", "OCR_V2_REQUIRED"].includes(error.message) ? error.message : "AI_REQUEST_FAILED";
+        const code = analysisFailureCode(error);
         const now = Date.now();
+        const detail = sanitizeAnalysisDetail(error instanceof Error ? error.message : "");
         await env.DB.batch([
           env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
-          env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ? WHERE id = ? AND status = 'running'").bind(code, now, job.id),
+          env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ?, message = CASE WHEN instr(COALESCE(message, ''), ?) = 1 THEN message ELSE ? END WHERE id = ? AND status = 'running'").bind(code, now, ANALYSIS_JOB_METADATA_PREFIX, detail, job.id),
         ]);
         console.warn(JSON.stringify({ event: "analysis_failed", jobId: job.id, code, elapsedMs: Date.now() - startedAt }));
       }

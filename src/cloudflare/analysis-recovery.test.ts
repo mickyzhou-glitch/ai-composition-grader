@@ -87,7 +87,7 @@ describe("abandoned cloud analysis recovery", () => {
     expect(await jobs.latest("owner-2", "stale")).toBeNull();
     expect(f.job("stale").status).toBe("running");
     await expect(jobs.latest("owner-1", "stale")).resolves.toMatchObject({
-      status: "failed", message: "分析超时或已中断，请重新分析", finishedAt: new Date(NOW).toISOString(),
+      status: "failed", message: "分析在「生成批改」步骤超时或被中止，请重新分析", finishedAt: new Date(NOW).toISOString(),
     });
     expect(f.job("other").status).toBe("running");
   });

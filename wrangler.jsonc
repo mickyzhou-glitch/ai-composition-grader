@@ -14,6 +14,12 @@
   },
   "triggers": { "crons": ["* * * * *"] },
   "observability": { "enabled": true },
+  "limits": {
+    // Paid default is 30s. Image uprighting no longer runs in the Worker;
+    // this backstop lets a slow step finish and record a failure instead of
+    // being killed with no reason. Wall-clock analysis timeout stays 10 min.
+    "cpu_ms": 120000
+  },
   "d1_databases": [{
     "binding": "DB",
     "database_name": "ai-composition-grader",

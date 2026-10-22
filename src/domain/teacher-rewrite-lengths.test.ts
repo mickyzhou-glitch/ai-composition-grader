@@ -24,6 +24,13 @@ describe("教师明确的段落字数要求", () => {
       .toThrow("rewritten_essay_chars_3_min_180_actual_179");
   });
 
+  it("新的两个框里的字数硬性要求都会校验", () => {
+    const guidance = "[结构问题 / 共性问题]\n第三段不少于180字\n[内容建议]\n保留原意";
+    expect(() => validateTeacherRewriteLengths(essay, guidance)).not.toThrow();
+    expect(() => validateTeacherRewriteLengths(["甲", "乙", "丙".repeat(10), "丁", "戊"], guidance))
+      .toThrow("rewritten_essay_chars_3_min_180_actual_10");
+  });
+
   it("只处理明确硬性要求，忽略约数、事实数字和不合适原因", () => {
     expect(() => validateTeacherRewriteLengths(essay, "第一段约100字，凌晨四点，十几年" )).not.toThrow();
     expect(() => validateTeacherRewriteLengths(essay, "[不合适原因]\n第三段至少200字仍不够生动\n[修改要求]\n保留第三段，调整结尾" )).not.toThrow();

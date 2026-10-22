@@ -212,6 +212,140 @@ describe("BatchReviewPage", () => {
     });
   });
 
+  it("同段多条建议时批量审核仍是一段一个框", async () => {
+    const multiAdvice = {
+      ...paragraphReport,
+      paragraphReviews: [{
+        ...paragraphReport.paragraphReviews[0],
+        suggestions: [
+          { advice: "补听觉" },
+          { advice: "补动作" },
+          { advice: "收束主题" },
+        ],
+      }],
+    };
+    mockReviewApi([queueItem("review-1", "张小明", 1)], { currentReport: multiAdvice });
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "第 1 段" })).toBeVisible();
+    expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(1);
+    expect(screen.queryByRole("heading", { name: "第 2 段" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /新增第 \d+ 段建议/u })).not.toBeInTheDocument();
+  });
+
+  it("老师指定结构段时按组展示改后全段，并标出对应原文范围", async () => {
+    const essay = ["我走上台。天很蓝。", "我终于明白了。"];
+    const groupedReport = {
+      ...paragraphReport,
+      rewrittenEssay: essay,
+      paragraphReviews: [
+        {
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "合并前两段。" }],
+          revisedText: essay[0],
+        },
+        {
+          paragraphId: "paragraph-3",
+          sourceParagraphStart: 3,
+          sourceParagraphEnd: 3,
+          suggestions: [{ advice: "收束主题。" }],
+          revisedText: essay[1],
+        },
+      ],
+    };
+    const groupedDetail = {
+      ...detail("review-1", "张小明", 1, groupedReport),
+      ocr: {
+        version: 2 as const,
+        ocrRevision: 1,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: "张小明的作文原文", readable: true, warnings: [] }],
+        paragraphs: [
+          {
+            id: "paragraph-1",
+            paragraphIndex: 0,
+            text: "我走上台。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+          },
+          {
+            id: "paragraph-2",
+            paragraphIndex: 1,
+            text: "天很蓝。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.4, width: 0.5, height: 0.1 }],
+          },
+          {
+            id: "paragraph-3",
+            paragraphIndex: 2,
+            text: "我终于明白了。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.6, width: 0.5, height: 0.1 }],
+          },
+        ],
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") {
+        return Response.json({ ok: true, data: [queueItem("review-1", "张小明", 1)] });
+      }
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [groupedDetail] });
+      if (url === "/api/reviews/review-1/teacher-review" && init?.method === "POST") {
+        return Response.json({
+          ok: true,
+          data: { ...groupedDetail, revision: 2, teacherReviewedAt: "2026-08-22T06:00:00.000Z" },
+        });
+      }
+      if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: groupedDetail });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByText("对应原文第 1–2 段")).toBeVisible();
+    expect(screen.getByText("对应原文第 3 段")).toBeVisible();
+    expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(2);
+    expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /修改动作/u })).not.toBeInTheDocument();
+    const essayParagraph = screen.getByLabelText("完整范文第 2 段");
+    await user.clear(essayParagraph);
+    await user.type(essayParagraph, "结尾改过。");
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("我终于明白了。");
+    expect(screen.getByText("与逐段不一致")).toBeVisible();
+    const revised = screen.getByLabelText("第 1 段改后全段");
+    await user.clear(revised);
+    await user.type(revised, "我听见呼吸声，走上了台。天很蓝。");
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue("我走上台。天很蓝。");
+    await user.click(screen.getByRole("button", { name: "同步到逐段" }));
+    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("我走上台。天很蓝。");
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改过。");
+    expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
+
+    const teacherCall = fetchMock.mock.calls.find(([input]) => (
+      String(input) === "/api/reviews/review-1/teacher-review"
+    ));
+    expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
+    expect(JSON.parse(String(teacherCall?.[1]?.body)).report).toMatchObject({
+      rewrittenEssay: ["我走上台。天很蓝。", "结尾改过。"],
+      paragraphReviews: [
+        {
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          revisedText: "我走上台。天很蓝。",
+        },
+        {
+          paragraphId: "paragraph-3",
+          sourceParagraphStart: 3,
+          sourceParagraphEnd: 3,
+          revisedText: "结尾改过。",
+        },
+      ],
+    });
+  });
+
   it("returns an unsuitable review with the revision guard and immediately opens a prefetched successor", async () => {
     const queue = [
       queueItem("review-1", "张小明", 7),
@@ -242,15 +376,57 @@ describe("BatchReviewPage", () => {
     expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-2", expect.anything()));
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "批改没有回应题目要求");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "请围绕题目重写批改");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "批改没有回应题目要求");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "请围绕题目重写批改");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
-    expect(revisionBody).toEqual({ expectedRevision: 7, reason: "批改没有回应题目要求", changeRequest: "请围绕题目重写批改" });
+    expect(revisionBody).toEqual({
+      expectedRevision: 7,
+      commonIssue: "批改没有回应题目要求",
+      contentSuggestion: "请围绕题目重写批改",
+    });
     expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
     expect(screen.queryByText("正在展开作文与批改报告")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "已复核待导出清单 (0)" })).toBeVisible();
+  });
+
+  it("完全不能用直接标为审核不通过并进入下一篇，不触发重新分析", async () => {
+    const queue = [
+      queueItem("review-1", "张小明", 7),
+      queueItem("review-2", "李安然", 3),
+    ];
+    const details = new Map(queue.map((item) => [item.id, detail(item.id, item.studentName, item.revision)]));
+    let rejectBody: unknown;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
+      if (url === "/api/reviews/review-1/reject" && init?.method === "POST") {
+        rejectBody = JSON.parse(String(init.body));
+        queue.splice(0, 1);
+        return Response.json({ ok: true, data: {
+          id: "review-1", status: "rejected", revision: 8, rejectionReason: "离题", rejectionChangeRequest: null,
+        } });
+      }
+      const detailMatch = /^\/api\/reviews\/(review-\d)$/u.exec(url);
+      if (detailMatch) return Response.json({ ok: true, data: details.get(detailMatch[1]) });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "离题");
+    await user.click(screen.getByRole("button", { name: "完全不能用" }));
+
+    expect(rejectBody).toEqual({ expectedRevision: 7, reason: "离题", changeRequest: "" });
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("revision-request"))).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/analyze"))).toBe(false);
+    expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /张小明/u })).not.toBeInTheDocument();
   });
 
   it("keeps the current essay, dialog, and fields when revision request fails", async () => {
@@ -269,14 +445,14 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因保留");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求保留");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "原因保留");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求保留");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
     expect(await screen.findByText("退回失败，请重试")).toBeVisible();
     expect(screen.getByRole("heading", { name: "张小明" })).toBeVisible();
-    expect(screen.getByRole("textbox", { name: "为什么不合适" })).toHaveValue("原因保留");
-    expect(screen.getByRole("textbox", { name: "应该怎么改" })).toHaveValue("要求保留");
+    expect(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" })).toHaveValue("原因保留");
+    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("要求保留");
   });
 
   it("confirms before opening the unsuitable dialog when the current review is dirty", async () => {
@@ -310,8 +486,8 @@ describe("BatchReviewPage", () => {
 
     await screen.findByRole("heading", { name: "张小明" });
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
 
     expect(await screen.findByRole("heading", { name: "待审核队列已完成" })).toBeVisible();
@@ -346,8 +522,8 @@ describe("BatchReviewPage", () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-2", expect.anything()));
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
     expect(await screen.findByRole("heading", { name: "李安然" })).toBeVisible();
 
@@ -374,8 +550,8 @@ describe("BatchReviewPage", () => {
     await screen.findByRole("heading", { name: "张小明" });
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: "不合适" }));
-    await user.type(screen.getByRole("textbox", { name: "为什么不合适" }), "原因");
-    await user.type(screen.getByRole("textbox", { name: "应该怎么改" }), "要求");
+    await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "原因");
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "要求");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
     await screen.findByRole("heading", { name: "待审核队列已完成" });
 

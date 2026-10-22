@@ -207,8 +207,8 @@ describe("Word 与 PDF 导出文本", () => {
     expect(docxText).toBe(pdfText);
     expect(docxText).toBe(visibleExportText(buildExportReportContent(source), measure));
     expect(pdfMock.setProperties).toHaveBeenCalledWith({ title: "小明珍贵的礼物" });
-    expect(docxText).toContain("修改动作：补充听觉");
-    expect(docxText).toContain("补一个停顿");
+    expect(docxText).toContain("修改动作：1. 补充听觉");
+    expect(docxText).toContain("2. 补一个停顿");
     expect(docxText).not.toContain("动作略快");
     expect(docxText).not.toContain("我听见急促的呼吸声。");
     expect(docxText).not.toContain("开头概括");

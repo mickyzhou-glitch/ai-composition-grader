@@ -8,6 +8,7 @@ const statusLabels: Record<ReviewStatus, string> = {
   ready_for_review: "待复核",
   exported: "已导出",
   failed: "分析失败",
+  rejected: "审核不通过",
 };
 
 const displayStatusLabels: Record<ReviewDisplayStatus, string> = {

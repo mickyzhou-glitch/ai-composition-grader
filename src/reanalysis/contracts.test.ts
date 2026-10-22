@@ -14,38 +14,48 @@ import {
 
 describe("reanalysis contracts", () => {
   it("formats two maximum-length revision fields within the internal guidance limit", () => {
-    const reason = "原".repeat(MAX_REVISION_FIELD_CHARS);
-    const changeRequest = "改".repeat(MAX_REVISION_FIELD_CHARS);
+    const commonIssue = "原".repeat(MAX_REVISION_FIELD_CHARS);
+    const contentSuggestion = "改".repeat(MAX_REVISION_FIELD_CHARS);
 
-    const guidance = formatRevisionTeacherGuidance(reason, changeRequest);
+    const guidance = formatRevisionTeacherGuidance(commonIssue, contentSuggestion);
 
-    expect(guidance).toBe(`[不合适原因]\n${reason}\n[修改要求]\n${changeRequest}`);
-    expect(guidance).toContain("[不合适原因]\n");
-    expect(guidance).toContain("\n[修改要求]\n");
+    expect(guidance).toBe(`[结构问题 / 共性问题]\n${commonIssue}\n[内容建议]\n${contentSuggestion}`);
     expect(guidance.length).toBeLessThanOrEqual(MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS);
     expect(MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS).toBe(1_100);
   });
 
-  it.each(["reason", "changeRequest"] as const)("rejects blank and oversized %s", (field) => {
-    const base = { expectedRevision: 0, reason: "原因", changeRequest: "要求" };
-
-    expect(revisionRequestInputSchema.safeParse({ ...base, [field]: "   " }).success).toBe(false);
+  it("accepts either revision field and rejects when both are blank or one is oversized", () => {
+    expect(revisionRequestInputSchema.parse({
+      expectedRevision: 1,
+      commonIssue: "严格五段",
+      contentSuggestion: "",
+    })).toMatchObject({ commonIssue: "严格五段", contentSuggestion: "" });
+    expect(revisionRequestInputSchema.parse({
+      expectedRevision: 1,
+      contentSuggestion: "写具体",
+    })).toMatchObject({ commonIssue: "", contentSuggestion: "写具体" });
     expect(revisionRequestInputSchema.safeParse({
-      ...base,
-      [field]: "字".repeat(MAX_REVISION_FIELD_CHARS + 1),
+      expectedRevision: 0,
+      commonIssue: "   ",
+      contentSuggestion: "",
+    }).success).toBe(false);
+    expect(revisionRequestInputSchema.safeParse({
+      expectedRevision: 0,
+      commonIssue: "字".repeat(MAX_REVISION_FIELD_CHARS + 1),
+      contentSuggestion: "可以",
     }).success).toBe(false);
   });
 
   it("trims revision fields and rejects unknown fields", () => {
     expect(revisionRequestInputSchema.parse({
       expectedRevision: 3,
-      reason: "  原因  ",
-      changeRequest: "  要求  ",
-    })).toEqual({ expectedRevision: 3, reason: "原因", changeRequest: "要求" });
+      commonIssue: "  严格五段  ",
+      contentSuggestion: "  写具体  ",
+    })).toEqual({ expectedRevision: 3, commonIssue: "严格五段", contentSuggestion: "写具体" });
     expect(revisionRequestInputSchema.safeParse({
       expectedRevision: 3,
-      reason: "原因",
-      changeRequest: "要求",
+      commonIssue: "严格五段",
+      contentSuggestion: "写具体",
       extra: true,
     }).success).toBe(false);
   });

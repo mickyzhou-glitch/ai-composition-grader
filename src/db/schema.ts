@@ -59,6 +59,8 @@ export const reviews = sqliteTable(
     status: text("status").$type<ReviewStatus>().notNull(),
     studentName: text("student_name").notNull().default(""),
     className: text("class_name").notNull().default(""),
+    rejectionReason: text("rejection_reason"),
+    rejectionChangeRequest: text("rejection_change_request"),
     config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
     report: text("report", { mode: "json" }).$type<EvaluationReport>(),
     revision: integer("revision").notNull().default(0),
@@ -99,6 +101,32 @@ export const savedAssignments = sqliteTable(
   (table) => [
     uniqueIndex("saved_assignments_owner_title_unique_idx").on(table.ownerId, table.title),
     index("saved_assignments_owner_updated_at_idx").on(table.ownerId, table.updatedAt),
+  ],
+);
+
+export const gradingOpinions = sqliteTable(
+  "grading_opinions",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    reason: text("reason").notNull().default(""),
+    changeRequest: text("change_request").notNull().default(""),
+    paragraphLabel: text("paragraph_label"),
+    category: text("category").notNull().default("其他"),
+    scope: text("scope").$type<"standing" | "essay">().notNull().default("essay"),
+    sourceReviewId: text("source_review_id"),
+    sourceJobId: text("source_job_id"),
+    sourceStudentName: text("source_student_name").notNull().default(""),
+    sourceClassName: text("source_class_name").notNull().default(""),
+    sourceTitle: text("source_title").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    check("grading_opinions_body_check", sql`length(${table.body}) > 0`),
+    index("grading_opinions_owner_created_idx").on(table.ownerId, table.createdAt, table.id),
+    index("grading_opinions_source_job_idx").on(table.sourceJobId),
   ],
 );
 

@@ -295,7 +295,7 @@ describe("CompositionReviewAdapter", () => {
     });
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("不要写问题描述，也不要写修改示例");
-    expect(prompt).toContain("一两句话");
+    expect(prompt).toContain("恰好 1 项");
     expect(prompt).toContain("改后全段");
     expect(prompt).toContain("逐句比对");
     expect(prompt).toContain("下划线");
@@ -327,13 +327,62 @@ describe("CompositionReviewAdapter", () => {
   it.each([
     ["未知段落 ID", invalidResult((value) => { value.annotationAnchors[0].paragraphId = "paragraph-99"; })],
     ["原文不存在的锚点", invalidResult((value) => { value.annotationAnchors[0].anchorText = "原文没有这句话"; })],
-    ["模型坐标", (() => {
-      const value: unknown = structuredClone(validResult);
-      (value as { annotationAnchors: Array<Record<string, unknown>> }).annotationAnchors[0].x = 0.5;
-      return value;
-    })()],
-  ])("拒绝%s批注", async (_reason, value) => {
-    await expectInvalidTwice(value);
+  ])("%s时先带错误重试，仍失败则丢弃该条批注并保留整篇", async (_reason, value) => {
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(value))
+      .mockResolvedValueOnce(completion(value));
+
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ report: { version: 2, grade: "A" }, annotationAnchors: [] });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    const repairData = JSON.parse(requestAt(harness.create, 1).messages[1].content) as { validationError: string };
+    expect(repairData.validationError).toMatch(/^annotation_/u);
+    expect(repairData.validationError).toMatch(/annotation (paragraph|anchor)/u);
+  });
+
+  it("批注顺序不对时重试一次，仍乱序则按段落位置重排", async () => {
+    const reversed = {
+      ...validResult,
+      annotationAnchors: [
+        {
+          paragraphId: "paragraph-2",
+          category: "highlight" as const,
+          anchorText: "坚持的意义",
+          comment: "点题",
+          isHighlight: true,
+        },
+        {
+          paragraphId: "paragraph-1",
+          category: "structure" as const,
+          anchorText: "独自走进赛场",
+          comment: "补动作",
+          isHighlight: false,
+        },
+      ],
+    };
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(reversed))
+      .mockResolvedValueOnce(completion(reversed));
+
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(result.annotationAnchors.map((anchor) => anchor.paragraphId)).toEqual(["paragraph-1", "paragraph-2"]);
+    expect(result.report.grade).toBe("A");
+  });
+
+  it("重试后批注已对上原文时采用修复结果", async () => {
+    const harness = setup();
+    const bad = invalidResult((value) => { value.annotationAnchors[0].anchorText = "原文没有这句话"; });
+    harness.create
+      .mockResolvedValueOnce(completion(bad))
+      .mockResolvedValueOnce(completion(validResult));
+
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(harness.create).toHaveBeenCalledTimes(2);
   });
 
   it("初次响应无效后只修复一次完整 JSON", async () => {
@@ -364,19 +413,29 @@ describe("CompositionReviewAdapter", () => {
     expect(repairData.instruction).toEqual(expect.stringMatching(/安全|完整 JSON|只返回/u));
   });
 
-  it("修复提示列明模型多返回的字段，避免只报告笼统格式错误", async () => {
-    const harness = setup();
-    const first = { ...validResult, annotationAnchors: [{ ...validResult.annotationAnchors[0], x: 0.5 }] };
-    harness.create
-      .mockResolvedValueOnce(completion(first))
-      .mockResolvedValueOnce(completion(validResult));
+  it("忽略报告和批注上的多余字段，不再因 unrecognized_keys 整篇失败", async () => {
+    const response = structuredClone(validResult) as {
+      report: Record<string, unknown> & typeof report;
+      annotationAnchors: Array<Record<string, unknown>>;
+    };
+    response.report.title = "额外标题";
+    response.report.wordCount = 600;
+    response.report.paragraphReviews = report.paragraphReviews.map((review) => ({
+      ...review,
+      note: "多余",
+      suggestions: review.suggestions.map((suggestion) => ({ ...suggestion, score: 1 })),
+    }));
+    response.annotationAnchors[0].x = 0.5;
+    const harness = setup({ response });
 
-    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
-      .resolves.toMatchObject({ report: { rewrittenEssay: report.rewrittenEssay } });
-    const repairData = JSON.parse(requestAt(harness.create, 1).messages[1].content);
-    expect(repairData.validationError).toContain("unrecognized_keys");
-    expect(repairData.validationError).toContain("_x");
-    expect(repairData.instruction).toMatch(/删除.*字段/u);
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    expect(result.report).not.toHaveProperty("title");
+    expect(result.report).not.toHaveProperty("wordCount");
+    expect(result.report.paragraphReviews[0]).not.toHaveProperty("note");
+    expect(result.report.paragraphReviews[0].suggestions[0]).not.toHaveProperty("score");
+    expect(result.annotationAnchors).toEqual(validResult.annotationAnchors);
     expect(requestAt(harness.create).messages[0].content).toMatch(/不得添加.*字段/u);
   });
 
@@ -517,5 +576,130 @@ describe("CompositionReviewAdapter", () => {
   it("拒绝缺少固定三份家长反馈的报告", async () => {
     const value = invalidResult((result) => { result.report.parentFeedbacks = []; });
     await expectInvalidTwice(value);
+  });
+
+  it("老师要求严格三段时按结构段归组，改后全段与完整范文逐段相同", async () => {
+    const source = [
+      { id: "paragraph-1", text: "雨很大。" },
+      { id: "paragraph-2", text: "我走进赛场。" },
+      { id: "paragraph-3", text: "我坚持跑完。" },
+      { id: "paragraph-4", text: "我明白了坚持。" },
+    ];
+    const essay = ["雨很大，我走进赛场。", "我坚持跑完。", "我明白了坚持。"];
+    const grouped = {
+      ...validResult,
+      annotationAnchors: [],
+      report: {
+        ...report,
+        rewrittenEssay: essay,
+        paragraphReviews: [
+          {
+            paragraphId: "paragraph-1",
+            sourceParagraphStart: 1,
+            sourceParagraphEnd: 2,
+            suggestions: [{ advice: "把开篇收成一段。" }],
+            revisedText: essay[0],
+          },
+          {
+            paragraphId: "paragraph-3",
+            sourceParagraphStart: 3,
+            sourceParagraphEnd: 3,
+            suggestions: [{ advice: "保留比赛过程。" }],
+            revisedText: essay[1],
+          },
+          {
+            paragraphId: "paragraph-4",
+            sourceParagraphStart: 4,
+            sourceParagraphEnd: 4,
+            suggestions: [{ advice: "点明坚持。" }],
+            revisedText: essay[2],
+          },
+        ],
+      },
+    };
+    const harness = setup({ response: grouped });
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, structureRequirements: "严格三段式：开篇、经过、感悟。" },
+      paragraphs: source,
+      studentName: "小艾",
+    });
+
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    expect(result.report.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(result.report.paragraphReviews.map((item) => item.sourceParagraphEnd)).toEqual([2, 3, 4]);
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("按这 3 个结构段归组");
+    expect(prompt).toContain("对应原文第 x–y 段");
+    expect(prompt).not.toContain("两者段数独立");
+  });
+
+  it("结构段的改后全段与范文不一致时先重试，仍不一致则改成与范文相同", async () => {
+    const source = [
+      { id: "paragraph-1", text: "雨很大。" },
+      { id: "paragraph-2", text: "我走进赛场。" },
+    ];
+    const essay = ["雨很大，我走进赛场。"];
+    const mismatched = {
+      ...validResult,
+      annotationAnchors: [],
+      report: {
+        ...report,
+        rewrittenEssay: essay,
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "合成一段。" }],
+          revisedText: "另一段文字。",
+        }],
+      },
+    };
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(mismatched))
+      .mockResolvedValueOnce(completion(mismatched));
+
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, structureRequirements: "严格一段式。" },
+      paragraphs: source,
+      studentName: "小艾",
+    });
+
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(requestAt(harness.create, 1).messages[1].content).validationError)
+      .toContain("paragraph_review_revised_mismatch");
+    expect(result.report.paragraphReviews[0]?.revisedText).toBe(essay[0]);
+    expect(result.report.rewrittenEssay).toEqual(essay);
+  });
+
+  it("同一段的多条建议合并成一条编号修改动作，不增加框", async () => {
+    const merged = {
+      ...validResult,
+      report: {
+        ...report,
+        paragraphReviews: report.paragraphReviews.map((review, index) => index === 0
+          ? {
+            ...review,
+            suggestions: [
+              { advice: "补听觉" },
+              { advice: "补动作" },
+              { advice: "收束主题" },
+            ],
+          }
+          : review),
+      },
+    };
+    const harness = setup({ response: merged });
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+
+    expect(result.report.paragraphReviews).toHaveLength(paragraphs.length);
+    expect(result.report.paragraphReviews[0]?.suggestions).toEqual([
+      { advice: "1. 补听觉\n2. 补动作\n3. 收束主题" },
+    ]);
+    expect(result.report.paragraphReviews[1]?.suggestions).toHaveLength(1);
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("suggestions 必须恰好 1 项");
+    expect(prompt).toContain("本段无需修改");
+    expect(prompt).not.toContain("1 至 4");
   });
 });

@@ -21,7 +21,7 @@ import {
   type ReviewStatus,
   EMPTY_DRAFT_RETENTION_MS,
 } from "../domain/contracts";
-import { validateReport } from "../domain/report-validation";
+import { ReportValidationError, validateReport } from "../domain/report-validation";
 import { encodeOrdinaryBoundMarker } from "../jobs/analysis-job-metadata";
 import {
   createOcrCheckpointV2,
@@ -63,6 +63,8 @@ export interface ReviewRecord {
   status: ReviewStatus;
   studentName: string;
   className?: string;
+  rejectionReason?: string | null;
+  rejectionChangeRequest?: string | null;
   config: AssignmentConfig;
   report: EvaluationReport | null;
   reportOcrRevision?: number | null;
@@ -344,6 +346,8 @@ export class ReviewRepository {
         status: reviews.status,
         studentName: reviews.studentName,
         className: reviews.className,
+        rejectionReason: reviews.rejectionReason,
+        rejectionChangeRequest: reviews.rejectionChangeRequest,
         revision: reviews.revision,
         imageRevision: reviews.imageRevision,
         ocrCheckpoint: reviews.ocrCheckpoint,
@@ -693,6 +697,12 @@ export class ReviewRepository {
     if (current.revision !== input.expectedRevision) {
       throw new RevisionConflictError(id);
     }
+    if (markReviewed && current.status === "rejected") {
+      throw new ReportValidationError(
+        "审核不通过的作文不能直接通过，请先重新分析。",
+        "REVIEW_REJECTED",
+      );
+    }
     const studentName =
       input.studentName !== undefined
         ? studentNameSchema.parse(input.studentName)
@@ -741,7 +751,9 @@ export class ReviewRepository {
           ? []
           : current.annotations;
     const status =
-      input.config !== undefined
+      current.status === "rejected" && input.config === undefined
+        ? "rejected"
+        : input.config !== undefined
           ? "draft"
         : input.report !== undefined || input.annotations !== undefined
           ? report === null
@@ -950,6 +962,7 @@ export class ReviewRepository {
           "ready_for_review",
           "exported",
           "failed",
+          "rejected",
         ]),
       )).run();
       if (reviewUpdate.changes === 0) {

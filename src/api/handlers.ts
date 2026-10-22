@@ -29,6 +29,7 @@ import { assignmentGuidanceInputSchema } from "../domain/assignment-guidance";
 import {
   batchReanalysisCommitInputSchema,
   batchReanalysisPreviewInputSchema,
+  rejectReviewInputSchema,
   revisionRequestInputSchema,
 } from "../reanalysis/contracts";
 import type { ReanalysisService } from "../reanalysis/reanalysis-service";
@@ -98,6 +99,8 @@ function reviewDto(review: {
   pdfRevision?: number | null;
   exportedAt?: unknown;
   teacherReviewedAt?: unknown;
+  rejectionReason?: string | null;
+  rejectionChangeRequest?: string | null;
   expiresAt?: unknown;
   ocr?: unknown;
 }) {
@@ -122,6 +125,8 @@ function reviewDto(review: {
     hasPdf,
     pdfFilename: hasPdf ? review.pdfFilename : null,
     teacherReviewedAt: review.teacherReviewedAt ?? null,
+    rejectionReason: review.rejectionReason ?? null,
+    rejectionChangeRequest: review.rejectionChangeRequest ?? null,
     expiresAt: review.expiresAt ?? null,
     ocr: review.ocr ?? null,
   };
@@ -430,6 +435,27 @@ function parseReanalysisRouteId(id: unknown): string {
     throw routeError("VALIDATION_ERROR", "请求参数无效", 400);
   }
   return id;
+}
+
+export function createRejectReviewRouteHandlers(dependencies: {
+  reanalysisService: Pick<ReanalysisService, "rejectReview">;
+  ownerId: string;
+}): { POST(request: Request, context: RouteContext): Promise<Response> } {
+  return {
+    async POST(request: Request, context: RouteContext) {
+      try {
+        const id = parseReanalysisRouteId((await context.params).id);
+        const input = rejectReviewInputSchema.parse(await readReanalysisJson(request));
+        return okNoStore(await dependencies.reanalysisService.rejectReview(
+          dependencies.ownerId,
+          id,
+          input,
+        ));
+      } catch (error) {
+        return failureNoStore(error);
+      }
+    },
+  };
 }
 
 export function createRevisionRequestRouteHandlers(dependencies: {

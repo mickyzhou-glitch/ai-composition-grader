@@ -34,9 +34,29 @@ export function reviewDisplayStatus(review: ReviewLifecycleFields): ReviewDispla
   return isReviewedPendingExport(review) ? "reviewed" : review.status;
 }
 
+export type HistoryStatusFilter = "" | "draft" | "review" | "reviewed" | "exported" | "rejected";
+
+export function matchesHistoryStatus(
+  review: ReviewLifecycleFields,
+  filter: HistoryStatusFilter,
+): boolean {
+  if (filter === "") return true;
+  if (filter === "draft") return review.status === "draft";
+  if (filter === "review") {
+    return !review.teacherReviewedAt
+      && ["analyzing", "needs_better_images", "ready_for_review", "failed"].includes(review.status);
+  }
+  if (filter === "reviewed") return isReviewedPendingExport(review);
+  if (filter === "exported") return review.status === "exported";
+  return review.status === "rejected";
+}
+
 export function exportEligibility(
-  review: Pick<ReviewView, "report" | "teacherReviewedAt" | "reportStale" | "ocr" | "images">,
+  review: Pick<ReviewView, "report" | "teacherReviewedAt" | "reportStale" | "ocr" | "images"> & { status?: ReviewStatus },
 ): { eligible: true } | { eligible: false; reason: string } {
+  if (review.status === "rejected") {
+    return { eligible: false, reason: "审核不通过的作文不能导出" };
+  }
   const readiness = deliveryReadiness(review);
   return readiness.ready
     ? { eligible: true }

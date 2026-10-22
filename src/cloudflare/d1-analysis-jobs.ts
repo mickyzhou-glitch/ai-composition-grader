@@ -1,3 +1,7 @@
+import { opinionSourceTitle } from "../grading-opinions/grading-opinion-repository";
+import { listD1StandingOpinions } from "./d1-grading-opinions";
+import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
+import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
@@ -17,6 +21,7 @@ interface JobRow {
   status: string;
   progress_stage: string;
   error_code: string | null;
+  message?: string | null;
   created_at: number;
   started_at?: number | null;
   finished_at: number | null;
@@ -32,32 +37,28 @@ export class D1AnalysisEnqueueConflictError extends Error {
   }
 }
 
+function titleFromStoredConfig(config: unknown): string {
+  if (typeof config !== "string" || !config) return opinionSourceTitle(config);
+  try {
+    return opinionSourceTitle(JSON.parse(config));
+  } catch {
+    return "";
+  }
+}
+
 function view(row: JobRow) {
   if (!statuses.has(row.status) || !stages.has(row.progress_stage)) throw new TypeError("Invalid analysis job");
-  const failedMessage = row.error_code === "AI_SETTINGS_INCOMPLETE"
-    ? "请联系管理员检查 AI 服务设置后再试"
-    : row.error_code === "ANALYSIS_TIMEOUT"
-      ? "分析超时或已中断，请重新分析"
-    : row.error_code?.startsWith("AI_INVALID_RESPONSE_rewritten_essay_chars_")
-      ? "AI 生成的范文未满足指定字数，请重新生成整篇批改"
-    : row.error_code?.startsWith("AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_")
-      ? "AI 生成的范文未满足指定段数，请重新生成整篇批改"
-    : row.error_code === "AI_INVALID_RESPONSE" || row.error_code?.startsWith("AI_INVALID_RESPONSE_")
-      ? "AI 返回格式异常，请重新分析"
-    : row.error_code === "AI_UPSTREAM_HTTP_400"
-      ? "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入"
-    : row.error_code?.startsWith("AI_UPSTREAM_HTTP_402")
-      ? "AI 内容批改服务额度不足，请联系管理员充值后重试"
-    : row.error_code === "AI_UPSTREAM_HTTP_401" || row.error_code?.startsWith("AI_UPSTREAM_HTTP_401_")
-      ? "AI 服务拒绝了访问密钥，请在设置中重新保存并测试"
-      : row.error_code === "AI_UPSTREAM_HTTP_403" || row.error_code?.startsWith("AI_UPSTREAM_HTTP_403_")
-        ? "AI 服务拒绝了图片批改请求，请确认当前模型已开通视觉输入权限"
-        : row.error_code?.startsWith("AI_UPSTREAM_HTTP_")
-          ? "AI 服务暂时拒绝了图片批改请求，请稍后重试"
-          : "AI 服务暂时不可用，请稍后重新分析";
+  const failure = row.status === "failed"
+    ? describePublicAnalysisFailure({
+      errorCode: row.error_code,
+      progressStage: row.progress_stage,
+      rawMessage: row.message,
+    })
+    : null;
   return {
     id: row.id, reviewId: row.review_id, mode: row.mode === "content_only" ? "content_only" : "full", status: row.status, progressStage: row.progress_stage,
-    message: row.status === "failed" ? failedMessage : row.status === "canceled" ? "作文已删除或已到期，分析已取消" : null,
+    message: failure?.summary ?? (row.status === "canceled" ? "作文已删除或已到期，分析已取消" : null),
+    detail: failure?.detail ?? null,
     createdAt: new Date(row.created_at).toISOString(), finishedAt: row.finished_at === null ? null : new Date(row.finished_at).toISOString(),
   };
 }
@@ -103,7 +104,7 @@ export class D1AnalysisJobs {
     const existing = await this.active(ownerId, reviewId);
     const review = await this.database.prepare(`
       SELECT reviews.id, reviews.revision, reviews.image_revision, reviews.ocr_checkpoint,
-        reviews.status, reviews.teacher_reviewed_at,
+        reviews.config, reviews.status, reviews.teacher_reviewed_at,
         COUNT(review_images.id) AS image_count
       FROM reviews LEFT JOIN review_images ON review_images.review_id = reviews.id
       WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.deleting_at IS NULL GROUP BY reviews.id
@@ -112,6 +113,7 @@ export class D1AnalysisJobs {
       revision: number;
       image_revision: number;
       ocr_checkpoint: string | null;
+      config?: string | null;
       status: string;
       teacher_reviewed_at: number | null;
       image_count: number;
@@ -129,6 +131,10 @@ export class D1AnalysisJobs {
       const checkpoint = parsed;
       analysisModeForCheckpoint(mode, checkpoint);
     }
+    const storedGuidance = guidanceWithStandingOpinions(
+      guidance,
+      await listD1StandingOpinions(this.database, ownerId, titleFromStoredConfig(review.config)),
+    );
     const id = crypto.randomUUID();
     const now = Date.now();
     let outcomes: D1Result<unknown>[];
@@ -157,7 +163,7 @@ export class D1AnalysisJobs {
               AND revision = ? AND analysis_run_id = ? AND status = 'analyzing'
           )
         `).bind(
-          id, reviewId, ownerId, mode, now, guidance, now,
+          id, reviewId, ownerId, mode, now, storedGuidance, now,
           reviewId, ownerId, review.revision, id,
         ),
       ]);
@@ -198,7 +204,7 @@ export class D1AnalysisJobs {
 
   private async active(ownerId: string, reviewId: string): Promise<unknown | null> {
     const query = this.database.prepare(`
-      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, started_at, finished_at
+      SELECT id, review_id, mode, status, progress_stage, error_code, message, created_at, started_at, finished_at
       FROM analysis_jobs
       WHERE owner_id = ? AND review_id = ? AND status IN ('queued', 'running')
       ORDER BY created_at DESC, id DESC LIMIT 1
@@ -213,7 +219,7 @@ export class D1AnalysisJobs {
 
   async latest(ownerId: string, reviewId: string): Promise<unknown | null> {
     const query = this.database.prepare(`
-      SELECT id, review_id, mode, status, progress_stage, error_code, created_at, started_at, finished_at FROM analysis_jobs
+      SELECT id, review_id, mode, status, progress_stage, error_code, message, created_at, started_at, finished_at FROM analysis_jobs
       WHERE owner_id = ? AND review_id = ? ORDER BY created_at DESC, id DESC LIMIT 1
     `).bind(ownerId, reviewId);
     let row = await query.first<JobRow>();
@@ -225,7 +231,7 @@ export class D1AnalysisJobs {
   }
 
   private async byId(ownerId: string, id: string): Promise<unknown> {
-    const row = await this.database.prepare(`SELECT id, review_id, mode, status, progress_stage, error_code, created_at, finished_at FROM analysis_jobs WHERE id = ? AND owner_id = ?`).bind(id, ownerId).first<JobRow>();
+    const row = await this.database.prepare(`SELECT id, review_id, mode, status, progress_stage, error_code, message, created_at, finished_at FROM analysis_jobs WHERE id = ? AND owner_id = ?`).bind(id, ownerId).first<JobRow>();
     if (!row) throw new Error("JOB_NOT_FOUND");
     return view(row);
   }

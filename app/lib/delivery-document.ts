@@ -5,6 +5,8 @@ import {
   type DeliveryReadinessInput,
 } from "@/src/delivery/readiness";
 import { paragraphEvaluationReportSchema } from "@/src/domain/contracts";
+import { collapseParagraphSuggestions } from "@/src/domain/paragraph-actions";
+import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import type { PublicOcrView } from "@/src/ocr/contracts";
 import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 import {
@@ -107,36 +109,39 @@ export async function buildDeliveryDocument(
   };
 
   try {
-    const paragraphs: DeliveryParagraph[] = [];
-    for (const paragraph of [...review.ocr.paragraphs].sort(
-      (left, right) => left.paragraphIndex - right.paragraphIndex,
-    )) {
-      const paragraphReport = report.paragraphReviews.find(
-        ({ paragraphId }) => paragraphId === paragraph.id,
+    const groups = resolveReviewGroups(report.paragraphReviews, review.ocr.paragraphs);
+    const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
+    if (
+      groups.length !== (grouped ? report.paragraphReviews.length : review.ocr.paragraphs.length)
+      || groups.some((group) => group.paragraphs.length === 0)
+    ) {
+      throw new DeliveryBuildError(
+        "PARAGRAPH_COVERAGE_MISMATCH",
+        "逐段批改没有完整覆盖当前识别自然段",
       );
-      if (!paragraphReport) {
-        throw new DeliveryBuildError(
-          "PARAGRAPH_COVERAGE_MISMATCH",
-          "逐段批改没有完整覆盖当前识别自然段",
-        );
-      }
+    }
+    const paragraphs: DeliveryParagraph[] = [];
+    for (const [groupIndex, group] of groups.entries()) {
       const crops = [];
-      for (const segment of paragraph.segments) {
-        try {
-          const bitmap = await loadPage(segment.pageIndex);
-          crops.push({ pageIndex: segment.pageIndex, ...await cropImage(bitmap, segment) });
-        } catch {
-          throw new DeliveryBuildError(
-            "CROP_FAILED",
-            `第 ${paragraph.paragraphIndex + 1} 段第 ${segment.pageIndex + 1} 页裁图失败`,
-          );
+      for (const paragraph of group.paragraphs) {
+        for (const segment of paragraph.segments) {
+          try {
+            const bitmap = await loadPage(segment.pageIndex);
+            crops.push({ pageIndex: segment.pageIndex, ...await cropImage(bitmap, segment) });
+          } catch {
+            throw new DeliveryBuildError(
+              "CROP_FAILED",
+              `第 ${paragraph.paragraphIndex + 1} 段第 ${segment.pageIndex + 1} 页裁图失败`,
+            );
+          }
         }
       }
       paragraphs.push({
-        paragraphNumber: paragraph.paragraphIndex + 1,
+        paragraphNumber: grouped ? groupIndex + 1 : group.paragraphs[0].paragraphIndex + 1,
+        ...(group.sourceLabel ? { sourceLabel: group.sourceLabel } : {}),
         crops,
-        suggestions: paragraphReport.suggestions,
-        revisionRuns: buildSentenceRevisionRuns(paragraph.text, paragraphReport.revisedText),
+        suggestions: collapseParagraphSuggestions(group.review.suggestions),
+        revisionRuns: buildSentenceRevisionRuns(group.sourceText, group.review.revisedText),
       });
     }
     const sourceCount = paragraphs.length;

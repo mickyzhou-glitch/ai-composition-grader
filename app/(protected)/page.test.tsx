@@ -163,11 +163,38 @@ describe("历史首页", () => {
     expect(await screen.findByText("已复核", { selector: ".status-badge" })).toBeInTheDocument();
     expect(screen.getByText("已复核", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("已导出", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.getByText("审核不通过", { selector: "dt" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "导出全部已复核" }));
     await user.click(screen.getByRole("menuitem", { name: "Word (.docx)" }));
 
     await waitFor(() => expect(reviewExports.batch).toHaveBeenCalledWith(["review-reviewed"], "docx"));
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe("/api/reviews");
+  });
+
+  it("审核不通过出现在统计和列表中，可筛选且不能导出", async () => {
+    const rejected = {
+      ...exportableReview,
+      id: "review-rejected",
+      status: "rejected",
+      studentName: "王若宁",
+      teacherReviewedAt: null,
+      rejectionReason: "完全离题",
+      rejectionChangeRequest: "不必再改",
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => json([exportableReview, rejected]));
+    const user = userEvent.setup();
+    render(<Home />);
+
+    expect(await screen.findByText("审核不通过", { selector: ".status-badge" })).toBeInTheDocument();
+    expect(screen.getByText("审核不通过", { selector: "dt" }).parentElement).toHaveTextContent("1");
+    const exportButtons = screen.getAllByRole("button", { name: "导出《为自己鼓掌》" });
+    expect(exportButtons[0]).toBeEnabled();
+    expect(exportButtons[1]).toBeDisabled();
+    expect(screen.getByText("审核不通过的作文不能导出")).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("筛选批改状态"), "rejected");
+    expect(screen.getByText("学生：王若宁")).toBeInTheDocument();
+    expect(screen.queryByText("学生：张小明")).not.toBeInTheDocument();
   });
 
   it("可直接按学生姓名搜索且不匹配作文题目", async () => {
@@ -380,6 +407,21 @@ describe("历史首页", () => {
           skipped: [],
         });
       }
+      const statusMatch = /^\/api\/reviews\/([^/]+)\/analyze\/status$/u.exec(url);
+      if (statusMatch) {
+        return json({
+          job: {
+            id: `job-${decodeURIComponent(statusMatch[1])}`,
+            reviewId: statusMatch[1],
+            status: "succeeded",
+            progressStage: "saving_result",
+            message: null,
+            detail: null,
+            createdAt: "2026-08-22T09:30:00.000Z",
+            finishedAt: "2026-08-22T09:31:00.000Z",
+          },
+        });
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
     const user = userEvent.setup();
@@ -431,5 +473,67 @@ describe("历史首页", () => {
 
     expect(await screen.findByText("重新批改结束：已提交 0 篇，跳过 1 篇")).toBeVisible();
     expect(screen.getByText("林晓：原始图片不存在，无法重新识别")).toBeVisible();
+  });
+
+  it("失败作文在列表显示中文原因，一键重新批改后汇总这次的失败原因", async () => {
+    const failed = {
+      ...review,
+      id: "failed-1",
+      status: "failed",
+      report: null,
+      studentName: "林晓",
+      config: { title: "失败作文" },
+      analysisFailure: {
+        summary: "模型或代理返回 502，停在「读取图片」，请稍后重新分析",
+        detail: "upstream 502",
+      },
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews") return json([failed]);
+      if (url === "/api/reviews/batch-reanalysis/preview" && init?.method === "POST") {
+        return json({
+          matched: [{
+            reviewId: "failed-1",
+            studentName: "林晓",
+            title: "失败作文",
+            expectedRevision: 1,
+            assignmentId: "assignment-1",
+            assignmentUpdatedAt: "2026-08-22T09:30:00.000Z",
+          }],
+          skipped: [],
+        });
+      }
+      if (url === "/api/reviews/batch-reanalysis" && init?.method === "POST") {
+        return json({
+          submitted: [{ reviewId: "failed-1", jobId: "job-failed-1", revision: 2 }],
+          skipped: [],
+        });
+      }
+      if (url === "/api/reviews/failed-1/analyze/status") {
+        return json({
+          job: {
+            id: "job-failed-1",
+            reviewId: "failed-1",
+            status: "failed",
+            progressStage: "reading_images",
+            message: "第 2 张图片读取失败，请重新上传后再分析",
+            detail: "image 2 unreadable",
+            createdAt: "2026-08-22T09:30:00.000Z",
+            finishedAt: "2026-08-22T09:31:00.000Z",
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<Home />);
+
+    expect(await screen.findByText("模型或代理返回 502，停在「读取图片」，请稍后重新分析")).toBeVisible();
+    expect(screen.getByText("查看原始信息")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "一键重新批改失败作文（1）" }));
+
+    expect(await screen.findByText("重新批改结束：已提交 1 篇。这次失败 1 篇。")).toBeVisible();
+    expect(screen.getByText("林晓：第 2 张图片读取失败，请重新上传后再分析")).toBeVisible();
   });
 });

@@ -41,6 +41,7 @@ interface AnalysisJobView {
   status: "queued" | "running" | "succeeded" | "failed" | "canceled";
   progressStage: "queued" | "reading_images" | "saving_ocr" | "generating_review" | "mapping_annotations" | "validating_result" | "saving_result";
   message: string | null;
+  detail?: string | null;
   createdAt: string;
   finishedAt: string | null;
 }
@@ -494,12 +495,17 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           }),
         },
       );
-      changeReport({
-        ...report,
-        paragraphReviews: report.paragraphReviews.map((paragraph) => (
-          paragraph.paragraphId === paragraphId ? rewritten : paragraph
-        )),
-      });
+      const paragraphReviews = report.paragraphReviews.map((paragraph) => (
+        paragraph.paragraphId === paragraphId
+          ? {
+            ...rewritten,
+            paragraphId: paragraph.paragraphId,
+            ...(paragraph.sourceParagraphStart !== undefined ? { sourceParagraphStart: paragraph.sourceParagraphStart } : {}),
+            ...(paragraph.sourceParagraphEnd !== undefined ? { sourceParagraphEnd: paragraph.sourceParagraphEnd } : {}),
+          }
+          : paragraph
+      ));
+      changeReport({ ...report, paragraphReviews });
       const paragraphNumber = review.ocr.paragraphs.find(
         ({ id }) => id === paragraphId,
       )?.paragraphIndex;
@@ -802,7 +808,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         /> : null}
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
         {loadingAnalysisResult ? <div className="success-banner" role="status">AI 分析已完成，正在加载批改结果。</div> : null}
-        {analysisJob && !loadingAnalysisResult && !analysisResultLoadFailed ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}</div> : null}
+        {analysisJob && !loadingAnalysisResult && !analysisResultLoadFailed ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}{analysisJob.detail ? <details><summary>查看原始信息</summary><p>{analysisJob.detail}</p></details> : null}</div> : null}
+        {!analysisJob?.message && review.analysisFailure ? <div className="success-banner" role="status">{review.analysisFailure.summary}{review.analysisFailure.detail ? <details><summary>查看原始信息</summary><p>{review.analysisFailure.detail}</p></details> : null}</div> : null}
+        {review.status === "rejected" ? <div className="stale-report-banner" role="status"><b>审核不通过</b><span>{[review.rejectionReason ? `原因：${review.rejectionReason}` : "", review.rejectionChangeRequest ? `修改要求：${review.rejectionChangeRequest}` : ""].filter(Boolean).join("。") || "这篇作文已标为不能使用。"} 可以重新分析后再审核。</span></div> : null}
         {review.reportStale && report ? <div className="stale-report-banner" role="alert"><span>批改报告基于旧版识别原文</span><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成批改</AsyncButton></div> : null}
         <div className="privacy-note" role="note">作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除。</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}

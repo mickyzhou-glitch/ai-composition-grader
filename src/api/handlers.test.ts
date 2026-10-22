@@ -29,6 +29,7 @@ import {
   createReviewImagesRouteHandlers,
   createReviewOcrRouteHandlers,
   createReviewExportCheckRouteHandlers,
+  createRejectReviewRouteHandlers,
   createRevisionRequestRouteHandlers,
   createTeacherReviewQueueRouteHandlers,
   createTeacherReviewRouteHandlers,
@@ -1143,8 +1144,8 @@ describe("review route handlers", () => {
 describe("reanalysis route handlers", () => {
   const revisionInput = {
     expectedRevision: 3,
-    reason: "结尾没有扣题",
-    changeRequest: "重新分析结尾并保留有效细节",
+    commonIssue: "结尾没有扣题",
+    contentSuggestion: "重新分析结尾并保留有效细节",
   };
   const commitItem = {
     reviewId: "review-1",
@@ -1152,6 +1153,39 @@ describe("reanalysis route handlers", () => {
     assignmentId: "assignment-1",
     expectedAssignmentUpdatedAt: "2026-01-01T00:00:00.000Z",
   };
+
+  it("完全不能用允许空说明并返回审核不通过", async () => {
+    const rejectReview = vi.fn(() => ({
+      id: "review-from-path",
+      status: "rejected" as const,
+      revision: 4,
+      rejectionReason: null,
+      rejectionChangeRequest: "保留原句",
+    }));
+    const handlers = createRejectReviewRouteHandlers({
+      reanalysisService: { rejectReview },
+      ownerId: OWNER_ID,
+    });
+
+    const response = await handlers.POST(
+      jsonRequest("http://localhost/api/reviews/review-from-path/reject", "POST", {
+        expectedRevision: 3,
+        changeRequest: "  保留原句  ",
+      }),
+      { params: Promise.resolve({ id: "review-from-path" }) },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await json(response)).toMatchObject({
+      ok: true,
+      data: { status: "rejected", rejectionReason: null, rejectionChangeRequest: "保留原句" },
+    });
+    expect(rejectReview).toHaveBeenCalledWith(OWNER_ID, "review-from-path", {
+      expectedRevision: 3,
+      reason: "",
+      changeRequest: "保留原句",
+    });
+  });
 
   it("退回重分析合法请求返回 202，并使用路径 id 与解析后的字段", async () => {
     const result = {
@@ -1286,7 +1320,6 @@ describe("reanalysis route handlers", () => {
       response = await revisionHandlers.POST(
         jsonRequest("http://localhost", "POST", {
           expectedRevision: revisionInput.expectedRevision,
-          reason: revisionInput.reason,
         }),
         { params: Promise.resolve({ id: "review-1" }) },
       );

@@ -3,7 +3,9 @@ import { countHanCharacters } from "./sample-writing-requirements";
 // Only parse unambiguous hard limits. Approximate targets and numbers in
 // narrative facts must not become validation rules.
 function constraints(guidance: string) {
-  const task = guidance.split("[修改要求]").at(-1) ?? "";
+  // 旧任务把抱怨写在「不合适原因」里，字数硬性要求只认「修改要求」之后。
+  // 新任务的两个框都是要落实的要求，整段都要检查。
+  const task = guidance.includes("[修改要求]") ? guidance.split("[修改要求]").at(-1) ?? "" : guidance;
   const number = "(10|[1-9]|[一二两三四五六七八九十])";
   const pattern = new RegExp(`(前|第)${number}(?:[、和与](?:第)?${number})?段\\s*(?:合计|总计)?\\s*(不超过|至多|最多|不少于|至少)\\s*(\\d{1,4})\\s*字`, "gu");
   const chinese: Record<string, number> = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };

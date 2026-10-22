@@ -131,4 +131,56 @@ describe("buildDeliveryDocument", () => {
     expect(deps.close.every((close) => close.mock.calls.length === 1)).toBe(true);
     expect(deps.revokeObjectURL).toHaveBeenCalledTimes(2);
   });
+
+  it("结构段归组后按组输出，并标出对应原文范围", async () => {
+    const revised = "第一段原文。第二段原文。";
+    const groupedReport = {
+      ...report,
+      rewrittenEssay: [revised],
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        sourceParagraphStart: 1,
+        sourceParagraphEnd: 2,
+        suggestions: [{ advice: "合并两段。" }],
+        revisedText: revised,
+      }],
+    };
+    const document = await buildDeliveryDocument({ ...review, report: groupedReport }, dependencies());
+
+    expect(document.paragraphs).toHaveLength(2);
+    expect(document.paragraphs[0]).toMatchObject({
+      paragraphNumber: 1,
+      sourceLabel: "对应原文第 1–2 段",
+      crops: [{ pageIndex: 0 }, { pageIndex: 1 }, { pageIndex: 0 }],
+      revisionRuns: buildSentenceRevisionRuns("第一段原文。第二段原文。", revised),
+    });
+    expect(document.paragraphs[1]).toMatchObject({
+      essayParagraphNumber: 1,
+      revisionRuns: [{ kind: "unchanged", text: revised }],
+    });
+  });
+
+  it("同段多条建议导出时合并成一条，段落数不变", async () => {
+    const groupedReport = {
+      ...report,
+      paragraphReviews: [
+        {
+          ...report.paragraphReviews[0],
+          suggestions: [
+            { advice: "补听觉" },
+            { advice: "补动作" },
+            { advice: "收束主题" },
+          ],
+        },
+        report.paragraphReviews[1],
+      ],
+    };
+    const document = await buildDeliveryDocument({ ...review, report: groupedReport }, dependencies());
+
+    expect(document.paragraphs).toHaveLength(2);
+    expect(document.paragraphs[0]?.suggestions).toEqual([{
+      advice: "1. 补听觉\n2. 补动作\n3. 收束主题",
+    }]);
+    expect(document.paragraphs[1]?.suggestions).toEqual(report.paragraphReviews[1].suggestions);
+  });
 });

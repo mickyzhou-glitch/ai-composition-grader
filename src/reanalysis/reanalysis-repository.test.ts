@@ -17,6 +17,7 @@ import {
 } from "../jobs/analysis-job-metadata";
 import { ReviewService } from "../services/review-service";
 import { ReviewFileStore } from "../storage/review-file-store";
+import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { formatRevisionTeacherGuidance, REANALYSIS_SKIP_REASONS } from "./contracts";
 import { ReanalysisDomainError, ReanalysisRepository } from "./reanalysis-repository";
 import { ReanalysisService } from "./reanalysis-service";
@@ -188,8 +189,8 @@ describe("ReanalysisRepository requestRevision", () => {
   function revisionInput(expectedRevision = 3) {
     return {
       expectedRevision,
-      reason: "人物关系混乱",
-      changeRequest: "按原文称呼重排事件",
+      commonIssue: "人物关系混乱",
+      contentSuggestion: "按原文称呼重排事件",
     };
   }
 
@@ -322,17 +323,82 @@ describe("ReanalysisRepository requestRevision", () => {
       imageRevision: 2,
       ocrCheckpoint: JSON.stringify(checkpoint),
     });
+    const formattedGuidance = formatRevisionTeacherGuidance(
+      revisionInput().commonIssue,
+      revisionInput().contentSuggestion,
+    );
     expect(opened.sqlite.prepare(`
       SELECT mode, status, teacher_guidance AS teacherGuidance
       FROM analysis_jobs WHERE id = ?
     `).get(result.job.id)).toEqual({
       mode: "full",
       status: "queued",
-      teacherGuidance: formatRevisionTeacherGuidance(
-        revisionInput().reason,
-        revisionInput().changeRequest,
-      ),
+      teacherGuidance: guidanceWithStandingOpinions(formattedGuidance, [{
+        text: revisionInput().commonIssue,
+        createdAt: NOW.valueOf(),
+      }]),
     });
+    expect(opened.sqlite.prepare(`
+      SELECT scope, change_request AS changeRequest, paragraph_label AS paragraphLabel,
+        category, source_student_name AS sourceStudentName, source_title AS sourceTitle,
+        source_job_id AS sourceJobId
+      FROM grading_opinions WHERE owner_id = ?
+      ORDER BY scope DESC
+    `).all(OWNER)).toEqual([
+      {
+        scope: "standing",
+        changeRequest: revisionInput().commonIssue,
+        paragraphLabel: null,
+        category: "其他",
+        sourceStudentName: "艾绮",
+        sourceTitle: "My  Essay",
+        sourceJobId: result.job.id,
+      },
+      {
+        scope: "essay",
+        changeRequest: revisionInput().contentSuggestion,
+        paragraphLabel: null,
+        category: "其他",
+        sourceStudentName: "艾绮",
+        sourceTitle: "My  Essay",
+        sourceJobId: result.job.id,
+      },
+    ]);
+  });
+
+  it("完全不能用只存档并标为审核不通过，不创建分析任务，之后仍可重新分析", () => {
+    const rejected = service.rejectReview(OWNER, "review-1", {
+      expectedRevision: 3,
+      reason: "完全离题",
+      changeRequest: "",
+    });
+
+    expect(rejected).toEqual({
+      id: "review-1",
+      status: "rejected",
+      revision: 4,
+      rejectionReason: "完全离题",
+      rejectionChangeRequest: null,
+    });
+    expect(opened.sqlite.prepare("SELECT COUNT(*) AS count FROM analysis_jobs").get()).toEqual({ count: 0 });
+    expect(reviewRepository.getById(OWNER, "review-1")).toMatchObject({
+      status: "rejected",
+      teacherReviewedAt: null,
+      pdfFilename: null,
+      rejectionReason: "完全离题",
+      rejectionChangeRequest: null,
+    });
+    expect(reviewRepository.listTeacherReviewQueue(OWNER).map(({ id }) => id)).not.toContain("review-1");
+    expect(() => reviewRepository.completeTeacherReview(OWNER, "review-1", {
+      expectedRevision: 4,
+      studentName: "艾绮",
+      report,
+      annotations: [],
+    })).toThrow(expect.objectContaining({ code: "REVIEW_REJECTED" }));
+
+    const recovered = service.requestRevision(OWNER, "review-1", revisionInput(4));
+    expect(recovered.job.status).toBe("queued");
+    expect(reviewRepository.getById(OWNER, "review-1")?.status).toBe("analyzing");
   });
 
   it("逐段报告与当前 OCR v2 退回时仍排 content_only", () => {

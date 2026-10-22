@@ -3,6 +3,8 @@ import {
   paragraphEvaluationReportSchema,
   type ParagraphSuggestion,
 } from "@/src/domain/contracts";
+import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
+import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import {
   deliveryReadiness,
   type DeliveryReadinessInput,
@@ -41,6 +43,7 @@ export type ExportRevisionRun = {
 export type ExportParagraph = {
   suggestions: ParagraphSuggestion[];
   revisionRuns: ExportRevisionRun[];
+  sourceLabel?: string;
 };
 
 export type ExportRunStyle = "suggestion" | "demonstration" | "changed" | "plain";
@@ -113,13 +116,16 @@ function graphemes(value: string): string[] {
 }
 
 function suggestionText(suggestions: ParagraphSuggestion[]) {
-  return suggestions.map((suggestion) => suggestion.advice).join("\n");
+  return mergedParagraphAction(suggestions);
 }
 
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {
   return [
-    { text: `${ACTION_LABEL}${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" },
-    { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" },
+    ...(paragraph.sourceLabel
+      ? [{ text: `${paragraph.sourceLabel}\n`, style: "demonstration" as const }]
+      : []),
+    { text: `${ACTION_LABEL}${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
+    { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" as const },
     ...paragraph.revisionRuns.map((run) => ({
       text: run.text,
       style: run.changed ? "changed" as const : "plain" as const,
@@ -169,23 +175,28 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
   }
 
   const report = paragraphEvaluationReportSchema.parse(review.report);
-  const reportByParagraph = new Map(
-    report.paragraphReviews.map((paragraph) => [paragraph.paragraphId, paragraph]),
-  );
+  const groups = resolveReviewGroups(report.paragraphReviews, review.ocr.paragraphs);
+  const expectedGroups = paragraphReviewUsesGroups(report.paragraphReviews)
+    ? report.paragraphReviews.length
+    : review.ocr.paragraphs.length;
+  if (
+    groups.length !== expectedGroups
+    || groups.some((group) => group.paragraphs.length === 0 || group.pageIndex === undefined)
+  ) {
+    throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "逐段批改内容不完整");
+  }
   const paragraphsByPage = new Map<number, ExportParagraph[]>();
 
-  for (const paragraph of [...review.ocr.paragraphs].sort(
-    (left, right) => left.paragraphIndex - right.paragraphIndex,
-  )) {
-    const paragraphReport = reportByParagraph.get(paragraph.id);
-    const pageIndex = paragraph.segments[0]?.pageIndex;
-    if (!paragraphReport || pageIndex === undefined) {
+  for (const group of groups) {
+    const pageIndex = group.pageIndex;
+    if (pageIndex === undefined) {
       throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "逐段批改内容不完整");
     }
     const pageParagraphs = paragraphsByPage.get(pageIndex) ?? [];
     pageParagraphs.push({
-      suggestions: paragraphReport.suggestions,
-      revisionRuns: buildExportRevisionRuns(paragraph.text, paragraphReport.revisedText),
+      ...(group.sourceLabel ? { sourceLabel: group.sourceLabel } : {}),
+      suggestions: group.review.suggestions,
+      revisionRuns: buildExportRevisionRuns(group.sourceText, group.review.revisedText),
     });
     paragraphsByPage.set(pageIndex, pageParagraphs);
   }

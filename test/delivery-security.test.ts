@@ -427,7 +427,7 @@ describe("最终交付的本机安全默认值", () => {
       {
         method: "POST",
         headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision: 3, reason: "原因", changeRequest: "要求" }),
+        body: JSON.stringify({ expectedRevision: 3, commonIssue: "原因", contentSuggestion: "要求" }),
       },
     ), {
       DB: database,

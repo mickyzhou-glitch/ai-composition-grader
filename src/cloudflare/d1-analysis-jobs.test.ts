@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { STANDING_GUIDANCE_HEADER } from "../grading-opinions/standing-guidance";
 import { D1AnalysisJobs } from "./d1-analysis-jobs";
 
 describe("D1AnalysisJobs", () => {
   it.each([
-    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "AI 返回格式异常，请重新分析"],
+    ["AI_INVALID_RESPONSE_schema_report_sampleParagraphs_0_suggestion_invalid_type", "批改结果 JSON 解析失败，请重新分析"],
     ["AI_INVALID_RESPONSE_rewritten_essay_chars_3_min_180_actual_170", "AI 生成的范文未满足指定字数，请重新生成整篇批改"],
     ["AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_expected_5", "AI 生成的范文未满足指定段数，请重新生成整篇批改"],
   ])("准确说明生成失败原因：%s", async (errorCode, message) => {
@@ -22,6 +23,23 @@ describe("D1AnalysisJobs", () => {
 
     await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
       message,
+    });
+  });
+
+  it("超时或中止时说明停在哪一步", async () => {
+    const database = {
+      prepare: vi.fn(() => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue({
+            id: "job-1", review_id: "review-1", status: "failed", progress_stage: "reading_images",
+            error_code: "ANALYSIS_ABORTED", created_at: 1_700_000_000_000, finished_at: 1_700_000_000_100,
+          }),
+        })),
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).latest("teacher-1", "review-1")).resolves.toMatchObject({
+      message: "分析在「读取图片」步骤超时或被中止，请重新分析",
     });
   });
 
@@ -411,6 +429,78 @@ describe("D1AnalysisJobs", () => {
     await expect(jobs.enqueue("teacher-1", "review-1", {
       teacherGuidance: `${maximumGuidance}见`,
     })).rejects.toThrow("teacherGuidance must be at most 1100 characters");
+  });
+
+  it("新批改把老师存档的长期意见追加进任务，且不因存档放宽 1100 字的本次意见上限", async () => {
+    const statements: Array<{ query: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((query: string) => {
+        const statement = {
+          query,
+          bindings: [] as unknown[],
+          bind(...bindings: unknown[]) {
+            this.bindings = bindings;
+            return this;
+          },
+          async first() {
+            if (query.includes("FROM reviews")) return {
+              id: "review-1",
+              revision: 2,
+              image_revision: 4,
+              ocr_checkpoint: null,
+              config: JSON.stringify({
+                title: "我终于明白了",
+                grade: "六年级",
+                writingRequirements: "写一件事",
+                targetCharacters: 600,
+                structureRequirements: "五段",
+                scoringFocus: "细节",
+                templateType: "custom",
+              }),
+              image_count: 1,
+            };
+            if (query.includes("ORDER BY created_at DESC")) return null;
+            return {
+              id: "job-2",
+              review_id: "review-1",
+              mode: "full",
+              status: "queued",
+              progress_stage: "queued",
+              error_code: null,
+              created_at: 1_700_000_000_000,
+              finished_at: null,
+            };
+          },
+          async all() {
+            return query.includes("FROM grading_opinions")
+              ? {
+                results: [
+                  { text: "严格五段", paragraphLabel: null, category: "结构", sourceTitle: "我终于明白了", updatedAt: 20 },
+                  { text: "严格五段", paragraphLabel: null, category: "结构", sourceTitle: "我终于明白了", updatedAt: 10 },
+                  { text: "别的题目", paragraphLabel: null, category: "结构", sourceTitle: "另一篇题目", updatedAt: 30 },
+                ],
+              }
+              : { results: [] };
+          },
+        };
+        statements.push(statement);
+        return statement;
+      }),
+      batch: vi.fn(async () => [
+        { meta: { changes: 1 } },
+        { meta: { changes: 1 } },
+      ]),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
+      teacherGuidance: "本次只改结尾",
+    })).resolves.toMatchObject({ newlyQueued: true });
+
+    const guidance = statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings
+      .find((binding) => typeof binding === "string" && binding.includes("本次只改结尾"));
+    expect(guidance).toEqual(expect.stringContaining(STANDING_GUIDANCE_HEADER));
+    expect(guidance).toEqual(expect.stringContaining("1. 严格五段（出现 2 次）"));
+    expect(String(guidance).match(/严格五段/gu)).toHaveLength(1);
   });
 
   it("accepts the OCR and annotation mapping progress stages", async () => {

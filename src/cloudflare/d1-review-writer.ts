@@ -90,7 +90,9 @@ export class D1ReviewWriter {
           ? null
           : evaluationReportSchema.parse(JSON.parse(current.report));
     const annotations = parsed.config ? [] : parsed.annotations;
-    const status = parsed.config ? "draft" : parsed.report !== undefined || parsed.annotations !== undefined ? (report === null ? "draft" : "ready_for_review") : current.status;
+    const status = current.status === "rejected" && parsed.config === undefined
+      ? "rejected"
+      : parsed.config ? "draft" : parsed.report !== undefined || parsed.annotations !== undefined ? (report === null ? "draft" : "ready_for_review") : current.status;
     const now = Date.now();
     const updated = await this.database.prepare(`
       UPDATE reviews SET student_name = ?, config = ?, report = ?, status = ?, revision = revision + 1, updated_at = ?,
@@ -145,15 +147,21 @@ export class D1ReviewWriter {
       annotations: z.array(annotationSchema),
     }).strict().parse(input);
     const current = await this.database.prepare(
-      "SELECT config, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
+      "SELECT config, status, revision, image_revision, ocr_checkpoint, report_ocr_revision FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL",
     ).bind(reviewId, ownerId).first<{
       config: string;
+      status: string;
       revision: number;
       image_revision: number;
       ocr_checkpoint: string | null;
       report_ocr_revision: number | null;
     }>();
     if (!current) return null;
+    if (current.status === "rejected") {
+      const rejected = new Error("审核不通过的作文不能直接通过，请先重新分析。");
+      rejected.name = "ReviewRejectedError";
+      throw rejected;
+    }
     if (current.revision !== parsed.expectedRevision) throw new RevisionConflictError();
     const config = assignmentConfigSchema.parse(JSON.parse(current.config));
     const paragraphReport = isParagraphEvaluationReport(parsed.report);

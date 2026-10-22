@@ -19,7 +19,7 @@ export type DeliveryTextMeasurer = (
 ) => number;
 
 export type DeliveryPageBlock =
-  | { kind: "paragraph-heading"; paragraphNumber: number; essayParagraphNumber?: number; continued: boolean; heightMm: number }
+  | { kind: "paragraph-heading"; paragraphNumber: number; essayParagraphNumber?: number; sourceLabel?: string; continued: boolean; heightMm: number }
   | { kind: "crop"; cropIndex: number; widthMm: number; heightMm: number }
   | { kind: "suggestion-heading"; continued: boolean; heightMm: number }
   | { kind: "suggestion"; suggestionIndex: number; heightMm: number }
@@ -172,18 +172,23 @@ function totalHeight(blocks: DeliveryPageBlock[]): number {
   return blocks.reduce((sum, block) => sum + block.heightMm, 0);
 }
 
+function paragraphHeading(paragraph: DeliveryParagraph, continued: boolean): DeliveryPageBlock {
+  return {
+    kind: "paragraph-heading",
+    paragraphNumber: paragraph.paragraphNumber,
+    ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
+    ...(paragraph.sourceLabel ? { sourceLabel: paragraph.sourceLabel } : {}),
+    continued,
+    heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
+  };
+}
+
 function completeParagraphBlocks(
   paragraph: DeliveryParagraph,
   measureText: DeliveryTextMeasurer,
 ): DeliveryPageBlock[] {
   const revisionLines = wrapRevisionRuns(paragraph.revisionRuns, measureText);
-  const heading: DeliveryPageBlock = {
-    kind: "paragraph-heading",
-    paragraphNumber: paragraph.paragraphNumber,
-    ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
-    continued: false,
-    heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
-  };
+  const heading = paragraphHeading(paragraph, false);
   if (paragraph.essayParagraphNumber) return [heading, revisionBlock(revisionLines)];
   return [
     heading,
@@ -222,13 +227,7 @@ export function paginateDeliveryDocument(
   const fits = (heightMm: number) => heightMm <= page.remainingHeightMm + EPSILON;
   const continueParagraph = (paragraph: DeliveryParagraph) => {
     createPage();
-    add({
-      kind: "paragraph-heading",
-      paragraphNumber: paragraph.paragraphNumber,
-      ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
-      continued: true,
-      heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
-    });
+    add(paragraphHeading(paragraph, true));
   };
 
   createPage();
@@ -246,13 +245,7 @@ export function paginateDeliveryDocument(
       continue;
     }
 
-    const heading: DeliveryPageBlock = {
-      kind: "paragraph-heading",
-      paragraphNumber: paragraph.paragraphNumber,
-      ...(paragraph.essayParagraphNumber ? { essayParagraphNumber: paragraph.essayParagraphNumber } : {}),
-      continued: false,
-      heightMm: PARAGRAPH_HEADING_HEIGHT_MM,
-    };
+    const heading = paragraphHeading(paragraph, false);
     const crops = paragraph.crops.map((_, index) => cropBlock(paragraph, index));
     const firstCrop = crops[0];
     if (!fits(heading.heightMm + (firstCrop?.heightMm ?? 0)) && page.blocks.length > 0) {

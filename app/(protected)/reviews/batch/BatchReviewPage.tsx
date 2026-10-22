@@ -278,7 +278,35 @@ export function BatchReviewPage() {
     setRevisionDialogOpen(true);
   }
 
-  async function requestRevision(input: { reason: string; changeRequest: string }) {
+  async function rejectReview(input: { commonIssue: string; contentSuggestion: string }) {
+    if (!review || revisionSubmitting) return;
+    const currentReview = review;
+    setRevisionSubmitting(true);
+    setRevisionError("");
+    setRevisionNotice("");
+    try {
+      await apiFetch(`/api/reviews/${encodeURIComponent(currentReview.id)}/reject`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          expectedRevision: currentReview.revision,
+          reason: input.commonIssue,
+          changeRequest: input.contentSuggestion,
+        }),
+      });
+      for (const key of cacheRef.current.keys()) {
+        if (key.startsWith(`${currentReview.id}:`)) cacheRef.current.delete(key);
+      }
+      setRevisionDialogOpen(false);
+      advanceAfterQueueRemoval(currentReview.id);
+    } catch (caught) {
+      setRevisionError(errorMessage(caught));
+    } finally {
+      setRevisionSubmitting(false);
+    }
+  }
+
+  async function requestRevision(input: { commonIssue: string; contentSuggestion: string }) {
     if (!review || revisionSubmitting) return;
     const currentReview = review;
     setRevisionSubmitting(true);
@@ -288,7 +316,11 @@ export function BatchReviewPage() {
       const result = await apiFetch<RevisionRequestResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/revision-request`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision: currentReview.revision, reason: input.reason, changeRequest: input.changeRequest }),
+        body: JSON.stringify({
+          expectedRevision: currentReview.revision,
+          commonIssue: input.commonIssue,
+          contentSuggestion: input.contentSuggestion,
+        }),
       });
       for (const key of cacheRef.current.keys()) {
         if (key.startsWith(`${currentReview.id}:`)) cacheRef.current.delete(key);
@@ -338,7 +370,10 @@ export function BatchReviewPage() {
           <button type="button" aria-pressed={view === "review"} onClick={() => setView("review")}>连续审核</button>
           <button type="button" aria-pressed={view === "export"} onClick={() => setView("export")}>已复核待导出清单 ({reviewed.length})</button>
         </div>
-        <Link className="button button--quiet" href="/">返回历史</Link>
+        <div className="batch-review-topbar-actions">
+          <Link className="button button--quiet" href="/opinions">长期批改规则</Link>
+          <Link className="button button--quiet" href="/">返回历史</Link>
+        </div>
       </header>
       {error ? <ErrorBanner message={error} /> : null}
       {revisionNotice ? <div className="revision-job-notice" role="status">{revisionNotice}</div> : null}
@@ -372,6 +407,6 @@ export function BatchReviewPage() {
         <footer className="batch-review-footer"><span>{paragraphReadiness && !paragraphReadiness.ready ? paragraphReadiness.message : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-footer-actions"><button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || saving || revisionSubmitting || sampleParagraphCountMismatch || Boolean(paragraphReadiness && !paragraphReadiness.ready)} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></footer>
       </div>}
     </main>
-    {revisionDialogOpen ? <RevisionRequestDialog open submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} /> : null}
+    {revisionDialogOpen ? <RevisionRequestDialog open submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
   </div>;
 }

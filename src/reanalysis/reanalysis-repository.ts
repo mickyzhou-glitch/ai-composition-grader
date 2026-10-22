@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
-import { analysisJobs, reviewImages, reviews, savedAssignments } from "../db/schema";
+import { analysisJobs, gradingOpinions, reviewImages, reviews, savedAssignments } from "../db/schema";
+import { opinionSourceTitle, standingOpinions } from "../grading-opinions/grading-opinion-repository";
+import { describeScopedOpinion, guidanceWithStandingOpinions, type OpinionScope } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -17,16 +19,19 @@ import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mo
 import { readStoredOcrCheckpoint, type OcrCheckpoint } from "../ocr/contracts";
 import {
   formatRevisionTeacherGuidance,
+  MAX_REVISION_FIELD_CHARS,
   normalizeAssignmentTitle,
   REANALYSIS_SKIP_REASONS,
   type BatchReanalysisCommitItem,
   type BatchReanalysisCommitResult,
   type BatchReanalysisPreview,
   type ReanalysisSkipCode,
+  type RejectReviewInput,
+  type RejectReviewResult,
   type RevisionRequestInput,
 } from "./contracts";
 
-const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed"] as const;
+const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed", "rejected"] as const;
 
 function reanalysisJobMarker(pdfFilename: string | null): string {
   return pdfFilename
@@ -43,6 +48,41 @@ export class ReanalysisDomainError extends Error {
     super(REANALYSIS_SKIP_REASONS[code]);
     this.name = "ReanalysisDomainError";
   }
+}
+
+function archiveOpinion(
+  database: Pick<AppDatabase, "insert">,
+  input: {
+    ownerId: string;
+    text: string;
+    scope: OpinionScope;
+    sourceReviewId: string;
+    sourceJobId: string;
+    sourceStudentName: string;
+    sourceClassName: string;
+    sourceTitle: string;
+    createdAt: Date;
+  },
+): void {
+  const described = describeScopedOpinion(input.text);
+  if (!described || described.text.length > MAX_REVISION_FIELD_CHARS) return;
+  database.insert(gradingOpinions).values({
+    id: randomUUID(),
+    ownerId: input.ownerId,
+    body: described.body,
+    reason: "",
+    changeRequest: described.text,
+    paragraphLabel: described.paragraphLabel,
+    category: described.category,
+    scope: input.scope,
+    sourceReviewId: input.sourceReviewId,
+    sourceJobId: input.sourceJobId,
+    sourceStudentName: input.sourceStudentName,
+    sourceClassName: input.sourceClassName,
+    sourceTitle: input.sourceTitle,
+    createdAt: input.createdAt,
+    updatedAt: input.createdAt,
+  }).run();
 }
 
 function domainError(
@@ -191,6 +231,73 @@ export class ReanalysisRepository {
     return { matched, skipped: skippedItems };
   }
 
+  rejectReview(
+    ownerId: string,
+    reviewId: string,
+    input: RejectReviewInput,
+  ): RejectReviewResult {
+    const now = this.now();
+    const rejectionReason = input.reason.trim() || null;
+    const rejectionChangeRequest = input.changeRequest.trim() || null;
+    const execute = (): RejectReviewResult => this.database.transaction((transaction) => {
+      const review = transaction.select({
+        revision: reviews.revision,
+        status: reviews.status,
+        deletingAt: reviews.deletingAt,
+      }).from(reviews).where(and(
+        eq(reviews.id, reviewId),
+        eq(reviews.ownerId, ownerId),
+      )).get();
+      if (!review) throw domainError("REVIEW_NOT_FOUND");
+      if (review.deletingAt !== null) throw domainError("REVIEW_UNAVAILABLE");
+      if (review.revision !== input.expectedRevision) throw domainError("REVISION_CONFLICT");
+      const image = transaction.select({ id: reviewImages.id }).from(reviewImages)
+        .where(eq(reviewImages.reviewId, reviewId)).get();
+      if (!image) throw domainError("IMAGES_MISSING");
+      const active = transaction.select({ id: analysisJobs.id }).from(analysisJobs).where(and(
+        eq(analysisJobs.reviewId, reviewId),
+        inArray(analysisJobs.status, ["queued", "running"]),
+      )).get();
+      if (active) throw domainError("ANALYSIS_ACTIVE");
+      if (!ANALYZABLE_STATUSES.includes(review.status as (typeof ANALYZABLE_STATUSES)[number])) {
+        throw domainError("REVIEW_UNAVAILABLE");
+      }
+      const update = transaction.update(reviews).set({
+        status: "rejected",
+        rejectionReason,
+        rejectionChangeRequest,
+        analysisRunId: null,
+        teacherReviewedAt: null,
+        pdfFilename: null,
+        pdfPath: null,
+        pdfRevision: null,
+        exportedAt: null,
+        revision: sql`${reviews.revision} + 1`,
+        updatedAt: now,
+      }).where(and(
+        eq(reviews.id, reviewId),
+        eq(reviews.ownerId, ownerId),
+        eq(reviews.revision, input.expectedRevision),
+        sql`${reviews.deletingAt} IS NULL`,
+        inArray(reviews.status, [...ANALYZABLE_STATUSES]),
+      )).run();
+      if (update.changes !== 1) throw domainError("REVISION_CONFLICT");
+      return {
+        id: reviewId,
+        status: "rejected",
+        revision: input.expectedRevision + 1,
+        rejectionReason,
+        rejectionChangeRequest,
+      };
+    }, { behavior: "immediate" });
+    try {
+      return execute();
+    } catch (error) {
+      if (isSqliteWriteConflict(error)) throw domainError("REVISION_CONFLICT");
+      throw error;
+    }
+  }
+
   requestRevision(
     ownerId: string,
     reviewId: string,
@@ -198,7 +305,7 @@ export class ReanalysisRepository {
   ): AnalysisJobRecord {
     const now = this.now();
     const id = this.createId();
-    const teacherGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
+    const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
 
     const execute = (): AnalysisJobRecord => this.database.transaction((transaction) => {
       const review = transaction.select({
@@ -209,6 +316,9 @@ export class ReanalysisRepository {
         ocrCheckpoint: reviews.ocrCheckpoint,
         report: reviews.report,
         pdfFilename: reviews.pdfFilename,
+        studentName: reviews.studentName,
+        className: reviews.className,
+        config: reviews.config,
       }).from(reviews).where(and(
         eq(reviews.id, reviewId),
         eq(reviews.ownerId, ownerId),
@@ -232,6 +342,25 @@ export class ReanalysisRepository {
       const mode = reanalysisMode(
         review.report,
         readStoredOcrCheckpoint(review.ocrCheckpoint, review.imageRevision),
+      );
+      const source = {
+        ownerId,
+        sourceReviewId: reviewId,
+        sourceJobId: id,
+        sourceStudentName: review.studentName,
+        sourceClassName: review.className,
+        sourceTitle: opinionSourceTitle(review.config),
+        createdAt: now,
+      };
+      if (input.commonIssue) {
+        archiveOpinion(transaction, { ...source, text: input.commonIssue, scope: "standing" });
+      }
+      if (input.contentSuggestion) {
+        archiveOpinion(transaction, { ...source, text: input.contentSuggestion, scope: "essay" });
+      }
+      const teacherGuidance = guidanceWithStandingOpinions(
+        formattedGuidance,
+        standingOpinions(transaction, ownerId, source.sourceTitle),
       );
 
       try {
@@ -378,6 +507,7 @@ export class ReanalysisRepository {
       );
       const now = this.now();
       const id = this.createId();
+      const teacherGuidance = guidanceWithStandingOpinions(null, standingOpinions(transaction, ownerId, title));
       try {
         transaction.insert(analysisJobs).values({
           id,
@@ -391,7 +521,7 @@ export class ReanalysisRepository {
           progressStage: "queued",
           errorCode: null,
           message: reanalysisJobMarker(row.pdfFilename),
-          teacherGuidance: null,
+          teacherGuidance,
           createdAt: now,
           startedAt: null,
           finishedAt: null,

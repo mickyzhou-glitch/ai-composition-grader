@@ -6,6 +6,7 @@ import {
   reviewStatusSchema,
 } from "../domain/contracts";
 import { deliveryReadiness } from "../delivery/readiness";
+import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
 import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 
@@ -25,6 +26,8 @@ interface ReviewRow {
   pdf_revision: number | null;
   exported_at: number | null;
   teacher_reviewed_at: number | null;
+  rejection_reason: string | null;
+  rejection_change_request: string | null;
   expires_at: number | null;
   created_at: number;
   updated_at: number;
@@ -73,7 +76,7 @@ export class D1ReviewReader {
 
   async list(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
-      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
       FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
     `).bind(ownerId).all<ReviewRow>();
     return Promise.all(results.map((review) => this.hydrate(ownerId, review)));
@@ -164,7 +167,7 @@ export class D1ReviewReader {
 
   async get(ownerId: string, reviewId: string): Promise<unknown | null> {
     const row = await this.database.prepare(`
-      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, expires_at, created_at, updated_at
+      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
       FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
     `).bind(reviewId, ownerId).first<ReviewRow>();
     return row ? this.hydrate(ownerId, row) : null;
@@ -228,12 +231,37 @@ export class D1ReviewReader {
       || review.report_ocr_revision !== currentCheckpoint.ocrRevision
     );
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
+    const analysisFailure = review.status === "failed" ? await this.latestFailure(ownerId, review.id) : null;
     return {
       id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, className: review.class_name ?? "", config, report,
       revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at),
-      teacherReviewedAt: date(review.teacher_reviewed_at), expiresAt: date(review.expires_at),
+      teacherReviewedAt: date(review.teacher_reviewed_at),
+      rejectionReason: review.rejection_reason,
+      rejectionChangeRequest: review.rejection_change_request,
+      expiresAt: date(review.expires_at),
       images, annotations, ocr, reportStale, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,
+      ...(analysisFailure ? { analysisFailure } : {}),
     };
+  }
+
+  private async latestFailure(ownerId: string, reviewId: string) {
+    const row = await this.database.prepare(`
+      SELECT error_code, progress_stage, message
+      FROM analysis_jobs
+      WHERE review_id = ? AND owner_id = ? AND status = 'failed'
+      ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC
+      LIMIT 1
+    `).bind(reviewId, ownerId).first<{
+      error_code: string | null;
+      progress_stage: string;
+      message: string | null;
+    }>();
+    if (!row) return null;
+    return describePublicAnalysisFailure({
+      errorCode: row.error_code,
+      progressStage: row.progress_stage,
+      rawMessage: row.message,
+    });
   }
 }
 

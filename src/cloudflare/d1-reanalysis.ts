@@ -1,3 +1,5 @@
+import { listD1StandingOpinions } from "./d1-grading-opinions";
+import { describeScopedOpinion, guidanceWithStandingOpinions, type OpinionScope } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -16,6 +18,8 @@ import {
   type BatchReanalysisSubmittedItem,
   type PublicAnalysisJobView,
   type ReanalysisSkipCode,
+  type RejectReviewInput,
+  type RejectReviewResult,
   type RevisionRequestInput,
   type RevisionRequestResult,
 } from "../reanalysis/contracts";
@@ -28,6 +32,7 @@ interface ReviewRow {
   id: string;
   status: string;
   student_name: string;
+  class_name?: string | null;
   config: string;
   revision: number;
   image_revision: number;
@@ -45,7 +50,7 @@ interface AssignmentRow {
   updated_at: number | string;
 }
 
-const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed"] as const;
+const ANALYZABLE_STATUSES = ["draft", "ready_for_review", "exported", "failed", "rejected"] as const;
 
 export class D1ReanalysisError extends Error {
   readonly code: ReanalysisSkipCode;
@@ -129,6 +134,14 @@ function ocrGuard(mode: AnalysisMode): string {
 function configTitle(config: string): string {
   const value = typeof config === "string" ? JSON.parse(config) : config;
   return normalizeAssignmentTitle(assignmentConfigSchema.parse(value).title);
+}
+
+function safeTitle(config: string): string {
+  try {
+    return configTitle(config);
+  } catch {
+    return "";
+  }
 }
 
 function publicReview(row: ReviewRow): { studentName: string; title: string } {
@@ -259,6 +272,50 @@ export class D1Reanalysis {
     return { matched, skipped: skippedItems };
   }
 
+  async rejectReview(
+    ownerId: string,
+    reviewId: string,
+    input: RejectReviewInput,
+  ): Promise<RejectReviewResult> {
+    const row = await this.readReview(ownerId, reviewId);
+    this.assertRequestable(row, input.expectedRevision);
+    const now = Date.now();
+    const rejectionReason = input.reason.trim() || null;
+    const rejectionChangeRequest = input.changeRequest.trim() || null;
+    const updated = await this.database.prepare(`
+      UPDATE reviews SET status = 'rejected',
+        rejection_reason = ?, rejection_change_request = ?,
+        analysis_run_id = NULL, teacher_reviewed_at = NULL,
+        pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL,
+        revision = revision + 1, updated_at = ?
+      WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
+        AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
+        AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM analysis_jobs
+          WHERE review_id = reviews.id AND status IN ('queued', 'running')
+        )
+    `).bind(
+      rejectionReason,
+      rejectionChangeRequest,
+      now,
+      reviewId,
+      ownerId,
+      input.expectedRevision,
+    ).run();
+    if ((updated.meta?.changes ?? 0) !== 1) {
+      await this.assertRequestable(await this.readReview(ownerId, reviewId), input.expectedRevision);
+      throw new D1ReanalysisError("REVISION_CONFLICT");
+    }
+    return {
+      id: reviewId,
+      status: "rejected",
+      revision: input.expectedRevision + 1,
+      rejectionReason,
+      rejectionChangeRequest,
+    };
+  }
+
   async requestRevision(
     ownerId: string,
     reviewId: string,
@@ -268,7 +325,19 @@ export class D1Reanalysis {
     this.assertRequestable(row, input.expectedRevision);
     const jobId = crypto.randomUUID();
     const now = Date.now();
-    const teacherGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
+    const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
+    const standingIssue = input.commonIssue ? describeScopedOpinion(input.commonIssue) : null;
+    const essaySuggestion = input.contentSuggestion ? describeScopedOpinion(input.contentSuggestion) : null;
+    const standing = await listD1StandingOpinions(this.database, ownerId, configTitle(row!.config));
+    if (standingIssue) {
+      standing.unshift({
+        text: standingIssue.text,
+        paragraphLabel: standingIssue.paragraphLabel,
+        category: standingIssue.category,
+        createdAt: now,
+      });
+    }
+    const teacherGuidance = guidanceWithStandingOpinions(formattedGuidance, standing) ?? formattedGuidance;
     const mode = reanalysisMode(row!);
     const statements = this.requestStatements(
       ownerId,
@@ -279,6 +348,12 @@ export class D1Reanalysis {
       teacherGuidance,
       mode,
     );
+    if (standingIssue) {
+      statements.push(this.opinionStatement(ownerId, reviewId, row!, standingIssue, "standing", jobId, now));
+    }
+    if (essaySuggestion) {
+      statements.push(this.opinionStatement(ownerId, reviewId, row!, essaySuggestion, "essay", jobId, now));
+    }
     let outcomes: D1Outcome[];
     try {
       outcomes = await this.database.batch(statements) as D1Outcome[];
@@ -353,6 +428,10 @@ export class D1Reanalysis {
     const mode = reanalysisMode(row!);
     const jobId = crypto.randomUUID();
     const now = Date.now();
+    const teacherGuidance = guidanceWithStandingOpinions(
+      null,
+      await listD1StandingOpinions(this.database, ownerId, review.title),
+    );
     const statements = this.commitStatements(
       ownerId,
       item,
@@ -361,6 +440,7 @@ export class D1Reanalysis {
       jobId,
       now,
       mode,
+      teacherGuidance,
     );
     let outcomes: D1Outcome[];
     try {
@@ -377,7 +457,7 @@ export class D1Reanalysis {
 
   private async readReview(ownerId: string, reviewId: string): Promise<ReviewRow | null> {
     return this.database.prepare(`
-      SELECT reviews.id, reviews.status, reviews.student_name, reviews.config,
+      SELECT reviews.id, reviews.status, reviews.student_name, reviews.class_name, reviews.config,
         reviews.revision, reviews.image_revision, reviews.ocr_checkpoint, reviews.report,
         reviews.deleting_at,
         (SELECT COUNT(*) FROM review_images WHERE review_images.review_id = reviews.id) AS image_count,
@@ -439,7 +519,7 @@ export class D1Reanalysis {
         UPDATE reviews SET status = 'analyzing', analysis_run_id = ?, teacher_reviewed_at = NULL,
           pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
-          AND status IN ('draft', 'ready_for_review', 'exported', 'failed')
+          AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
           AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
           ${ocrGuard(mode)}
           AND NOT EXISTS (
@@ -468,6 +548,7 @@ export class D1Reanalysis {
     jobId: string,
     now: number,
     mode: AnalysisMode,
+    teacherGuidance: string | null,
   ): D1ReanalysisStatement[] {
     return [
       this.database.prepare(`
@@ -482,7 +563,7 @@ export class D1Reanalysis {
           teacher_reviewed_at = NULL, pdf_filename = NULL, pdf_path = NULL,
           pdf_revision = NULL, exported_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
-          AND status IN ('draft', 'ready_for_review', 'exported', 'failed')
+          AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
           AND EXISTS (SELECT 1 FROM review_images WHERE review_id = reviews.id)
           ${ocrGuard(mode)}
           AND NOT EXISTS (
@@ -515,11 +596,45 @@ export class D1Reanalysis {
           progress_stage, error_code, message, teacher_guidance, created_at, started_at, finished_at
         )
         SELECT ?, reviews.id, reviews.owner_id, ?, 'queued', 0, ?, NULL,
-          'queued', NULL, NULL, NULL, ?, NULL, NULL
+          'queued', NULL, NULL, ?, ?, NULL, NULL
         FROM reviews
         WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.analysis_run_id = ?
-      `).bind(jobId, mode, now, now, item.reviewId, ownerId, jobId),
+      `).bind(jobId, mode, now, teacherGuidance, now, item.reviewId, ownerId, jobId),
     ];
+  }
+
+  private opinionStatement(
+    ownerId: string,
+    reviewId: string,
+    row: ReviewRow,
+    opinion: NonNullable<ReturnType<typeof describeScopedOpinion>>,
+    scope: OpinionScope,
+    jobId: string,
+    now: number,
+  ): D1ReanalysisStatement {
+    return this.database.prepare(`
+      INSERT INTO grading_opinions (
+        id, owner_id, body, reason, change_request, paragraph_label, category, scope,
+        source_review_id, source_job_id, source_student_name, source_class_name, source_title,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      ownerId,
+      opinion.body,
+      "",
+      opinion.text,
+      opinion.paragraphLabel,
+      opinion.category,
+      scope,
+      reviewId,
+      jobId,
+      row.student_name ?? "",
+      row.class_name ?? "",
+      safeTitle(row.config),
+      now,
+      now,
+    );
   }
 
   private async resolveCommitConflict(ownerId: string, item: BatchReanalysisCommitItem): Promise<never> {
