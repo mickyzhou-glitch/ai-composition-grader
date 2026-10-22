@@ -170,6 +170,14 @@ async function docxVisibleText(review: ExportReviewSource) {
     .join("");
 }
 
+/**
+ * Word 的完整范文由 Word/WPS 自动折行分页：没有 PDF 的「（续）」页标题，
+ * 首行缩进用段落格式而不是全角空格。比较时去掉这两处版式差异。
+ */
+function withoutEssayLayout(text: string) {
+  return text.replaceAll("按要求重写的完整范文（续）", "").replaceAll("　", "");
+}
+
 describe("Word 与 PDF 导出文本", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -204,8 +212,8 @@ describe("Word 与 PDF 导出文本", () => {
     const pdfText = paintedText.join("");
     const docxText = await docxVisibleText(source);
 
-    expect(docxText).toBe(pdfText);
-    expect(docxText).toBe(visibleExportText(buildExportReportContent(source), measure));
+    expect(withoutEssayLayout(docxText)).toBe(withoutEssayLayout(pdfText));
+    expect(withoutEssayLayout(docxText)).toBe(withoutEssayLayout(visibleExportText(buildExportReportContent(source), measure)));
     expect(pdfMock.setProperties).toHaveBeenCalledWith({ title: "小明珍贵的礼物" });
     expect(docxText).toContain("修改动作：1. 补充听觉");
     expect(docxText).toContain("2. 补一个停顿");

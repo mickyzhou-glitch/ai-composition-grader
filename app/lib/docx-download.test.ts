@@ -147,8 +147,41 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).toContain("按要求重写的完整范文");
     expect(documentXml).not.toContain("【完整范文");
     essay.forEach((text) => {
-      expect(documentXml).toContain(`　　${text}`);
+      expect(documentXml).toContain(text);
     });
+  });
+
+  it("完整范文每段只有一个 w:p，段内没有 w:br，首行缩进两字", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const long = "“学而时习之，不亦说乎？”这句话出自我国古代著名的思想家、教育家、儒学家、文学家——孔子。这句话我从小就会背，却从未真正理解过它的含义。".repeat(3);
+    const essay = [long, `${long}第二段。`, "短段。"];
+    review.report = { ...(review.report as object), rewrittenEssay: essay } as ExportReviewSource["report"];
+    const { documentXml } = await unpack(review);
+
+    const body = documentXml.slice(documentXml.lastIndexOf("按要求重写的完整范文"));
+    const paragraphs = [...body.matchAll(/<w:p>[\s\S]*?<\/w:p>|<w:p [\s\S]*?<\/w:p>/gu)].map((match) => match[0]);
+    const essayParagraphs = paragraphs.filter((xml) => xml.includes("<w:t"));
+    expect(essayParagraphs).toHaveLength(essay.length);
+    essayParagraphs.forEach((xml) => {
+      expect(xml).not.toContain("<w:br");
+      expect(xml).toMatch(/<w:ind [^>]*w:firstLineChars="200"/u);
+      expect(xml).not.toContain("　　");
+    });
+    expect(essayParagraphs[0]).toContain(long);
+    expect(essayParagraphs[1]).toContain(`${long}第二段。`);
+  });
+
+  it("右侧文本框的改后全段正文里没有 w:br", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const report = review.report as { paragraphReviews: Array<{ revisedText: string }> };
+    report.paragraphReviews[0]!.revisedText = `${report.paragraphReviews[0]!.revisedText}\n夹带换行的一句。`;
+    const { documentXml } = await unpack(review);
+    const cell = documentXml.slice(documentXml.indexOf("改后全段："));
+    const revisedParagraph = cell.slice(0, cell.indexOf("</w:p>"));
+    expect(revisedParagraph).toContain("夹带换行的一句。");
+    expect(revisedParagraph).not.toContain("<w:br");
   });
 
   it("生成与 PDF 相同的修改动作、改后全段和原图顺序", async () => {

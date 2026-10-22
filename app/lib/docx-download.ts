@@ -23,19 +23,15 @@ import JSZip from "jszip";
 
 import {
   buildExportReportContent,
-  EXPORT_KAITI_FACE,
-  EXPORT_KAITI_FONT,
-  exportFontSample,
+  rewrittenEssayHeading,
   exportOriginalImageUrl,
   exportParagraphRuns,
-  layoutRewrittenEssay,
   type ExportImage,
   type ExportParagraph,
   type ExportReportContent,
   type ExportReportPage,
   type ExportReviewSource,
   type ExportRunStyle,
-  type RewrittenEssayPage,
 } from "./export-report-content";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -203,7 +199,12 @@ function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: num
       }),
       new Paragraph({
         spacing: { before: 20, after: 40, line },
-        children: remainder.flatMap((run) => textRuns(run.text, run.style, halfPoints)),
+        // 「改后全段」是一个自然段：只保留标签行自带的换行，正文里的换行去掉。
+        children: remainder.flatMap((run) => textRuns(
+          run.style === "changed" || run.style === "plain" ? run.text.replace(/[\r\n\u2028\u2029]+/gu, "") : run.text,
+          run.style,
+          halfPoints,
+        )),
       }),
     ]
     : [new Paragraph({})];
@@ -273,42 +274,38 @@ function photoTable(bytes: Uint8Array, page: ExportReportPage) {
   });
 }
 
-function essayBlocks(pages: RewrittenEssayPage[]) {
-  return pages.flatMap((page, index) => [
-    ...(index === 0 ? [] : [pageBreakParagraph()]),
+/** 段内文字去掉换行，避免 Word/WPS 里出现硬换行。 */
+export function singleLineParagraphText(text: string): string {
+  return text.replace(/[\r\n\u2028\u2029]+/gu, "").replace(/^[\s\u3000]+/u, "").trimEnd();
+}
+
+/**
+ * 完整范文：每个自然段一个 w:p，段内不插换行，首行缩进两字，由 Word/WPS 自动折行和分页。
+ * 不复用 PDF 的按宽度折行结果（那会把每一行写成独立段落，行尾单字另起一行）。
+ */
+function essayBlocks(paragraphs: readonly string[]) {
+  return [
     new Paragraph({
       spacing: { before: 200, after: 160 },
       children: [new TextRun({
-        text: page.title,
+        text: rewrittenEssayHeading(false),
         bold: true,
         color: "000000",
         font: KAITI_FONT,
         size: points(18),
       })],
     }),
-    ...page.lines.filter((line) => line.length > 0).map((line) => new Paragraph({
+    ...paragraphs.map(singleLineParagraphText).filter((text) => text.length > 0).map((text) => new Paragraph({
       spacing: { before: 0, after: 80, line: 360 },
+      indent: { firstLineChars: 200 },
       children: [new TextRun({
-        text: line,
+        text,
         color: "000000",
         font: KAITI_FONT,
         size: points(14),
       })],
     })),
-  ]);
-}
-
-async function essayMeasurer(sample: string) {
-  await Promise.all([
-    document.fonts.load(`400 16px ${EXPORT_KAITI_FACE}`, sample),
-    document.fonts.load(`700 16px ${EXPORT_KAITI_FACE}`, sample),
-  ]);
-  const context = document.createElement("canvas").getContext("2d");
-  if (!context) throw new Error("当前浏览器不支持生成 Word");
-  return (text: string) => {
-    context.font = `400 14px ${EXPORT_KAITI_FONT}`;
-    return context.measureText(text).width;
-  };
+  ];
 }
 
 async function documentChildren(review: ExportReviewSource, content: ExportReportContent) {
@@ -318,14 +315,10 @@ async function documentChildren(review: ExportReviewSource, content: ExportRepor
     photoTable(images[index], page),
   ]);
   if (content.rewrittenEssay.length === 0) return children;
-  const essayPages = layoutRewrittenEssay(
-    content.rewrittenEssay,
-    await essayMeasurer(exportFontSample(content)),
-  );
   return [
     ...children,
     ...(children.length > 0 ? [pageBreakParagraph()] : []),
-    ...essayBlocks(essayPages),
+    ...essayBlocks(content.rewrittenEssay),
   ];
 }
 
