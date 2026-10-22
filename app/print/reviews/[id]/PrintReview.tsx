@@ -66,9 +66,7 @@ export function PrintReview({
                 if (!suggestion) throw new TypeError("修改建议不完整");
                 return <ol className={styles.suggestions} start={block.suggestionIndex + 1} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
                   <li>
-                    <p><b>问题：</b>{suggestion.problem}</p>
-                    <p><b>动作：</b>{suggestion.advice}</p>
-                    <p><b>示例：</b>{suggestion.example}</p>
+                    <p>{suggestion.advice}</p>
                   </li>
                 </ol>;
               }

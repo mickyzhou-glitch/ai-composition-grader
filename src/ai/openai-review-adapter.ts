@@ -278,9 +278,9 @@ function rewriteParagraphPrompt(input: RewriteParagraphInput): string {
     `目标段原文：${JSON.stringify(target)}`,
     `目标段当前未保存批改草稿：${JSON.stringify(input.current)}`,
     `教师附加要求：${JSON.stringify(input.instruction?.trim() || "换一种更具体、更自然的批改方案。")}`,
-    "建议必须有 1-4 条，每条 problem、advice、example 都必须非空；revisedText 必须是该段完整修改稿。",
+    "建议必须有 1-4 条，每条只写 advice，用一两句话说明怎么改。不要写问题描述，也不要写修改示例。revisedText 必须是该段完整修改稿。",
     `paragraphId 必须原样返回 ${JSON.stringify(input.paragraphId)}。`,
-    "只返回一个 JSON 对象，不要 Markdown，不要解释：{\"paragraphId\":\"paragraph-1\",\"suggestions\":[{\"problem\":\"\",\"advice\":\"\",\"example\":\"\"}],\"revisedText\":\"\"}。",
+    "只返回一个 JSON 对象，不要 Markdown，不要解释：{\"paragraphId\":\"paragraph-1\",\"suggestions\":[{\"advice\":\"\"}],\"revisedText\":\"\"}。",
   ].join("\n\n");
 }
 
@@ -292,7 +292,7 @@ function rewriteParagraphRepairPrompt(
   return [
     "将下面无效返回修复为一个完整 JSON 对象。不要 Markdown，不要解释。",
     `paragraphId 必须严格等于 ${JSON.stringify(paragraphId)}。`,
-    "suggestions 必须有 1-4 条，problem、advice、example 必须非空，revisedText 必须非空。",
+    "suggestions 必须有 1-4 条，每条只写非空 advice，用一两句话说明怎么改，不要写问题描述或修改示例。revisedText 必须非空。",
     `校验错误：${validationCode}`,
     `无效返回：${content}`,
   ].join("\n\n");

@@ -146,16 +146,12 @@ function suggestionBlock(
   measureText: DeliveryTextMeasurer,
 ): DeliveryPageBlock {
   const suggestion = paragraph.suggestions[suggestionIndex];
-  const lines = [
-    `问题：${suggestion.problem}`,
-    `动作：${suggestion.advice}`,
-    `示例：${suggestion.example}`,
-  ].reduce((sum, text) => sum + wrappedLineCount(
-    text,
+  const lines = wrappedLineCount(
+    suggestion.advice,
     DELIVERY_STYLE.fontPt.suggestion,
     "sans",
     measureText,
-  ), 0);
+  );
   return {
     kind: "suggestion",
     suggestionIndex,

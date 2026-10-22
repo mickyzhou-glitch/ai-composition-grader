@@ -145,11 +145,11 @@ describe("BatchReviewPage", () => {
     ], { currentReport: paragraphReport });
     const user = userEvent.setup();
     render(<BatchReviewPage />);
-    const problem = await screen.findByRole("textbox", { name: "第 1 段第 1 条问题描述" });
-    await user.clear(problem);
-    await user.type(problem, "需要补充声音描写");
+    const advice = await screen.findByRole("textbox", { name: "第 1 段第 1 条修改动作" });
+    await user.clear(advice);
+    await user.type(advice, "需要补充声音描写");
     await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（1）班");
-    expect(screen.getByRole("textbox", { name: "第 1 段第 1 条问题描述" })).toHaveValue("需要补充声音描写");
+    expect(screen.getByRole("textbox", { name: "第 1 段第 1 条修改动作" })).toHaveValue("需要补充声音描写");
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（2）班");
     expect(confirm).toHaveBeenCalled();

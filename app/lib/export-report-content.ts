@@ -113,9 +113,7 @@ function graphemes(value: string): string[] {
 }
 
 function suggestionText(suggestions: ParagraphSuggestion[]) {
-  return suggestions.map((suggestion) => (
-    `${suggestion.problem}；${suggestion.advice}；${suggestion.example}`
-  )).join("\n");
+  return suggestions.map((suggestion) => suggestion.advice).join("\n");
 }
 
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {

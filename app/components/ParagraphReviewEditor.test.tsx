@@ -75,9 +75,11 @@ describe("ParagraphReviewEditor", () => {
     expect(text.indexOf("第 1 段")).toBeLessThan(text.indexOf("原文裁图 1"));
     expect(text.indexOf("原文裁图 1")).toBeLessThan(text.indexOf("【修改建议】"));
     expect(text.indexOf("【修改建议】")).toBeLessThan(text.indexOf("【修改后段落】"));
-    expect(screen.getByLabelText("第 1 段第 1 条问题描述")).toHaveValue("描写普通");
+    expect(screen.queryByLabelText("第 1 段第 1 条问题描述")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("第 1 段第 1 条修改示例")).not.toBeInTheDocument();
     expect(screen.getByLabelText("第 1 段第 1 条修改动作")).toHaveValue("补充程度");
-    expect(screen.getByLabelText("第 1 段第 1 条修改示例")).toHaveValue("我非常高兴。");
+    expect(screen.queryByText("描写普通")).not.toBeInTheDocument();
+    expect(screen.queryByText("我非常高兴。")).not.toBeInTheDocument();
     expect(paragraph.querySelector("del")).toBeNull();
     expect(screen.getByLabelText("示范文整句标色预览")).toHaveTextContent("我非常高兴！");
     expect(paragraph.querySelector(".revision-preview__changed-sentence")).toHaveStyle({ color: "#1F4E78" });
@@ -107,13 +109,15 @@ describe("ParagraphReviewEditor", () => {
       onChange={onChange}
     />);
 
-    expect(screen.getByLabelText("第 1 段第 1 条问题描述")).toHaveValue("保留");
+    expect(screen.getByLabelText("第 1 段第 1 条修改动作")).toHaveValue("保留真实感受");
+    expect(screen.queryByText("保留")).not.toBeInTheDocument();
+    expect(screen.queryByText("我很高兴。")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "删除第 1 段第 1 条建议" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "新增第 1 段建议" }));
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
       paragraphReviews: [expect.objectContaining({ suggestions: expect.arrayContaining([
-        expect.objectContaining({ problem: "保留" }),
-        { problem: "", advice: "", example: "" },
+        expect.objectContaining({ advice: "保留真实感受" }),
+        { advice: "" },
       ]) })],
     }));
   });

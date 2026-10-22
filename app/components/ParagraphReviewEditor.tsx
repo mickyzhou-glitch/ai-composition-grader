@@ -25,7 +25,7 @@ interface ParagraphReviewEditorProps {
   revisionLabel?: string;
 }
 
-const emptySuggestion = { problem: "", advice: "", example: "" };
+const emptySuggestion = { advice: "" };
 
 export function ParagraphReviewEditor({
   reviewId,
@@ -121,19 +121,6 @@ export function ParagraphReviewEditor({
                 {paragraphReview.suggestions.map((suggestion, suggestionIndex) => (
                   <fieldset className="paragraph-suggestion" key={suggestionIndex}>
                     <legend>建议 {suggestionIndex + 1}</legend>
-                    <label>问题描述
-                      <input
-                        aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条问题描述`}
-                        value={suggestion.problem}
-                        disabled={disabled || rewriting}
-                        onChange={(event) => updateParagraph(paragraph.id, (current) => ({
-                          ...current,
-                          suggestions: current.suggestions.map((item, index) => index === suggestionIndex
-                            ? { ...item, problem: event.target.value }
-                            : item),
-                        }))}
-                      />
-                    </label>
                     <label>修改动作
                       <input
                         aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改动作`}
@@ -143,19 +130,6 @@ export function ParagraphReviewEditor({
                           ...current,
                           suggestions: current.suggestions.map((item, index) => index === suggestionIndex
                             ? { ...item, advice: event.target.value }
-                            : item),
-                        }))}
-                      />
-                    </label>
-                    <label>修改示例
-                      <textarea
-                        aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改示例`}
-                        value={suggestion.example}
-                        disabled={disabled || rewriting}
-                        onChange={(event) => updateParagraph(paragraph.id, (current) => ({
-                          ...current,
-                          suggestions: current.suggestions.map((item, index) => index === suggestionIndex
-                            ? { ...item, example: event.target.value }
                             : item),
                         }))}
                       />

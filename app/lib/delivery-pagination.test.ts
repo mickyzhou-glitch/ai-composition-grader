@@ -76,8 +76,14 @@ describe("交付文档分页", () => {
 
   it("完整段落能放入空页但放不进当前剩余空间时整体换页", () => {
     const pages = paginateDeliveryDocument(documentWith(
-      paragraph(1, { crops: [{ width: 900, height: 600 }] }),
-      paragraph(2, { crops: [{ width: 900, height: 600 }] }),
+      paragraph(1, {
+        crops: [{ width: 900, height: 600 }],
+        revisionText: "我终于鼓起勇气走上了舞台。".repeat(40),
+      }),
+      paragraph(2, {
+        crops: [{ width: 900, height: 600 }],
+        revisionText: "我终于鼓起勇气走上了舞台。".repeat(40),
+      }),
     ), { measureText });
 
     const firstParagraphPages = pages.flatMap((page, pageIndex) => (
@@ -109,7 +115,7 @@ describe("交付文档分页", () => {
         { width: 600, height: 900 },
       ],
       suggestionCount: 4,
-      suggestionText: longText,
+      suggestionText: longText.repeat(6),
       revisionText: longText.repeat(12),
     })), { measureText });
 

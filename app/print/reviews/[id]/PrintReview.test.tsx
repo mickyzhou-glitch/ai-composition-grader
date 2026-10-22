@@ -34,7 +34,9 @@ describe("A4 打印稿", () => {
     expect(within(sheet as HTMLElement).getByRole("img", { name: "第 1 段原文裁图，第 1 页" }))
       .toHaveAttribute("src", "blob:paragraph-1");
     expect(sheet).toHaveTextContent("【修改建议】");
-    expect(sheet).toHaveTextContent("动作略快");
+    expect(sheet).toHaveTextContent("补充听觉");
+    expect(sheet).not.toHaveTextContent("动作略快");
+    expect(sheet).not.toHaveTextContent("我听见呼吸声");
     expect(sheet).toHaveTextContent("【修改后段落】");
     expect(container.querySelector('[data-run-kind="deleted"]')).toBeNull();
     expect(sheet).not.toHaveTextContent("慢慢");

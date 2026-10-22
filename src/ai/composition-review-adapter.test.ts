@@ -275,6 +275,31 @@ describe("CompositionReviewAdapter", () => {
     await expectInvalidTwice(value);
   });
 
+  it("接受只包含修改动作的建议，并要求不要写问题描述和修改示例", async () => {
+    const adviceOnly = invalidResult((value) => {
+      value.report.paragraphReviews.forEach((review) => {
+        review.suggestions.forEach((suggestion) => {
+          delete suggestion.problem;
+          delete suggestion.example;
+        });
+      });
+    });
+    const harness = setup({ response: adviceOnly });
+
+    await expect(harness.adapter.analyzeText({
+      config,
+      paragraphs,
+      studentName: "小艾",
+    })).resolves.toMatchObject({
+      report: { paragraphReviews: adviceOnly.report.paragraphReviews },
+    });
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("不要写问题描述，也不要写修改示例");
+    expect(prompt).toContain("一两句话");
+    expect(prompt).not.toContain("problem、advice、example");
+    expect(prompt).toContain("revisedText");
+  });
+
   it("接受包含具体动作和示例的保留建议", async () => {
     const harness = setup();
 

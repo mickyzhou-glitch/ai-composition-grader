@@ -14,7 +14,7 @@ import { AsyncButton } from "../../components/AsyncButton";
 import { AssignmentGuidancePanel } from "../../components/AssignmentGuidancePanel";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { apiFetch, errorMessage } from "../../lib/api";
-import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
+import { prepareImageForCloudUpload, uprightImageFile } from "../../lib/image-upload-transform";
 
 const presetConfig: AssignmentConfig = {
   title: "为自己鼓掌",
@@ -74,6 +74,7 @@ export default function NewReviewPage() {
   const [documentName, setDocumentName] = useState("");
   const previewRef = useRef<PendingImage[]>([]);
   const mountedRef = useRef(true);
+  const selectionGeneration = useRef(0);
   const [images, setImages] = useState<PendingImage[]>([]);
   const [review, setReview] = useState<ReviewSession | null>(null);
   const savedInputRef = useRef<{ config: AssignmentConfig; studentName: string; className: string } | null>(null);
@@ -114,7 +115,7 @@ export default function NewReviewPage() {
       const { importDocument } = await import("../../lib/document-import");
       const pages = await importDocument(file, (message) => { if (mountedRef.current) setImportProgress(message); });
       if (!mountedRef.current) return;
-      chooseFiles(pages);
+      await chooseFiles(pages);
       setDocumentName(file.name);
     } catch (caught) { if (mountedRef.current) setError(errorMessage(caught)); }
     finally { if (mountedRef.current) { setImporting(false); setImportProgress(""); } }
@@ -137,24 +138,29 @@ export default function NewReviewPage() {
     }
   }
 
-  function chooseFiles(files: File[]) {
+  async function chooseFiles(files: File[]) {
     setError("");
     if (files.length < 1 || files.length > MAX_REVIEW_IMAGES) {
       setError(`请选择 1 至 ${MAX_REVIEW_IMAGES} 张作文图片`);
       return;
     }
-    images.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
+    const generation = ++selectionGeneration.current;
+    const upright = await Promise.all(files.map((file) => uprightImageFile(file)));
+    if (!mountedRef.current || generation !== selectionGeneration.current) return;
     setDocumentName("");
-    setImages(files.map((file, index) => ({
-      key: `${file.name}-${file.lastModified}-${index}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      rotation: 0,
-    })));
+    setImages((current) => {
+      current.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
+      return upright.map((file, index) => ({
+        key: `${file.name}-${file.lastModified}-${index}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        rotation: 0,
+      }));
+    });
     setUploaded(null);
   }
 
-  function addCameraFiles(files: File[]) {
+  async function addCameraFiles(files: File[]) {
     setError("");
     if (files.length !== 1) {
       setError("请一次拍摄一张作文图片");
@@ -164,13 +170,18 @@ export default function NewReviewPage() {
       setError(`最多上传 ${MAX_REVIEW_IMAGES} 张作文图片`);
       return;
     }
-    const [file] = files;
-    setImages((current) => [...current, {
-      key: `${file.name}-${file.lastModified}-${current.length}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      rotation: 0,
-    }]);
+    const generation = ++selectionGeneration.current;
+    const [file] = await Promise.all(files.map((item) => uprightImageFile(item)));
+    if (!mountedRef.current || generation !== selectionGeneration.current) return;
+    setImages((current) => {
+      if (current.length >= MAX_REVIEW_IMAGES) return current;
+      return [...current, {
+        key: `${file.name}-${file.lastModified}-${current.length}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        rotation: 0,
+      }];
+    });
     setUploaded(null);
   }
 

@@ -45,7 +45,7 @@ export interface CompositionReviewResult {
 
 const CONTENT_RESULT_SCHEMA = [
   "根对象={report:ParagraphEvaluationReport,annotationAnchors:ParagraphAnnotationAnchor[]}",
-  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},rewrittenEssay:string[],paragraphReviews:{paragraphId:string,suggestions:{problem:string,advice:string,example:string}[],revisedText:string}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
+  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},rewrittenEssay:string[],paragraphReviews:{paragraphId:string,suggestions:{advice:string}[],revisedText:string}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
   "ParagraphAnnotationAnchor={paragraphId:string,category:typo|punctuation|sentence|expression|structure|highlight,anchorText:string,comment:string,isHighlight:boolean}",
 ].join("\n");
 
@@ -127,7 +127,7 @@ function outputTemplate(input: AnalyzeOcrTextInput): string {
       rewrittenEssay: Array.from({ length: rewriteParagraphCount(input) }, (_, index) => `按教师要求撰写的第${index + 1}自然段正文`),
       paragraphReviews: input.paragraphs.map(({ id }) => ({
         paragraphId: id,
-        suggestions: [{ problem: "该原文段的具体问题", advice: "具体修改方法", example: "可参考的修改示例" }],
+        suggestions: [{ advice: "用一两句话说明这一段怎么改" }],
         revisedText: "仅对应此原文段的完整修改稿",
       })),
       parentFeedbacks: [
@@ -161,8 +161,8 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
     "paragraphReviews 必须与输入 paragraphs 数量、paragraphId 和顺序完全一致，每个 paragraphId 恰好出现一次。",
     paragraphArrayRule(input),
-    "每段 suggestions 必须有 1 至 4 项；每项 problem、advice、example 都必须非空，并分别写明具体问题、可执行修改动作和可直接参考的修改示例。",
-    "原文已经很好时，problem 写“保留”，advice 仍须说明要保留的具体优点，example 必须引用值得保留的原句或写法。不得只写空泛判断。",
+    "每段 suggestions 必须有 1 至 4 项；每项只写 advice，用一两句话说明具体怎么改。不要写问题描述，也不要写修改示例。",
+    "原文已经很好时，advice 仍须用一两句话说明要保留的具体写法。不得只写空泛判断。",
     "每段 revisedText 必须是该段完整且非空的修改稿，不是局部句子；修改稿须保留学生的核心事实、人物关系和关键经历，不得为了文采编造内容。",
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 paragraphId、category、anchorText、comment、isHighlight。paragraphId 必须来自输入，按输入段落顺序排列；anchorText 必须逐字来自对应段落原文，无法确定时不要返回。",
