@@ -5,6 +5,7 @@ import { useEffect, useState, type PropsWithChildren } from "react";
 import { ApiError, apiFetch } from "../lib/api";
 import { replaceDocument } from "../lib/document-navigation";
 import { AuthUserProvider } from "./AuthUserContext";
+import { PendingRulesProvider } from "./PendingRulesContext";
 
 type CurrentUser = {
   id: string;
@@ -57,5 +58,5 @@ export function RequireAuthenticatedUser({ children, requireAdmin = false }: Pro
   if (requireAdmin && user.role !== "admin") {
     return <main className="auth-page"><p className="error-banner" role="alert">没有权限访问此页面</p></main>;
   }
-  return <AuthUserProvider role={user.role}>{children}</AuthUserProvider>;
+  return <AuthUserProvider role={user.role}><PendingRulesProvider>{children}</PendingRulesProvider></AuthUserProvider>;
 }

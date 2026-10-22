@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AppHeader } from "./AppHeader";
 import { AuthUserProvider } from "./AuthUserContext";
+import { PendingRulesProvider } from "./PendingRulesContext";
 
 const navigation = vi.hoisted(() => ({
   replace: vi.fn(),
@@ -91,5 +92,22 @@ describe("AppHeader", () => {
     expect(screen.getByRole("button", { name: "退出登录" })).toBeEnabled();
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(documentNavigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("长期批改规则显示待审批数量小红点", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, data: { pending: 3 } }), { headers: { "content-type": "application/json" } }));
+    render(
+      <AuthUserProvider role="teacher">
+        <PendingRulesProvider><AppHeader /></PendingRulesProvider>
+      </AuthUserProvider>,
+    );
+    expect(await screen.findByRole("link", { name: "长期批改规则（3 条待审批）" })).toHaveTextContent("3");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("/api/rule-candidates?count=1");
+    fetchMock.mockRestore();
+  });
+
+  it("没有待审批时不显示小红点", () => {
+    renderHeader();
+    expect(screen.getByRole("link", { name: "长期批改规则" })).not.toHaveTextContent(/\d/u);
   });
 });

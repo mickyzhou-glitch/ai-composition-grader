@@ -85,3 +85,18 @@ describe("D1 迁移不丢数据", () => {
     }
   });
 });
+
+describe("0013 候选规则迁移", () => {
+  it("只新建表，不重建已有表，已有数据不受影响", () => {
+    const sql = readFileSync(path.join(MIGRATIONS, "0013_grading_rule_candidates.sql"), "utf8");
+    expect(sql).not.toMatch(/DROP\s+TABLE|ALTER\s+TABLE\s+\w+\s+RENAME/iu);
+    const { db, apply } = openLikeD1();
+    const files = migrationFiles();
+    files.filter((name) => name < "0013").forEach(apply);
+    db.prepare("INSERT INTO users (id, username, password_hash, role, must_change_password, created_at, updated_at) VALUES ('u1', 'teacher', 'x', 'teacher', 0, 1, 1)").run();
+    db.prepare("INSERT INTO grading_opinions (id, owner_id, body, created_at, updated_at) VALUES ('o1', 'u1', 'x', 1, 1)").run();
+    files.filter((name) => name >= "0013").forEach(apply);
+    expect(count(db, "grading_opinions")).toBe(1);
+    expect(count(db, "grading_rule_candidates")).toBe(0);
+  });
+});

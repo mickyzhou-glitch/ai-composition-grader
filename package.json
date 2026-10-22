@@ -17,6 +17,7 @@
     "retention": "tsx scripts/retention.ts",
     "sync:model-essays": "tsx scripts/sync-model-essays.ts",
     "import:grading-opinions": "tsx scripts/import-grading-opinions.ts",
+    "backfill:rule-candidates": "tsx scripts/backfill-rule-candidates.ts",
     "start": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint",
     "test": "vitest run",

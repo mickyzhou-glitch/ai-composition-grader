@@ -66,6 +66,7 @@ export function BatchReviewPage() {
   const [dirty, setDirty] = useState(false);
   const [error, setError] = useState("");
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
+  const [standingRules, setStandingRules] = useState<string[]>([]);
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
   const [revisionError, setRevisionError] = useState("");
   const [revisionNotice, setRevisionNotice] = useState("");
@@ -279,7 +280,18 @@ export function BatchReviewPage() {
     if (dirty && !window.confirm("当前修改尚未审核保存，确认切换作文？")) return;
     setRevisionError("");
     setRevisionNotice("");
+    setStandingRules([]);
     setRevisionDialogOpen(true);
+    const title = review.config.title.trim();
+    void apiFetch<Array<{ text: string; scope: string; sourceTitle: string }>>("/api/grading-opinions")
+      .then((opinions) => {
+        if (!Array.isArray(opinions)) return;
+        const rules = opinions
+          .filter((item) => item.scope === "standing" && item.sourceTitle.trim() === title && item.text.trim())
+          .map((item) => item.text.trim());
+        setStandingRules([...new Set(rules)]);
+      })
+      .catch(() => undefined);
   }
 
   async function rejectReview(input: { commonIssue: string; contentSuggestion: string }) {
@@ -411,6 +423,6 @@ export function BatchReviewPage() {
         </section>
       </div>}
     </main>
-    {revisionDialogOpen ? <RevisionRequestDialog open submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
+    {revisionDialogOpen ? <RevisionRequestDialog open standingRules={standingRules} submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
   </div>;
 }

@@ -11,6 +11,10 @@ import {
   D1ReanalysisError,
 } from "../src/cloudflare/d1-reanalysis";
 import { D1GradingOpinions } from "../src/cloudflare/d1-grading-opinions";
+import { D1RuleCandidates } from "../src/cloudflare/d1-rule-candidates";
+import { RuleCandidateAdapter } from "../src/ai/rule-candidate-adapter";
+import { rejectionOpinionText, splitOpinionLines, type RuleSourceOpinion } from "../src/grading-opinions/rule-candidates";
+import { opinionSourceTitle } from "../src/grading-opinions/grading-opinion-repository";
 import { OPINION_CATEGORIES } from "../src/grading-opinions/standing-guidance";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { analysisFailureCode } from "../src/cloudflare/analysis-failure";
@@ -215,8 +219,37 @@ function workerAiSettings(env: WorkerEnv) {
   return createWorkerAiSettingsSource(env);
 }
 
+/** 把老师刚提交的意见交给 AI 归纳成候选长期规则；失败只记日志，不影响主流程。 */
+async function ingestRuleCandidates(
+  env: WorkerEnv,
+  ownerId: string,
+  reviewId: string,
+  opinions: RuleSourceOpinion[],
+): Promise<void> {
+  if (opinions.length === 0) return;
+  try {
+    const row = await env.DB.prepare("SELECT config, student_name FROM reviews WHERE id = ? AND owner_id = ?")
+      .bind(reviewId, ownerId).first<{ config: string; student_name: string | null }>();
+    if (!row) return;
+    const title = opinionSourceTitle(JSON.parse(row.config) as unknown);
+    const summarizer = new RuleCandidateAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient });
+    const withStudent = opinions.map((item) => ({ ...item, reviewId, studentName: row.student_name ?? "" }));
+    await new D1RuleCandidates(env.DB).ingest(ownerId, title, withStudent, summarizer);
+  } catch (error) {
+    console.error(JSON.stringify({ event: "rule_candidate_ingest_failed", reviewId, error: error instanceof Error ? error.message : String(error) }));
+  }
+}
+
+function runInBackground(ctx: ExecutionContext | undefined, task: Promise<void>): Promise<void> {
+  if (ctx) {
+    ctx.waitUntil(task);
+    return Promise.resolve();
+  }
+  return task;
+}
+
 export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/_next/static/")) {
       return secureResponse(await env.ASSETS.fetch(request), url.pathname);
@@ -317,6 +350,36 @@ export default {
     if (url.pathname === "/api/classes" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).classes(user.id) }, { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === "/api/rule-candidates" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const candidates = new D1RuleCandidates(env.DB);
+      const data = url.searchParams.get("count") === "1"
+        ? { pending: await candidates.countPending(user.id) }
+        : await candidates.listPending(user.id);
+      return Response.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
+    }
+    const ruleCandidateMatch = /^\/api\/rule-candidates\/([^/]+)\/(approve|reject)$/u.exec(url.pathname);
+    if (ruleCandidateMatch && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const candidateId = decodeURIComponent(ruleCandidateMatch[1]!);
+      if (!reanalysisRouteIdPattern.test(candidateId)) return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+      const candidates = new D1RuleCandidates(env.DB);
+      let ruleText: string | undefined;
+      if (ruleCandidateMatch[2] === "approve") {
+        try {
+          const body = await request.json().catch(() => ({})) as { ruleText?: unknown };
+          ruleText = typeof body.ruleText === "string" ? body.ruleText : undefined;
+        } catch {
+          ruleText = undefined;
+        }
+      }
+      const done = ruleCandidateMatch[2] === "approve"
+        ? await candidates.approve(user.id, candidateId, ruleText)
+        : await candidates.reject(user.id, candidateId);
+      return done
+        ? Response.json({ ok: true, data: { id: candidateId, status: ruleCandidateMatch[2] === "approve" ? "approved" : "rejected" } }, { headers: { "cache-control": "no-store" } })
+        : apiError("NOT_FOUND", "候选规则不存在或已处理", 404);
     }
     if (url.pathname === "/api/grading-opinions" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
@@ -447,6 +510,8 @@ export default {
       }
       try {
         const rejected = await new D1Reanalysis(env.DB).rejectReview(user.id, reviewId, input);
+        const rejectionText = rejectionOpinionText(input.reason, input.changeRequest);
+        await runInBackground(ctx, ingestRuleCandidates(env, user.id, reviewId, rejectionText ? [{ text: rejectionText, kind: "rejection" }] : []));
         return Response.json({ ok: true, data: rejected }, { headers: { "cache-control": "no-store" } });
       } catch (error) {
         return reanalysisFailure(error);
@@ -475,6 +540,14 @@ export default {
         await env.ANALYSIS_QUEUE.send({ jobId: result.job.id });
       } catch {
         return compensateQueueDispatch(reanalysis, user.id, [result.job.id]);
+      }
+      {
+        const revision = input as { commonIssue: string; contentSuggestion: string };
+        const opinions: RuleSourceOpinion[] = [
+          ...splitOpinionLines(revision.commonIssue).map((text) => ({ text, kind: "revision" as const })),
+          ...(revision.contentSuggestion.trim() ? [{ text: revision.contentSuggestion.trim(), kind: "revision" as const }] : []),
+        ];
+        await runInBackground(ctx, ingestRuleCandidates(env, user.id, reviewId!, opinions));
       }
       return Response.json({ ok: true, data: result }, {
         status: 202,

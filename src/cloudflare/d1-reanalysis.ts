@@ -349,7 +349,8 @@ export class D1Reanalysis {
       mode,
     );
     if (standingIssue) {
-      statements.push(this.opinionStatement(ownerId, reviewId, row!, standingIssue, "standing", jobId, now));
+      // 共性意见不再直接生效为长期规则：先存档为本篇意见，AI 归纳成候选规则后由老师审批。
+      statements.push(this.opinionStatement(ownerId, reviewId, row!, standingIssue, "essay", jobId, now));
     }
     if (essaySuggestion) {
       statements.push(this.opinionStatement(ownerId, reviewId, row!, essaySuggestion, "essay", jobId, now));

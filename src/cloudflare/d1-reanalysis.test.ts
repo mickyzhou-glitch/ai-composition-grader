@@ -221,7 +221,7 @@ describe("D1Reanalysis", () => {
     ));
     const archived = statements.filter(({ sql }) => /INSERT INTO grading_opinions/u.test(sql));
     expect(archived).toHaveLength(2);
-    expect(archived[0]?.bindings).toEqual(expect.arrayContaining(["重新关注结尾", "结构", "standing", "小明", "春天", "job-1"]));
+    expect(archived[0]?.bindings).toEqual(expect.arrayContaining(["重新关注结尾", "结构", "essay", "小明", "春天", "job-1"]));
     expect(archived[1]?.bindings).toEqual(expect.arrayContaining(["补一件事", "内容", "essay", "job-1"]));
   });
 

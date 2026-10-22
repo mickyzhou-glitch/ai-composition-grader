@@ -6,6 +6,16 @@ import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { apiFetch, errorMessage } from "../../lib/api";
+import { usePendingRules } from "../../components/PendingRulesContext";
+
+interface RuleCandidate {
+  id: string;
+  title: string;
+  ruleText: string;
+  category: string;
+  sources: Array<{ text: string; studentName?: string; kind?: string }>;
+  createdAt: string;
+}
 
 const categories = ["结构", "内容", "语言", "字数", "其他"] as const;
 type OpinionCategory = (typeof categories)[number];
@@ -119,21 +129,56 @@ export default function GradingOpinionsPage() {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [candidates, setCandidates] = useState<RuleCandidate[]>([]);
+  const pendingRules = usePendingRules();
 
-  useEffect(() => {
-    let active = true;
-    void apiFetch<GradingOpinion[]>("/api/grading-opinions")
+  function loadOpinions() {
+    return apiFetch<GradingOpinion[]>("/api/grading-opinions")
       .then((loaded) => {
-        if (!active) return;
         setOpinions(loaded);
         setDrafts(Object.fromEntries(loaded.filter((opinion) => opinion.scope === "standing").map((opinion) => [opinion.id, {
           text: opinion.text,
           category: asCategory(opinion.category),
         }])));
-      })
+      });
+  }
+
+  function loadCandidates() {
+    return apiFetch<RuleCandidate[]>("/api/rule-candidates")
+      .then((loaded) => { if (Array.isArray(loaded)) setCandidates(loaded); })
+      .catch(() => undefined);
+  }
+
+  async function decide(candidate: RuleCandidate, action: "approve" | "reject") {
+    setBusyId(candidate.id);
+    setError("");
+    try {
+      await apiFetch(`/api/rule-candidates/${encodeURIComponent(candidate.id)}/${action}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      setCandidates((current) => current.filter((item) => item.id !== candidate.id));
+      pendingRules?.refresh();
+      if (action === "approve") await loadOpinions();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    void loadOpinions()
       .catch((caught) => { if (active) setError(errorMessage(caught)); })
-      .finally(() => { if (active) setLoading(false); });
+      .finally(() => {
+        if (!active) return;
+        setLoading(false);
+        void loadCandidates();
+      });
     return () => { active = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const standing = opinions.filter((opinion) => opinion.scope === "standing");
@@ -195,6 +240,24 @@ export default function GradingOpinionsPage() {
         </div>
         {error ? <ErrorBanner message={error} /> : null}
         {loading ? <p className="loading-note" role="status">正在读取批改规则…</p> : null}
+        {candidates.length > 0 ? <section className="rule-candidate-list" aria-label="待审批的候选规则">
+          <h2>待审批（{candidates.length}）</h2>
+          <p className="muted">由 AI 从修改意见和退回意见归纳而来。通过后写入该题目的长期规则并立即生效；驳回则不导入。</p>
+          {candidates.map((candidate) => <article className="opinion-card" key={candidate.id} aria-label={`候选规则：${candidate.ruleText}`}>
+            <p className="opinion-card-meta muted">题目：{candidate.title} · {candidate.category} · {formatTime(candidate.createdAt)}</p>
+            <p><b>归纳后的规则：</b>{candidate.ruleText}</p>
+            <details open>
+              <summary>来源意见（{candidate.sources.length} 条）</summary>
+              <ul className="rule-candidate-sources">
+                {candidate.sources.map((source, index) => <li key={index}>{source.text}{source.studentName ? `（${source.studentName}）` : ""}</li>)}
+              </ul>
+            </details>
+            <div className="opinion-card-actions">
+              <AsyncButton type="button" className="button button--primary" busy={busyId === candidate.id} busyLabel="正在处理…" disabled={busyId !== null} onClick={() => void decide(candidate, "approve")}>通过</AsyncButton>
+              <button type="button" className="button button--danger-quiet" disabled={busyId !== null} onClick={() => void decide(candidate, "reject")}>驳回</button>
+            </div>
+          </article>)}
+        </section> : null}
         {!loading ? <OpinionStats label="长期规则统计" opinions={standing} /> : null}
         {!loading ? <OpinionStats label="仅当前文章统计" opinions={essay} /> : null}
         {!loading && standing.length === 0 ? <p className="muted">还没有长期批改规则。</p> : null}

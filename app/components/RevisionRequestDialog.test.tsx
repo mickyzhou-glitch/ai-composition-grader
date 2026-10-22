@@ -1,8 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { within, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { RevisionRequestDialog } from "./RevisionRequestDialog";
+import { appendRuleText, removeRuleText, RevisionRequestDialog } from "./RevisionRequestDialog";
 
 describe("RevisionRequestDialog", () => {
   function renderDialog(overrides: Partial<React.ComponentProps<typeof RevisionRequestDialog>> = {}) {
@@ -32,8 +32,8 @@ describe("RevisionRequestDialog", () => {
     const submit = screen.getByRole("button", { name: "提交后台修改并继续" });
 
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/永久存档为这个题目的长期批改规则/)).toBeVisible();
-    expect(screen.getByText(/只对题目相同的作文生效/)).toBeVisible();
+    expect(screen.getByText(/审批通过后才对同名作文生效/)).toBeVisible();
+    expect(screen.getByText(/才对同名作文生效/)).toBeVisible();
     expect(screen.getByText(/只用于本篇重新分析/)).toBeVisible();
     await user.type(commonIssue, "  严格五段  ");
     expect(submit).toBeEnabled();
@@ -113,5 +113,32 @@ describe("RevisionRequestDialog", () => {
     );
     await user.keyboard("{Escape}");
     expect(blockedClose).toHaveBeenCalledTimes(0);
+  });
+
+  it("列出已通过的长期规则，可多选填入输入框，取消时删掉对应文字", async () => {
+    const onSubmit = vi.fn();
+    const user = userEvent.setup();
+    render(<RevisionRequestDialog open standingRules={["开头点题。", "结尾升华。"]} submitting={false} error="" onClose={vi.fn()} onSubmit={onSubmit} onReject={vi.fn()} />);
+    const field = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
+    const rules = screen.getByRole("group", { name: "已通过的长期规则" });
+    await user.click(within(rules).getByRole("checkbox", { name: "开头点题。" }));
+    await user.click(within(rules).getByRole("checkbox", { name: "结尾升华。" }));
+    expect(field).toHaveValue("开头点题。\n结尾升华。");
+    await user.type(field, "\n第三段写细节");
+    await user.click(within(rules).getByRole("checkbox", { name: "开头点题。" }));
+    expect(field).toHaveValue("结尾升华。\n第三段写细节");
+    await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
+    expect(onSubmit).toHaveBeenCalledWith({ commonIssue: "结尾升华。\n第三段写细节", contentSuggestion: "" });
+  });
+
+  it("没有已通过规则时不显示选项", () => {
+    render(<RevisionRequestDialog open submitting={false} error="" onClose={vi.fn()} onSubmit={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "已通过的长期规则" })).not.toBeInTheDocument();
+  });
+
+  it("removeRuleText 只删完全相同的一行，编辑过的保留", () => {
+    expect(removeRuleText("开头点题。\n开头点题，并写清时间。", "开头点题。")).toBe("开头点题，并写清时间。");
+    expect(removeRuleText("开头点题，并写清时间。", "开头点题。")).toBe("开头点题，并写清时间。");
+    expect(appendRuleText("", "a")).toBe("a");
   });
 });
