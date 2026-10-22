@@ -10,6 +10,8 @@ import {
   D1ReanalysisBatchError,
   D1ReanalysisError,
 } from "../src/cloudflare/d1-reanalysis";
+import { D1GradingOpinions } from "../src/cloudflare/d1-grading-opinions";
+import { MAX_GRADING_OPINION_BODY_CHARS } from "../src/grading-opinions/standing-guidance";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
 import { analysisFailureCode } from "../src/cloudflare/analysis-failure";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
@@ -53,6 +55,10 @@ const editOcrParagraphsSchema = z.object({
     paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
     text: z.string().trim().min(1),
   }).strict()).min(1),
+}).strict();
+
+const gradingOpinionUpdateSchema = z.object({
+  body: z.string().trim().min(1).max(MAX_GRADING_OPINION_BODY_CHARS),
 }).strict();
 
 const paragraphRewriteSchema = z.object({
@@ -307,6 +313,38 @@ export default {
     if (url.pathname === "/api/classes" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).classes(user.id) }, { headers: { "cache-control": "no-store" } });
+    }
+    if (url.pathname === "/api/grading-opinions" && request.method === "GET") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const data = await new D1GradingOpinions(env.DB).list(user.id);
+      return Response.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
+    }
+    const gradingOpinionMatch = /^\/api\/grading-opinions\/([^/]+)$/u.exec(url.pathname);
+    if (gradingOpinionMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const opinionId = decodeURIComponent(gradingOpinionMatch[1]);
+      if (!reanalysisRouteIdPattern.test(opinionId)) {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+      }
+      const opinions = new D1GradingOpinions(env.DB);
+      if (request.method === "DELETE") {
+        const deleted = await opinions.delete(user.id, opinionId);
+        return deleted
+          ? Response.json({ ok: true, data: { deleted: true } }, { headers: { "cache-control": "no-store" } })
+          : apiError("NOT_FOUND", "批改意见不存在", 404);
+      }
+      try {
+        const body = gradingOpinionUpdateSchema.parse(await request.json()).body;
+        const updated = await opinions.update(user.id, opinionId, body);
+        return updated
+          ? Response.json({ ok: true, data: updated }, { headers: { "cache-control": "no-store" } })
+          : apiError("NOT_FOUND", "批改意见不存在", 404);
+      } catch (error) {
+        if (error instanceof ZodError || error instanceof SyntaxError || error instanceof TypeError) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        throw error;
+      }
     }
     if (url.pathname === "/api/reviews" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);

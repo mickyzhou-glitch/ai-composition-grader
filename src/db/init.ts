@@ -77,6 +77,21 @@ CREATE TABLE IF NOT EXISTS saved_assignments (
 CREATE INDEX IF NOT EXISTS saved_assignments_owner_updated_at_idx
   ON saved_assignments(owner_id, updated_at);
 
+CREATE TABLE IF NOT EXISTS grading_opinions (
+  id TEXT PRIMARY KEY NOT NULL,
+  owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  body TEXT NOT NULL CHECK (length(body) > 0),
+  source_review_id TEXT,
+  source_student_name TEXT NOT NULL DEFAULT '',
+  source_class_name TEXT NOT NULL DEFAULT '',
+  source_title TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS grading_opinions_owner_created_idx
+  ON grading_opinions(owner_id, created_at, id);
+
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY NOT NULL,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

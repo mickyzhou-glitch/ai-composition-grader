@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import {
   D1Reanalysis,
   D1ReanalysisBatchError,
@@ -214,7 +215,16 @@ describe("D1Reanalysis", () => {
     });
     expect(update.sql).not.toContain("sourceRevision");
     expect(insert.bindings).toContain("full");
-    expect(insert.bindings).toContain("[不合适原因]\n原批改不合适\n[修改要求]\n重新关注结尾");
+    expect(insert.bindings).toContain(guidanceWithStandingOpinions(
+      "[不合适原因]\n原批改不合适\n[修改要求]\n重新关注结尾",
+      [{ body: "为什么不合适：原批改不合适\n应该怎么改：重新关注结尾", createdAt: 1 }],
+    ));
+    const archived = statements.find(({ sql }) => /INSERT INTO grading_opinions/u.test(sql));
+    expect(archived?.bindings).toEqual(expect.arrayContaining([
+      "为什么不合适：原批改不合适\n应该怎么改：重新关注结尾",
+      "小明",
+      "春天",
+    ]));
   });
 
   it("逐段报告与 OCR v2 单篇退回排 content_only", async () => {

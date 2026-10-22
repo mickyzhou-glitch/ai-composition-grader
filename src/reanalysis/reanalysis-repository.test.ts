@@ -17,6 +17,7 @@ import {
 } from "../jobs/analysis-job-metadata";
 import { ReviewService } from "../services/review-service";
 import { ReviewFileStore } from "../storage/review-file-store";
+import { gradingOpinionBody, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { formatRevisionTeacherGuidance, REANALYSIS_SKIP_REASONS } from "./contracts";
 import { ReanalysisDomainError, ReanalysisRepository } from "./reanalysis-repository";
 import { ReanalysisService } from "./reanalysis-service";
@@ -322,17 +323,29 @@ describe("ReanalysisRepository requestRevision", () => {
       imageRevision: 2,
       ocrCheckpoint: JSON.stringify(checkpoint),
     });
+    const formattedGuidance = formatRevisionTeacherGuidance(
+      revisionInput().reason,
+      revisionInput().changeRequest,
+    );
     expect(opened.sqlite.prepare(`
       SELECT mode, status, teacher_guidance AS teacherGuidance
       FROM analysis_jobs WHERE id = ?
     `).get(result.job.id)).toEqual({
       mode: "full",
       status: "queued",
-      teacherGuidance: formatRevisionTeacherGuidance(
-        revisionInput().reason,
-        revisionInput().changeRequest,
-      ),
+      teacherGuidance: guidanceWithStandingOpinions(formattedGuidance, [{
+        body: gradingOpinionBody(revisionInput().reason, revisionInput().changeRequest)!,
+        createdAt: NOW.valueOf(),
+      }]),
     });
+    expect(opened.sqlite.prepare(`
+      SELECT body, source_student_name AS sourceStudentName, source_title AS sourceTitle
+      FROM grading_opinions WHERE owner_id = ?
+    `).all(OWNER)).toEqual([{
+      body: gradingOpinionBody(revisionInput().reason, revisionInput().changeRequest),
+      sourceStudentName: "艾绮",
+      sourceTitle: "My  Essay",
+    }]);
   });
 
   it("完全不能用只存档并标为审核不通过，不创建分析任务，之后仍可重新分析", () => {

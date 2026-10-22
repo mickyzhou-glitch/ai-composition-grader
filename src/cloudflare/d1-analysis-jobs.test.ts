@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { STANDING_GUIDANCE_HEADER } from "../grading-opinions/standing-guidance";
 import { D1AnalysisJobs } from "./d1-analysis-jobs";
 
 describe("D1AnalysisJobs", () => {
@@ -428,6 +429,63 @@ describe("D1AnalysisJobs", () => {
     await expect(jobs.enqueue("teacher-1", "review-1", {
       teacherGuidance: `${maximumGuidance}见`,
     })).rejects.toThrow("teacherGuidance must be at most 1100 characters");
+  });
+
+  it("新批改把老师存档的长期意见追加进任务，且不因存档放宽 1100 字的本次意见上限", async () => {
+    const statements: Array<{ query: string; bindings: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((query: string) => {
+        const statement = {
+          query,
+          bindings: [] as unknown[],
+          bind(...bindings: unknown[]) {
+            this.bindings = bindings;
+            return this;
+          },
+          async first() {
+            if (query.includes("FROM reviews")) return {
+              id: "review-1",
+              revision: 2,
+              image_revision: 4,
+              ocr_checkpoint: null,
+              image_count: 1,
+            };
+            if (query.includes("ORDER BY created_at DESC")) return null;
+            return {
+              id: "job-2",
+              review_id: "review-1",
+              mode: "full",
+              status: "queued",
+              progress_stage: "queued",
+              error_code: null,
+              created_at: 1_700_000_000_000,
+              finished_at: null,
+            };
+          },
+          async all() {
+            return query.includes("FROM grading_opinions")
+              ? { results: [{ body: "应该怎么改：严格五段", updatedAt: 20 }, { body: "应该怎么改：严格五段", updatedAt: 10 }] }
+              : { results: [] };
+          },
+        };
+        statements.push(statement);
+        return statement;
+      }),
+      batch: vi.fn(async () => [
+        { meta: { changes: 1 } },
+        { meta: { changes: 1 } },
+      ]),
+    } as unknown as D1Database;
+
+    await expect(new D1AnalysisJobs(database).enqueue("teacher-1", "review-1", {
+      teacherGuidance: "本次只改结尾",
+    })).resolves.toMatchObject({ newlyQueued: true });
+
+    const guidance = statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings
+      .find((binding) => typeof binding === "string" && binding.includes("本次只改结尾"));
+    expect(guidance).toEqual(expect.stringContaining(STANDING_GUIDANCE_HEADER));
+    expect(guidance).toEqual(expect.stringContaining("1. 应该怎么改：严格五段"));
+    expect(String(guidance).match(/严格五段/gu)).toHaveLength(1);
   });
 
   it("accepts the OCR and annotation mapping progress stages", async () => {

@@ -5,6 +5,8 @@ import { and, asc, desc, eq, gt, isNull, lte, sql } from "drizzle-orm";
 import type { AppDatabase } from "../db/client";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema } from "../ocr/contracts";
+import { standingOpinions } from "../grading-opinions/grading-opinion-repository";
+import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import {
   ANALYSIS_JOB_METADATA_PREFIX,
@@ -261,6 +263,10 @@ export class AnalysisJobRepository {
 
       const id = this.createId();
       assertId(id, "job id");
+      const storedGuidance = guidanceWithStandingOpinions(
+        normalizedGuidance,
+        standingOpinions(transaction, ownerId),
+      );
       try {
         transaction.insert(analysisJobs).values({
           id,
@@ -274,7 +280,7 @@ export class AnalysisJobRepository {
           progressStage: "queued",
           errorCode: null,
           message: null,
-          teacherGuidance: normalizedGuidance,
+          teacherGuidance: storedGuidance,
           createdAt: now,
           startedAt: null,
           finishedAt: null,

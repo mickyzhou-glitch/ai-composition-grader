@@ -1,3 +1,5 @@
+import { listD1StandingOpinions } from "./d1-grading-opinions";
+import { gradingOpinionBody, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -30,6 +32,7 @@ interface ReviewRow {
   id: string;
   status: string;
   student_name: string;
+  class_name?: string | null;
   config: string;
   revision: number;
   image_revision: number;
@@ -131,6 +134,14 @@ function ocrGuard(mode: AnalysisMode): string {
 function configTitle(config: string): string {
   const value = typeof config === "string" ? JSON.parse(config) : config;
   return normalizeAssignmentTitle(assignmentConfigSchema.parse(value).title);
+}
+
+function safeTitle(config: string): string {
+  try {
+    return configTitle(config);
+  } catch {
+    return "";
+  }
 }
 
 function publicReview(row: ReviewRow): { studentName: string; title: string } {
@@ -271,6 +282,7 @@ export class D1Reanalysis {
     const now = Date.now();
     const rejectionReason = input.reason.trim() || null;
     const rejectionChangeRequest = input.changeRequest.trim() || null;
+    const opinionBody = gradingOpinionBody(input.reason, input.changeRequest);
     const updated = await this.database.prepare(`
       UPDATE reviews SET status = 'rejected',
         rejection_reason = ?, rejection_change_request = ?,
@@ -296,6 +308,7 @@ export class D1Reanalysis {
       await this.assertRequestable(await this.readReview(ownerId, reviewId), input.expectedRevision);
       throw new D1ReanalysisError("REVISION_CONFLICT");
     }
+    if (opinionBody) await this.insertOpinion(ownerId, reviewId, row!, opinionBody, now);
     return {
       id: reviewId,
       status: "rejected",
@@ -314,7 +327,11 @@ export class D1Reanalysis {
     this.assertRequestable(row, input.expectedRevision);
     const jobId = crypto.randomUUID();
     const now = Date.now();
-    const teacherGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
+    const formattedGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
+    const opinionBody = gradingOpinionBody(input.reason, input.changeRequest);
+    const standing = await listD1StandingOpinions(this.database, ownerId);
+    if (opinionBody) standing.unshift({ body: opinionBody, createdAt: now });
+    const teacherGuidance = guidanceWithStandingOpinions(formattedGuidance, standing) ?? formattedGuidance;
     const mode = reanalysisMode(row!);
     const statements = this.requestStatements(
       ownerId,
@@ -325,6 +342,7 @@ export class D1Reanalysis {
       teacherGuidance,
       mode,
     );
+    if (opinionBody) statements.push(this.opinionStatement(ownerId, reviewId, row!, opinionBody, now));
     let outcomes: D1Outcome[];
     try {
       outcomes = await this.database.batch(statements) as D1Outcome[];
@@ -399,6 +417,10 @@ export class D1Reanalysis {
     const mode = reanalysisMode(row!);
     const jobId = crypto.randomUUID();
     const now = Date.now();
+    const teacherGuidance = guidanceWithStandingOpinions(
+      null,
+      await listD1StandingOpinions(this.database, ownerId),
+    );
     const statements = this.commitStatements(
       ownerId,
       item,
@@ -407,6 +429,7 @@ export class D1Reanalysis {
       jobId,
       now,
       mode,
+      teacherGuidance,
     );
     let outcomes: D1Outcome[];
     try {
@@ -423,7 +446,7 @@ export class D1Reanalysis {
 
   private async readReview(ownerId: string, reviewId: string): Promise<ReviewRow | null> {
     return this.database.prepare(`
-      SELECT reviews.id, reviews.status, reviews.student_name, reviews.config,
+      SELECT reviews.id, reviews.status, reviews.student_name, reviews.class_name, reviews.config,
         reviews.revision, reviews.image_revision, reviews.ocr_checkpoint, reviews.report,
         reviews.deleting_at,
         (SELECT COUNT(*) FROM review_images WHERE review_images.review_id = reviews.id) AS image_count,
@@ -514,6 +537,7 @@ export class D1Reanalysis {
     jobId: string,
     now: number,
     mode: AnalysisMode,
+    teacherGuidance: string | null,
   ): D1ReanalysisStatement[] {
     return [
       this.database.prepare(`
@@ -561,11 +585,46 @@ export class D1Reanalysis {
           progress_stage, error_code, message, teacher_guidance, created_at, started_at, finished_at
         )
         SELECT ?, reviews.id, reviews.owner_id, ?, 'queued', 0, ?, NULL,
-          'queued', NULL, NULL, NULL, ?, NULL, NULL
+          'queued', NULL, NULL, ?, ?, NULL, NULL
         FROM reviews
         WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.analysis_run_id = ?
-      `).bind(jobId, mode, now, now, item.reviewId, ownerId, jobId),
+      `).bind(jobId, mode, now, teacherGuidance, now, item.reviewId, ownerId, jobId),
     ];
+  }
+
+  private opinionStatement(
+    ownerId: string,
+    reviewId: string,
+    row: ReviewRow,
+    body: string,
+    now: number,
+  ): D1ReanalysisStatement {
+    return this.database.prepare(`
+      INSERT INTO grading_opinions (
+        id, owner_id, body, source_review_id, source_student_name, source_class_name, source_title,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      crypto.randomUUID(),
+      ownerId,
+      body,
+      reviewId,
+      row.student_name ?? "",
+      row.class_name ?? "",
+      safeTitle(row.config),
+      now,
+      now,
+    );
+  }
+
+  private async insertOpinion(
+    ownerId: string,
+    reviewId: string,
+    row: ReviewRow,
+    body: string,
+    now: number,
+  ): Promise<void> {
+    await this.opinionStatement(ownerId, reviewId, row, body, now).run();
   }
 
   private async resolveCommitConflict(ownerId: string, item: BatchReanalysisCommitItem): Promise<never> {

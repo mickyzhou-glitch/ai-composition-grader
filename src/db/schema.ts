@@ -104,6 +104,25 @@ export const savedAssignments = sqliteTable(
   ],
 );
 
+export const gradingOpinions = sqliteTable(
+  "grading_opinions",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    body: text("body").notNull(),
+    sourceReviewId: text("source_review_id"),
+    sourceStudentName: text("source_student_name").notNull().default(""),
+    sourceClassName: text("source_class_name").notNull().default(""),
+    sourceTitle: text("source_title").notNull().default(""),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    check("grading_opinions_body_check", sql`length(${table.body}) > 0`),
+    index("grading_opinions_owner_created_idx").on(table.ownerId, table.createdAt, table.id),
+  ],
+);
+
 export const sessions = sqliteTable(
   "sessions",
   {

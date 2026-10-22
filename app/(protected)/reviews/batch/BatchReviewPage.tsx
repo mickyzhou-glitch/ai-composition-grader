@@ -366,7 +366,10 @@ export function BatchReviewPage() {
           <button type="button" aria-pressed={view === "review"} onClick={() => setView("review")}>连续审核</button>
           <button type="button" aria-pressed={view === "export"} onClick={() => setView("export")}>已复核待导出清单 ({reviewed.length})</button>
         </div>
-        <Link className="button button--quiet" href="/">返回历史</Link>
+        <div className="batch-review-topbar-actions">
+          <Link className="button button--quiet" href="/opinions">批改意见存档</Link>
+          <Link className="button button--quiet" href="/">返回历史</Link>
+        </div>
       </header>
       {error ? <ErrorBanner message={error} /> : null}
       {revisionNotice ? <div className="revision-job-notice" role="status">{revisionNotice}</div> : null}

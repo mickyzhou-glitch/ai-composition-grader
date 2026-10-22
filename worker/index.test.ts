@@ -126,6 +126,21 @@ describe("Cloudflare Worker", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
+
+  it("未登录不能查看批改意见存档", async () => {
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/grading-opinions"), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ ok: false, error: { code: "UNAUTHENTICATED" } });
+  });
+
+  it("老师可以查看自己的空批改意见存档", async () => {
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/grading-opinions", {
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true, data: [] });
+  });
+
   it("课本导入拒绝无效图片并返回 400", async () => {
     const response = await worker.fetch(new Request("https://grader.workers.dev/api/assignment-guidance", {
       method: "POST", headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },

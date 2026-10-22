@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 
 import type { AppDatabase } from "../db/client";
-import { analysisJobs, reviewImages, reviews, savedAssignments } from "../db/schema";
+import { analysisJobs, gradingOpinions, reviewImages, reviews, savedAssignments } from "../db/schema";
+import { opinionSourceTitle, standingOpinions } from "../grading-opinions/grading-opinion-repository";
+import { gradingOpinionBody, guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -45,6 +47,31 @@ export class ReanalysisDomainError extends Error {
     super(REANALYSIS_SKIP_REASONS[code]);
     this.name = "ReanalysisDomainError";
   }
+}
+
+function archiveOpinion(
+  database: Pick<AppDatabase, "insert">,
+  input: {
+    ownerId: string;
+    body: string;
+    sourceReviewId: string;
+    sourceStudentName: string;
+    sourceClassName: string;
+    sourceTitle: string;
+    createdAt: Date;
+  },
+): void {
+  database.insert(gradingOpinions).values({
+    id: randomUUID(),
+    ownerId: input.ownerId,
+    body: input.body,
+    sourceReviewId: input.sourceReviewId,
+    sourceStudentName: input.sourceStudentName,
+    sourceClassName: input.sourceClassName,
+    sourceTitle: input.sourceTitle,
+    createdAt: input.createdAt,
+    updatedAt: input.createdAt,
+  }).run();
 }
 
 function domainError(
@@ -201,11 +228,15 @@ export class ReanalysisRepository {
     const now = this.now();
     const rejectionReason = input.reason.trim() || null;
     const rejectionChangeRequest = input.changeRequest.trim() || null;
+    const opinionBody = gradingOpinionBody(input.reason, input.changeRequest);
     const execute = (): RejectReviewResult => this.database.transaction((transaction) => {
       const review = transaction.select({
         revision: reviews.revision,
         status: reviews.status,
         deletingAt: reviews.deletingAt,
+        studentName: reviews.studentName,
+        className: reviews.className,
+        config: reviews.config,
       }).from(reviews).where(and(
         eq(reviews.id, reviewId),
         eq(reviews.ownerId, ownerId),
@@ -244,6 +275,17 @@ export class ReanalysisRepository {
         inArray(reviews.status, [...ANALYZABLE_STATUSES]),
       )).run();
       if (update.changes !== 1) throw domainError("REVISION_CONFLICT");
+      if (opinionBody) {
+        archiveOpinion(transaction, {
+          ownerId,
+          body: opinionBody,
+          sourceReviewId: reviewId,
+          sourceStudentName: review.studentName,
+          sourceClassName: review.className,
+          sourceTitle: opinionSourceTitle(review.config),
+          createdAt: now,
+        });
+      }
       return {
         id: reviewId,
         status: "rejected",
@@ -267,7 +309,8 @@ export class ReanalysisRepository {
   ): AnalysisJobRecord {
     const now = this.now();
     const id = this.createId();
-    const teacherGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
+    const formattedGuidance = formatRevisionTeacherGuidance(input.reason, input.changeRequest);
+    const opinionBody = gradingOpinionBody(input.reason, input.changeRequest);
 
     const execute = (): AnalysisJobRecord => this.database.transaction((transaction) => {
       const review = transaction.select({
@@ -278,6 +321,9 @@ export class ReanalysisRepository {
         ocrCheckpoint: reviews.ocrCheckpoint,
         report: reviews.report,
         pdfFilename: reviews.pdfFilename,
+        studentName: reviews.studentName,
+        className: reviews.className,
+        config: reviews.config,
       }).from(reviews).where(and(
         eq(reviews.id, reviewId),
         eq(reviews.ownerId, ownerId),
@@ -301,6 +347,21 @@ export class ReanalysisRepository {
       const mode = reanalysisMode(
         review.report,
         readStoredOcrCheckpoint(review.ocrCheckpoint, review.imageRevision),
+      );
+      if (opinionBody) {
+        archiveOpinion(transaction, {
+          ownerId,
+          body: opinionBody,
+          sourceReviewId: reviewId,
+          sourceStudentName: review.studentName,
+          sourceClassName: review.className,
+          sourceTitle: opinionSourceTitle(review.config),
+          createdAt: now,
+        });
+      }
+      const teacherGuidance = guidanceWithStandingOpinions(
+        formattedGuidance,
+        standingOpinions(transaction, ownerId),
       );
 
       try {
@@ -447,6 +508,7 @@ export class ReanalysisRepository {
       );
       const now = this.now();
       const id = this.createId();
+      const teacherGuidance = guidanceWithStandingOpinions(null, standingOpinions(transaction, ownerId));
       try {
         transaction.insert(analysisJobs).values({
           id,
@@ -460,7 +522,7 @@ export class ReanalysisRepository {
           progressStage: "queued",
           errorCode: null,
           message: reanalysisJobMarker(row.pdfFilename),
-          teacherGuidance: null,
+          teacherGuidance,
           createdAt: now,
           startedAt: null,
           finishedAt: null,
