@@ -532,20 +532,25 @@ describe("ReanalysisRepository requestRevision", () => {
   it.each([
     ["missing checkpoint", null, 2],
     ["stale checkpoint", JSON.stringify(checkpoint), 3],
-  ])("%s 时返回 OCR_NOT_CURRENT 且不留半状态", (_case, ocrCheckpoint, imageRevision) => {
+    ["unreadable checkpoint", JSON.stringify({ sourceRevision: 2 }), 2],
+  ])("%s 且原图仍在时按 full 重新识别，不跳过", (_case, ocrCheckpoint, imageRevision) => {
     opened.sqlite.prepare(`
       UPDATE reviews SET ocr_checkpoint = ?, image_revision = ? WHERE id = 'review-1'
     `).run(ocrCheckpoint, imageRevision);
 
-    expect(() => service.requestRevision(OWNER, "review-1", revisionInput())).toThrow(
-      expect.objectContaining({ code: "OCR_NOT_CURRENT", status: 409 }),
-    );
+    const result = service.requestRevision(OWNER, "review-1", revisionInput());
+
+    expect(result.job).toMatchObject({ mode: "full", status: "queued" });
     expect(reviewRepository.getById(OWNER, "review-1")).toMatchObject({
-      status: "ready_for_review",
-      analysisRunId: null,
-      pdfFilename: "old.pdf",
+      status: "analyzing",
+      analysisRunId: result.job.id,
     });
-    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 0 });
+    expect(opened.sqlite.prepare(`
+      SELECT image_revision AS imageRevision, ocr_checkpoint AS ocrCheckpoint
+      FROM reviews WHERE id = 'review-1'
+    `).get()).toEqual({ imageRevision, ocrCheckpoint });
+    expect(opened.sqlite.prepare("SELECT mode FROM analysis_jobs WHERE id = ?").get(result.job.id))
+      .toEqual({ mode: "full" });
   });
 
   it("有活动任务时返回 ANALYSIS_ACTIVE 且不覆盖原任务", () => {
@@ -884,11 +889,11 @@ describe("ReanalysisRepository requestRevision", () => {
     });
   });
 
-  it("图片记录缺失时返回 REVIEW_UNAVAILABLE 且不入队", () => {
+  it("图片记录缺失时返回 IMAGES_MISSING 且不入队", () => {
     opened.sqlite.prepare("DELETE FROM review_images WHERE review_id = 'review-1'").run();
 
     expect(() => service.requestRevision(OWNER, "review-1", revisionInput())).toThrow(
-      expect.objectContaining({ code: "REVIEW_UNAVAILABLE", status: 409 }),
+      expect.objectContaining({ code: "IMAGES_MISSING", status: 409 }),
     );
     expect(opened.sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 0 });
     expect(reviewRepository.getById(OWNER, "review-1")).toMatchObject({
@@ -1014,6 +1019,14 @@ describe("ReanalysisRepository requestRevision", () => {
         assignmentUpdatedAt: NOW.toISOString(),
       },
       {
+        reviewId: "review-stale-ocr",
+        studentName: "艾绮",
+        title: "My  Essay",
+        expectedRevision: 3,
+        assignmentId: "assignment-z",
+        assignmentUpdatedAt: NOW.toISOString(),
+      },
+      {
         reviewId: "review-1",
         studentName: "艾绮",
         title: "My  Essay",
@@ -1037,13 +1050,6 @@ describe("ReanalysisRepository requestRevision", () => {
         reason: REANALYSIS_SKIP_REASONS.REVIEW_NOT_FOUND,
       },
       {
-        reviewId: "review-stale-ocr",
-        studentName: "艾绮",
-        title: "My  Essay",
-        code: "OCR_NOT_CURRENT",
-        reason: REANALYSIS_SKIP_REASONS.OCR_NOT_CURRENT,
-      },
-      {
         reviewId: "review-active",
         studentName: "艾绮",
         title: "My  Essay",
@@ -1061,8 +1067,8 @@ describe("ReanalysisRepository requestRevision", () => {
         reviewId: "review-no-images",
         studentName: "艾绮",
         title: "My  Essay",
-        code: "REVIEW_UNAVAILABLE",
-        reason: REANALYSIS_SKIP_REASONS.REVIEW_UNAVAILABLE,
+        code: "IMAGES_MISSING",
+        reason: REANALYSIS_SKIP_REASONS.IMAGES_MISSING,
       },
     ]);
     expect(opened.sqlite.prepare(`
@@ -1344,27 +1350,30 @@ describe("ReanalysisRepository requestRevision", () => {
 
     const result = repository.commitBatch(OWNER, reviewIds.map((reviewId) => commitItem(reviewId)));
 
-    expect(result.submitted).toEqual([]);
+    expect(result.submitted).toEqual([
+      { reviewId: "commit-no-ocr", jobId: "reanalysis-job-1", revision: 4 },
+      { reviewId: "commit-stale-ocr", jobId: "reanalysis-job-2", revision: 4 },
+    ]);
     expect(result.skipped).toEqual([
       {
         reviewId: "commit-other-owner",
         code: "REVIEW_NOT_FOUND",
         reason: REANALYSIS_SKIP_REASONS.REVIEW_NOT_FOUND,
       },
-      ...["commit-deleting", "commit-unavailable", "commit-no-images"].map((reviewId) => ({
+      ...["commit-deleting", "commit-unavailable"].map((reviewId) => ({
         reviewId,
         studentName: "艾绮",
         title: "My  Essay",
         code: "REVIEW_UNAVAILABLE" as const,
         reason: REANALYSIS_SKIP_REASONS.REVIEW_UNAVAILABLE,
       })),
-      ...["commit-no-ocr", "commit-stale-ocr"].map((reviewId) => ({
-        reviewId,
+      {
+        reviewId: "commit-no-images",
         studentName: "艾绮",
         title: "My  Essay",
-        code: "OCR_NOT_CURRENT" as const,
-        reason: REANALYSIS_SKIP_REASONS.OCR_NOT_CURRENT,
-      })),
+        code: "IMAGES_MISSING" as const,
+        reason: REANALYSIS_SKIP_REASONS.IMAGES_MISSING,
+      },
       {
         reviewId: "commit-active",
         studentName: "艾绮",
@@ -1374,14 +1383,24 @@ describe("ReanalysisRepository requestRevision", () => {
       },
     ]);
     expect(opened.sqlite.prepare(`
+      SELECT id, mode FROM analysis_jobs WHERE review_id IN ('commit-no-ocr', 'commit-stale-ocr') ORDER BY id
+    `).all()).toEqual([
+      { id: "reanalysis-job-1", mode: "full" },
+      { id: "reanalysis-job-2", mode: "full" },
+    ]);
+    expect(opened.sqlite.prepare(`
       SELECT id, revision, analysis_run_id AS analysisRunId
       FROM reviews WHERE id LIKE 'commit-%' ORDER BY id
-    `).all()).toEqual(reviewIds.slice().sort().map((id) => ({
-      id,
-      revision: 3,
-      analysisRunId: null,
-    })));
-    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 1 });
+    `).all()).toEqual([
+      { id: "commit-active", revision: 3, analysisRunId: null },
+      { id: "commit-deleting", revision: 3, analysisRunId: null },
+      { id: "commit-no-images", revision: 3, analysisRunId: null },
+      { id: "commit-no-ocr", revision: 4, analysisRunId: "reanalysis-job-1" },
+      { id: "commit-other-owner", revision: 3, analysisRunId: null },
+      { id: "commit-stale-ocr", revision: 4, analysisRunId: "reanalysis-job-2" },
+      { id: "commit-unavailable", revision: 3, analysisRunId: null },
+    ]);
+    expect(opened.sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 3 });
   });
 
   it("预览后框架变化时跳过，不信任客户端的旧版本", () => {

@@ -29,6 +29,7 @@ import {
   OcrCheckpointError,
   ocrCheckpointSchema,
   publicOcrView,
+  readStoredOcrCheckpoint,
   type OcrCheckpoint,
   type OcrCheckpointV2,
   type OcrParagraphTextEdit,
@@ -455,17 +456,8 @@ export class ReviewRepository {
       .orderBy(annotations.position)
       .all();
 
-    let ocr: PublicOcrView | null = null;
-    if (review.ocrCheckpoint !== null) {
-      try {
-        const checkpoint = ocrCheckpointSchema.parse(review.ocrCheckpoint);
-        if (checkpoint.sourceRevision === review.imageRevision) {
-          ocr = publicOcrView(checkpoint);
-        }
-      } catch {
-        throw new CorruptReviewDataError(id, "ocrCheckpoint");
-      }
-    }
+    const storedOcr = readStoredOcrCheckpoint(review.ocrCheckpoint, review.imageRevision);
+    const ocr: PublicOcrView | null = storedOcr ? publicOcrView(storedOcr) : null;
     const { imageRevision: _imageRevision, ocrCheckpoint: _ocrCheckpoint, ...safeReview } = review;
     void _imageRevision;
     void _ocrCheckpoint;
@@ -507,18 +499,10 @@ export class ReviewRepository {
       isNull(reviews.deletingAt),
     )).get();
     if (!row) throw new ReviewNotFoundError(id);
-    if (row.ocrCheckpoint === null) {
-      return { imageRevision: row.imageRevision, checkpoint: null };
-    }
-    try {
-      const checkpoint = ocrCheckpointSchema.parse(row.ocrCheckpoint);
-      return {
-        imageRevision: row.imageRevision,
-        checkpoint: checkpoint.sourceRevision === row.imageRevision ? checkpoint : null,
-      };
-    } catch {
-      throw new CorruptReviewDataError(id, "ocrCheckpoint");
-    }
+    return {
+      imageRevision: row.imageRevision,
+      checkpoint: readStoredOcrCheckpoint(row.ocrCheckpoint, row.imageRevision),
+    };
   }
 
   list(ownerId: string): ReviewRecord[] {

@@ -290,7 +290,7 @@ describe("ReviewService analysis CAS", () => {
 
     expect(prepared.checkpoint).toBeNull();
     expect(prepared.imageDataUrls).toEqual([
-      `data:image/jpeg;base64,${Buffer.from("ai").toString("base64")}`,
+      `data:image/jpeg;base64,${Buffer.from("original").toString("base64")}`,
     ]);
   });
 
@@ -343,7 +343,7 @@ describe("ReviewService analysis CAS", () => {
     });
 
     expect(recognize).toHaveBeenCalledWith([
-      `data:image/jpeg;base64,${Buffer.from("ai").toString("base64")}`,
+      `data:image/jpeg;base64,${Buffer.from("original").toString("base64")}`,
     ]);
     expect(jobs.getById(OWNER_ID, "paragraph-full-job")).toMatchObject({ status: "succeeded" });
     expect(repository.getById(OWNER_ID, "review-1")).toMatchObject({

@@ -257,6 +257,24 @@ export const ocrCheckpointSchema = z.union([
   ocrCheckpointV1Schema,
 ]);
 
+/** A checkpoint is current only when it parses and belongs to the stored images. */
+export function readStoredOcrCheckpoint(
+  value: unknown,
+  imageRevision: number,
+): OcrCheckpoint | null {
+  let candidate = value;
+  if (typeof value === "string") {
+    try {
+      candidate = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+  const parsed = ocrCheckpointSchema.safeParse(candidate);
+  if (!parsed.success || parsed.data.sourceRevision !== imageRevision) return null;
+  return parsed.data;
+}
+
 export const reviewAnnotationAnchorSchema = z.object({
   pageIndex: z.number().int().nonnegative(),
   category: annotationCategorySchema,

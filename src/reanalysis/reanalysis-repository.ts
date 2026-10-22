@@ -14,7 +14,7 @@ import {
   encodeReanalysisReadyMarker,
 } from "../jobs/analysis-job-metadata";
 import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mode";
-import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
+import { readStoredOcrCheckpoint, type OcrCheckpoint } from "../ocr/contracts";
 import {
   formatRevisionTeacherGuidance,
   normalizeAssignmentTitle,
@@ -52,21 +52,8 @@ function domainError(
   return new ReanalysisDomainError(code, code === "REVIEW_NOT_FOUND" ? 404 : 409, review);
 }
 
-function assertCurrentOcr(ocrCheckpoint: unknown, imageRevision: number): OcrCheckpoint {
-  const parsed = ocrCheckpointSchema.safeParse(ocrCheckpoint);
-  if (!parsed.success || parsed.data.sourceRevision !== imageRevision) {
-    throw domainError("OCR_NOT_CURRENT");
-  }
-  return parsed.data;
-}
-
-function hasCurrentOcr(ocrCheckpoint: unknown, imageRevision: number): boolean {
-  const parsed = ocrCheckpointSchema.safeParse(ocrCheckpoint);
-  return parsed.success && parsed.data.sourceRevision === imageRevision;
-}
-
-function reanalysisMode(report: unknown, checkpoint: OcrCheckpoint): AnalysisMode {
-  const requested = checkpoint.version === 2 && isParagraphEvaluationReport(report)
+function reanalysisMode(report: unknown, checkpoint: OcrCheckpoint | null): AnalysisMode {
+  const requested = checkpoint?.version === 2 && isParagraphEvaluationReport(report)
     ? "content_only"
     : "full";
   return analysisModeForCheckpoint(requested, checkpoint);
@@ -174,10 +161,10 @@ export class ReanalysisRepository {
       const title = normalizeAssignmentTitle(assignmentConfigSchema.parse(row.config).title);
       const publicReview = { studentName: row.studentName, title };
       let skipCode: ReanalysisSkipCode | null = null;
-      if (row.deletingAt !== null || !imageReviewIds.has(reviewId)) {
+      if (row.deletingAt !== null) {
         skipCode = "REVIEW_UNAVAILABLE";
-      } else if (!hasCurrentOcr(row.ocrCheckpoint, row.imageRevision)) {
-        skipCode = "OCR_NOT_CURRENT";
+      } else if (!imageReviewIds.has(reviewId)) {
+        skipCode = "IMAGES_MISSING";
       } else if (activeReviewIds.has(reviewId)) {
         skipCode = "ANALYSIS_ACTIVE";
       } else if (!ANALYZABLE_STATUSES.includes(row.status as (typeof ANALYZABLE_STATUSES)[number])) {
@@ -232,7 +219,7 @@ export class ReanalysisRepository {
 
       const image = transaction.select({ id: reviewImages.id }).from(reviewImages)
         .where(eq(reviewImages.reviewId, reviewId)).get();
-      if (!image) throw domainError("REVIEW_UNAVAILABLE");
+      if (!image) throw domainError("IMAGES_MISSING");
 
       const active = transaction.select({ id: analysisJobs.id }).from(analysisJobs).where(and(
         eq(analysisJobs.reviewId, reviewId),
@@ -244,7 +231,7 @@ export class ReanalysisRepository {
       }
       const mode = reanalysisMode(
         review.report,
-        assertCurrentOcr(review.ocrCheckpoint, review.imageRevision),
+        readStoredOcrCheckpoint(review.ocrCheckpoint, review.imageRevision),
       );
 
       try {
@@ -356,10 +343,7 @@ export class ReanalysisRepository {
 
       const image = transaction.select({ id: reviewImages.id }).from(reviewImages)
         .where(eq(reviewImages.reviewId, item.reviewId)).get();
-      if (!image) throw domainError("REVIEW_UNAVAILABLE", publicReview);
-      if (!hasCurrentOcr(row.ocrCheckpoint, row.imageRevision)) {
-        throw domainError("OCR_NOT_CURRENT", publicReview);
-      }
+      if (!image) throw domainError("IMAGES_MISSING", publicReview);
       const active = transaction.select({ id: analysisJobs.id }).from(analysisJobs).where(and(
         eq(analysisJobs.reviewId, item.reviewId),
         inArray(analysisJobs.status, ["queued", "running"]),
@@ -390,7 +374,7 @@ export class ReanalysisRepository {
       const assignmentConfig = assignmentConfigSchema.parse(assignment.config);
       const mode = reanalysisMode(
         row.report,
-        assertCurrentOcr(row.ocrCheckpoint, row.imageRevision),
+        readStoredOcrCheckpoint(row.ocrCheckpoint, row.imageRevision),
       );
       const now = this.now();
       const id = this.createId();

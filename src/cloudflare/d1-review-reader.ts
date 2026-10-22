@@ -6,7 +6,7 @@ import {
   reviewStatusSchema,
 } from "../domain/contracts";
 import { deliveryReadiness } from "../delivery/readiness";
-import { ocrCheckpointSchema } from "../ocr/contracts";
+import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 
 interface ReviewRow {
@@ -133,12 +133,7 @@ export class D1ReviewReader {
     try {
       const readiness = await Promise.all(results.map(async (review) => {
         const report = review.report === null ? null : JSON.parse(review.report);
-        const parsedCheckpoint = review.ocr_checkpoint === null
-          ? null
-          : ocrCheckpointSchema.parse(JSON.parse(review.ocr_checkpoint));
-        const checkpoint = parsedCheckpoint?.sourceRevision === review.image_revision
-          ? parsedCheckpoint
-          : null;
+        const checkpoint = readStoredOcrCheckpoint(review.ocr_checkpoint, review.image_revision);
         const { results: images = [] } = await this.database.prepare(`
           SELECT position, width, height FROM review_images
           WHERE review_id = ? AND EXISTS (
@@ -226,10 +221,7 @@ export class D1ReviewReader {
     }));
     const config = assignmentConfigSchema.parse(JSON.parse(review.config));
     const report = review.report === null ? null : evaluationReportSchema.parse(JSON.parse(review.report));
-    const checkpoint = review.ocr_checkpoint === null
-      ? null
-      : ocrCheckpointSchema.parse(JSON.parse(review.ocr_checkpoint));
-    const currentCheckpoint = checkpoint?.sourceRevision === review.image_revision ? checkpoint : null;
+    const currentCheckpoint = readStoredOcrCheckpoint(review.ocr_checkpoint, review.image_revision);
     const ocr = currentCheckpoint ? D1OcrCheckpointRepository.publicView(currentCheckpoint) : null;
     const reportStale = report !== null && (
       currentCheckpoint === null

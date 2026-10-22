@@ -12,6 +12,7 @@ import { ExportMenu } from "../components/ExportMenu";
 import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadLegacyCachedPdf, downloadReview, downloadReviewArchive, type ExportFormat } from "../lib/review-export";
+import { chunkItems } from "../lib/failed-regrade";
 import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, reviewDisplayStatus } from "../lib/review-queue";
 import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, ReviewView } from "../lib/types";
 import { gradeFromLegacyTotal, isLegacyEvaluationReport } from "@/src/domain/contracts";
@@ -40,6 +41,14 @@ export default function Home() {
   const [reanalysisPreview, setReanalysisPreview] = useState<BatchReanalysisPreview | null>(null);
   const [reanalysisResult, setReanalysisResult] = useState<BatchReanalysisCommitResult | null>(null);
   const [reanalysisError, setReanalysisError] = useState("");
+  const [failedRegrade, setFailedRegrade] = useState<{
+    running: boolean;
+    completed: number;
+    total: number;
+    submitted: number;
+    skipped: BatchReanalysisPreview["skipped"];
+    error: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -82,13 +91,17 @@ export default function Home() {
     () => filterReviewsByStudentName(filterReviewsByClass(reviews, classFilter), studentSearch),
     [reviews, studentSearch, classFilter],
   );
+  const failedInView = useMemo(
+    () => visibleReviews.filter((review) => review.status === "failed"),
+    [visibleReviews],
+  );
   const selectedVisibleCount = visibleReviews.filter(({ id }) => selectedReviewIds.has(id)).length;
   const hiddenSelectedCount = selectedReviewIds.size - selectedVisibleCount;
   const allVisibleSelected = visibleReviews.length > 0 && selectedVisibleCount === visibleReviews.length;
   const selectedExportableReviews = reviews.filter(({ id }) => selectedReviewIds.has(id)).filter(
     (item) => exportEligibility(item).eligible,
   );
-  const reanalysisBusy = reanalysisLoading || reanalysisSubmitting;
+  const reanalysisBusy = reanalysisLoading || reanalysisSubmitting || failedRegrade?.running === true;
 
   async function remove(review: ReviewView) {
     if (!window.confirm(`确认永久删除《${review.config.title}》？删除后不可恢复。`)) return;
@@ -230,6 +243,76 @@ export default function Home() {
     }
   }
 
+  async function regradeFailed() {
+    if (failedInView.length === 0 || reanalysisBusy || batchExporting || exporting) return;
+    const ids = failedInView.map(({ id }) => id);
+    const chunks = chunkItems(ids);
+    const skipped: BatchReanalysisPreview["skipped"] = [];
+    let submitted = 0;
+    let completed = 0;
+    setFailedRegrade({ running: true, completed: 0, total: ids.length, submitted: 0, skipped: [], error: "" });
+    setError("");
+    try {
+      for (const chunk of chunks) {
+        const preview = await apiFetch<BatchReanalysisPreview>("/api/reviews/batch-reanalysis/preview", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ reviewIds: chunk }),
+        });
+        skipped.push(...preview.skipped);
+        if (preview.matched.length > 0) {
+          const result = await apiFetch<BatchReanalysisCommitResult>("/api/reviews/batch-reanalysis", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              items: preview.matched.map((item) => ({
+                reviewId: item.reviewId,
+                expectedRevision: item.expectedRevision,
+                assignmentId: item.assignmentId,
+                expectedAssignmentUpdatedAt: item.assignmentUpdatedAt,
+              })),
+            }),
+          });
+          submitted += result.submitted.length;
+          skipped.push(...result.skipped);
+          const submittedIds = new Set(result.submitted.map(({ reviewId }) => reviewId));
+          setSelectedReviewIds((current) => {
+            const next = new Set(current);
+            submittedIds.forEach((reviewId) => next.delete(reviewId));
+            return next;
+          });
+        }
+        completed += chunk.length;
+        setFailedRegrade({
+          running: true,
+          completed,
+          total: ids.length,
+          submitted,
+          skipped: [...skipped],
+          error: "",
+        });
+      }
+      await load();
+      setFailedRegrade({
+        running: false,
+        completed: ids.length,
+        total: ids.length,
+        submitted,
+        skipped,
+        error: "",
+      });
+    } catch (caught) {
+      setFailedRegrade({
+        running: false,
+        completed,
+        total: ids.length,
+        submitted,
+        skipped,
+        error: errorMessage(caught),
+      });
+    }
+  }
+
   function closeBatchReanalysis() {
     if (reanalysisBusy) return;
     setReanalysisOpen(false);
@@ -279,7 +362,19 @@ export default function Home() {
               <button className="button button--primary" type="button" disabled={selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
                 {reanalysisLoading ? "正在预览…" : "按最新框架重新分析"}
               </button>
+              <button className="button" type="button" disabled={failedInView.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void regradeFailed()}>
+                {failedRegrade?.running ? "正在重新批改…" : `一键重新批改失败作文（${failedInView.length}）`}
+              </button>
               {selectedReviewIds.size > BATCH_REANALYSIS_LIMIT ? <span className="history-limit-note" role="status">每次最多重新分析 {BATCH_REANALYSIS_LIMIT} 篇</span> : null}
+              {failedRegrade?.running ? <p className="history-limit-note" role="status">正在重新批改失败作文，已处理 {failedRegrade.completed} / {failedRegrade.total} 篇</p> : null}
+              {failedRegrade && !failedRegrade.running ? <div className="history-limit-note" role="status">
+                <p>{failedRegrade.error
+                  ? `重新批改中断：已提交 ${failedRegrade.submitted} 篇。${failedRegrade.error}`
+                  : `重新批改结束：已提交 ${failedRegrade.submitted} 篇${failedRegrade.skipped.length > 0 ? `，跳过 ${failedRegrade.skipped.length} 篇` : "。"}`}</p>
+                {failedRegrade.skipped.length > 0 ? <ul>
+                  {failedRegrade.skipped.map((item) => <li key={`${item.reviewId}:${item.code}`}>{item.studentName ? `${item.studentName}：` : ""}{item.reason}</li>)}
+                </ul> : null}
+              </div> : null}
             </div>
           ) : null}
           {error ? <ErrorBanner message={error} onRetry={load} /> : null}

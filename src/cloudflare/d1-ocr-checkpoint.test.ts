@@ -225,4 +225,16 @@ describe("D1OcrCheckpointRepository", () => {
       }
     }
   });
+
+  it("把无法解析或与图片版本不一致的识别原文当成缺失，便于从原图重跑", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => statement({
+        first: sql.includes("image_revision")
+          ? { image_revision: 4, ocr_checkpoint: JSON.stringify({ sourceRevision: 1 }) }
+          : null,
+      })),
+    } as unknown as D1Database;
+
+    await expect(new D1OcrCheckpointRepository(database).readInternal("owner-1", "review-1")).resolves.toBeNull();
+  });
 });
