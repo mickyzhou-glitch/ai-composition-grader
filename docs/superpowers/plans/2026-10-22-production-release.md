@@ -124,3 +124,13 @@
 - Node 24，`npm run build` 后 `npx wrangler deploy`，一次成功；未写数据库，未代点重新分析
 - 冒烟（未登录）：`/`、`/api/health`（status ok）、`/login`、`/new`、`/reviews`、`/reviews/batch`、`/opinions`、`/settings`、`/pdfjs/pdf.worker.min.mjs` 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions` 401；`/dev/package.json` 404
 - 当前失败 5 篇（只读查询）：施翊婵、梁艺卓（珍贵的礼物，report 多余字段）；逯益帆（周日D，缺批注数组）；姬嘉言、张天乐（周五E，段落范围不对）
+
+## 本日第八次发布：候选长期规则（待审批）
+
+- 源码：`main@49114b7`，发布前工作区干净
+- 备份：`backups/d1-prod-before-0013-20261022-222211.sql`
+- 迁移：仅 `0013_grading_rule_candidates.sql`（只建表和索引）；迁移后 review_images 98、annotations 182、analysis_jobs 179、grading_opinions 23 与迁移前一致，新表 0 行
+- 新 Worker 版本：`271ffa83-202e-4e92-a467-484d2ead1318`（100% 流量）
+- 上一版本（回滚用）：`a7fd38b7-ee74-4c86-80d8-84907fd76167`
+- 冒烟（未登录）：页面与 PDF worker 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions`、`/api/rule-candidates`（含 `?count=1`）、`POST /api/rule-candidates/x/approve` 均 401；`/dev/package.json` 404
+- 回填：只跑了 `--dry-run`，未写入。预览共 34 条候选（这件事打动了我：两个账号分别 31 条、1 条；为自己鼓掌 2 条），与预期 12 + 1 不符，且大量是单篇作文的具体意见（人物、情节），不适合作长期规则，暂停等用户决定
