@@ -577,4 +577,98 @@ describe("CompositionReviewAdapter", () => {
     const value = invalidResult((result) => { result.report.parentFeedbacks = []; });
     await expectInvalidTwice(value);
   });
+
+  it("老师要求严格三段时按结构段归组，改后全段与完整范文逐段相同", async () => {
+    const source = [
+      { id: "paragraph-1", text: "雨很大。" },
+      { id: "paragraph-2", text: "我走进赛场。" },
+      { id: "paragraph-3", text: "我坚持跑完。" },
+      { id: "paragraph-4", text: "我明白了坚持。" },
+    ];
+    const essay = ["雨很大，我走进赛场。", "我坚持跑完。", "我明白了坚持。"];
+    const grouped = {
+      ...validResult,
+      annotationAnchors: [],
+      report: {
+        ...report,
+        rewrittenEssay: essay,
+        paragraphReviews: [
+          {
+            paragraphId: "paragraph-1",
+            sourceParagraphStart: 1,
+            sourceParagraphEnd: 2,
+            suggestions: [{ advice: "把开篇收成一段。" }],
+            revisedText: essay[0],
+          },
+          {
+            paragraphId: "paragraph-3",
+            sourceParagraphStart: 3,
+            sourceParagraphEnd: 3,
+            suggestions: [{ advice: "保留比赛过程。" }],
+            revisedText: essay[1],
+          },
+          {
+            paragraphId: "paragraph-4",
+            sourceParagraphStart: 4,
+            sourceParagraphEnd: 4,
+            suggestions: [{ advice: "点明坚持。" }],
+            revisedText: essay[2],
+          },
+        ],
+      },
+    };
+    const harness = setup({ response: grouped });
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, structureRequirements: "严格三段式：开篇、经过、感悟。" },
+      paragraphs: source,
+      studentName: "小艾",
+    });
+
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    expect(result.report.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(result.report.paragraphReviews.map((item) => item.sourceParagraphEnd)).toEqual([2, 3, 4]);
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("按这 3 个结构段归组");
+    expect(prompt).toContain("对应原文第 x–y 段");
+    expect(prompt).not.toContain("两者段数独立");
+  });
+
+  it("结构段的改后全段与范文不一致时先重试，仍不一致则改成与范文相同", async () => {
+    const source = [
+      { id: "paragraph-1", text: "雨很大。" },
+      { id: "paragraph-2", text: "我走进赛场。" },
+    ];
+    const essay = ["雨很大，我走进赛场。"];
+    const mismatched = {
+      ...validResult,
+      annotationAnchors: [],
+      report: {
+        ...report,
+        rewrittenEssay: essay,
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "合成一段。" }],
+          revisedText: "另一段文字。",
+        }],
+      },
+    };
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(mismatched))
+      .mockResolvedValueOnce(completion(mismatched));
+
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, structureRequirements: "严格一段式。" },
+      paragraphs: source,
+      studentName: "小艾",
+    });
+
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(requestAt(harness.create, 1).messages[1].content).validationError)
+      .toContain("paragraph_review_revised_mismatch");
+    expect(result.report.paragraphReviews[0]?.revisedText).toBe(essay[0]);
+    expect(result.report.rewrittenEssay).toEqual(essay);
+  });
 });

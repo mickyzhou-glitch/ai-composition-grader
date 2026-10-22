@@ -111,6 +111,21 @@ describe("validateReport paragraph coverage", () => {
     expect(validateReport(paragraphReport, { config, ocr: checkpoint })).toEqual(paragraphReport);
   });
 
+  it("接受按结构段归组、覆盖全部原文的旧字段兼容报告", () => {
+    const grouped = {
+      ...paragraphReport,
+      rewrittenEssay: ["清晨，我走进公园，听见风吹过树叶。"],
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        sourceParagraphStart: 1,
+        sourceParagraphEnd: 2,
+        suggestions: [{ advice: "把两段收成一段。" }],
+        revisedText: "清晨，我走进公园，听见风吹过树叶。",
+      }],
+    };
+    expect(validateReport(grouped, { config, ocr: checkpoint })).toEqual(grouped);
+  });
+
   it.each([
     ["遗漏", paragraphReviews.slice(0, 1)],
     ["重复", [paragraphReviews[0], { ...paragraphReviews[1], paragraphId: "paragraph-1" }]],

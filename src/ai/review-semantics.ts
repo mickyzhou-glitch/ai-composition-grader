@@ -6,6 +6,7 @@ import {
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import type { OcrCheckpoint } from "../ocr/contracts";
+import { paragraphReviewCoverageMessage } from "../domain/paragraph-review-groups";
 import { validateStructureRequirementCoverage } from "./structure-review-requirements";
 
 const EXPECTED_PARENT_FEEDBACKS = [
@@ -25,13 +26,8 @@ function validateGeneratedParagraphReport(
   paragraphIds: readonly string[],
 ): ParagraphEvaluationReport {
   const report = paragraphEvaluationReportSchema.parse(input);
-  const actualIds = report.paragraphReviews.map(({ paragraphId }) => paragraphId);
-  if (
-    actualIds.length !== paragraphIds.length
-    || actualIds.some((paragraphId, index) => paragraphId !== paragraphIds[index])
-  ) {
-    throw new Error("paragraphReviews must exactly match validated paragraph IDs in order");
-  }
+  const coverage = paragraphReviewCoverageMessage(report.paragraphReviews, paragraphIds);
+  if (coverage) throw new Error(coverage);
   if (report.themeFit === "off_topic" && report.grade !== "C") {
     throw new Error("off_topic reports must be assigned grade C");
   }

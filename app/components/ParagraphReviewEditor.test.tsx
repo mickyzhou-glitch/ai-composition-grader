@@ -212,4 +212,69 @@ describe("ParagraphReviewEditor", () => {
     expect(paragraph.textContent).toContain("天很蓝。");
     expect(paragraph.querySelector(".revision-preview")?.textContent).toBe("我非常高兴！天很蓝。");
   });
+
+  it("结构段归组后每组一个框，改后全段与完整范文同步，下划线对照合并后的原文", () => {
+    const onChange = vi.fn();
+    const essay = ["我很高兴。天很蓝。", "结尾保留。"];
+    render(<ParagraphReviewEditor
+      reviewId="review-1"
+      report={{
+        ...report,
+        rewrittenEssay: essay,
+        paragraphReviews: [
+          {
+            paragraphId: "paragraph-1",
+            sourceParagraphStart: 1,
+            sourceParagraphEnd: 2,
+            suggestions: [{ advice: "合并前两段。" }],
+            revisedText: essay[0],
+          },
+          {
+            paragraphId: "paragraph-3",
+            sourceParagraphStart: 3,
+            sourceParagraphEnd: 3,
+            suggestions: [{ advice: "保留结尾。" }],
+            revisedText: essay[1],
+          },
+        ],
+      }}
+      ocr={{
+        ...ocr,
+        paragraphs: [
+          { ...ocr.paragraphs[0], text: "我很高兴。" },
+          {
+            id: "paragraph-2",
+            paragraphIndex: 1,
+            text: "天很蓝。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.4, width: 0.5, height: 0.1 }],
+          },
+          {
+            id: "paragraph-3",
+            paragraphIndex: 2,
+            text: "结尾保留。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.6, width: 0.5, height: 0.1 }],
+          },
+        ],
+      }}
+      images={[{ id: 1, position: 0 }]}
+      disabled={false}
+      onChange={onChange}
+    />);
+
+    expect(screen.getByText("对应原文第 1–2 段")).toBeInTheDocument();
+    expect(screen.getByText("对应原文第 3 段")).toBeInTheDocument();
+    expect(screen.getAllByRole("textbox", { name: /改后全段/u })).toHaveLength(2);
+    expect(screen.getAllByLabelText("改后全段整句下划线预览")[0]).toHaveTextContent("我很高兴。天很蓝。");
+
+    fireEvent.change(screen.getByLabelText("第 1 段改后全段"), {
+      target: { value: "我非常高兴。天很蓝。" },
+    });
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
+      rewrittenEssay: ["我非常高兴。天很蓝。", "结尾保留。"],
+      paragraphReviews: [
+        expect.objectContaining({ revisedText: "我非常高兴。天很蓝。" }),
+        expect.objectContaining({ revisedText: "结尾保留。" }),
+      ],
+    }));
+  });
 });

@@ -7,7 +7,8 @@ function sectionHeading(
   block: Extract<DeliveryPageBlock, { kind: "paragraph-heading" | "suggestion-heading" | "revision-heading" }>,
 ) {
   if (block.kind === "paragraph-heading") {
-    return `【${block.essayParagraphNumber ? "完整范文·" : ""}第 ${block.essayParagraphNumber ?? block.paragraphNumber} 段${block.continued ? "（续）" : ""}】`;
+    const range = block.sourceLabel ? ` ${block.sourceLabel}` : "";
+    return `【${block.essayParagraphNumber ? "完整范文·" : ""}第 ${block.essayParagraphNumber ?? block.paragraphNumber} 段${block.continued ? "（续）" : ""}】${range}`;
   }
   const title = block.kind === "suggestion-heading" ? "修改动作" : "改后全段";
   return `【${title}${block.continued ? "（续）" : ""}】`;

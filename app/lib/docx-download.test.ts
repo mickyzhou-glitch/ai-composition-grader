@@ -306,6 +306,53 @@ describe("Word 逐段批改文档", () => {
     expect(await zip.file("[Content_Types].xml")?.async("string")).toContain("/word/theme/theme1.xml");
   });
 
+  it("结构归组后横向文本框数量等于组数而不是原文段数", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const originals = ["开篇。", "还在开篇。", "经过一。", "经过二。", "经过三。", "感悟。", "收束。"];
+    review.images = [{ id: 11, position: 0, width: 1200, height: 1600, mimeType: "image/png" }];
+    review.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+      paragraphs: originals.map((text, index) => ({
+        id: `paragraph-${index + 1}`,
+        paragraphIndex: index,
+        text,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.05 + index * 0.1, width: 0.6, height: 0.08 }],
+      })),
+    };
+    const ranges = [
+      [1, 2],
+      [3, 3],
+      [4, 5],
+      [6, 6],
+      [7, 7],
+    ];
+    review.report = {
+      ...(review.report as object),
+      rewrittenEssay: ranges.map((_, index) => `范文第${index + 1}段。`),
+      paragraphReviews: ranges.map(([start, end], index) => ({
+        paragraphId: `paragraph-${start}`,
+        sourceParagraphStart: start,
+        sourceParagraphEnd: end,
+        suggestions: [{ advice: `改好第 ${index + 1} 组。` }],
+        revisedText: `范文第${index + 1}段。`,
+      })),
+    };
+    const { documentXml } = await unpack(review);
+    const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
+    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+
+    expect(documentXml).toMatch(/w:orient="landscape"/u);
+    expect(boxes).toHaveLength(ranges.length);
+    expect(boxes[0]).toContain("对应原文第 1–2 段");
+    expect(boxes[2]).toContain("对应原文第 4–5 段");
+    expect(boxes[4]).toContain("对应原文第 7 段");
+    expect(documentXml).not.toContain("改好第 6 组");
+  });
+
   it("框内容过长时缩小字号并保留全文", async () => {
     installBrowserExport();
     const review = fixture();

@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
+import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import { countTextCharactersIncludingPunctuation } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
 import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
@@ -46,6 +47,10 @@ export function ParagraphReviewEditor({
   const [instructions, setInstructions] = useState<Record<string, string>>({});
   const paragraphs = [...ocr.paragraphs]
     .sort((left, right) => left.paragraphIndex - right.paragraphIndex);
+  const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
+  const groups = resolveReviewGroups(report.paragraphReviews, paragraphs);
+  const essayAligned = grouped
+    && report.rewrittenEssay?.length === report.paragraphReviews.length;
   const totalCharacters = report.rewrittenEssay
     ? report.rewrittenEssay.reduce((total, text) => total + countTextCharactersIncludingPunctuation(text), 0)
     : paragraphs.reduce((total, paragraph) => {
@@ -59,11 +64,15 @@ export function ParagraphReviewEditor({
     paragraphId: string,
     update: (review: ParagraphReview) => ParagraphReview,
   ) {
+    const paragraphReviews = report.paragraphReviews.map((review) => (
+      review.paragraphId === paragraphId ? update(review) : review
+    ));
     onChange({
       ...report,
-      paragraphReviews: report.paragraphReviews.map((review) => (
-        review.paragraphId === paragraphId ? update(review) : review
-      )),
+      paragraphReviews,
+      rewrittenEssay: essayAligned
+        ? paragraphReviews.map((review) => review.revisedText)
+        : report.rewrittenEssay,
     });
   }
 
@@ -83,40 +92,69 @@ export function ParagraphReviewEditor({
             aria-label={`完整范文第 ${index + 1} 段`}
             value={text}
             disabled={disabled}
-            onChange={(event) => onChange({ ...report, rewrittenEssay: report.rewrittenEssay!.map((current, i) => i === index ? event.target.value : current) })}
+            onChange={(event) => {
+            const rewrittenEssay = report.rewrittenEssay!.map((current, i) => i === index ? event.target.value : current);
+            onChange({
+              ...report,
+              rewrittenEssay,
+              paragraphReviews: essayAligned
+                ? report.paragraphReviews.map((review, reviewIndex) => (
+                  reviewIndex === index ? { ...review, revisedText: event.target.value } : review
+                ))
+                : report.paragraphReviews,
+            });
+          }}
           />
         </label>)}
       </section> : null}
-      {paragraphs.map((paragraph) => {
-        const paragraphReview = report.paragraphReviews.find(
+      {(grouped ? groups : paragraphs.map((paragraph) => {
+        const reviewIndex = report.paragraphReviews.findIndex(
           ({ paragraphId }) => paragraphId === paragraph.id,
         );
-        const paragraphNumber = paragraph.paragraphIndex + 1;
-        if (!paragraphReview) {
-          return <div className="paragraph-review-error" role="alert" key={paragraph.id}>
+        const review = report.paragraphReviews[reviewIndex];
+        return review ? {
+          reviewIndex,
+          review,
+          paragraphs: [paragraph],
+          sourceText: paragraph.text,
+          sourceLabel: null,
+          pageIndex: paragraph.segments[0]?.pageIndex,
+        } : null;
+      })).map((group, index) => {
+        if (!group) {
+          const paragraphNumber = paragraphs[index]?.paragraphIndex !== undefined
+            ? paragraphs[index].paragraphIndex + 1
+            : index + 1;
+          return <div className="paragraph-review-error" role="alert" key={`missing-${index}`}>
             第 {paragraphNumber} 段缺少逐段批改
           </div>;
         }
-        const instruction = instructions[paragraph.id] ?? "";
-        const rewriting = rewritingParagraphId === paragraph.id;
+        const paragraphReview = group.review;
+        const paragraphNumber = grouped ? index + 1 : group.paragraphs[0].paragraphIndex + 1;
+        const instruction = instructions[paragraphReview.paragraphId] ?? "";
+        const rewriting = rewritingParagraphId === paragraphReview.paragraphId;
         return (
           <section
             className="paragraph-review-unit"
-            data-paragraph-id={paragraph.id}
-            key={paragraph.id}
+            data-paragraph-id={paragraphReview.paragraphId}
+            key={paragraphReview.paragraphId}
           >
               <div className="paragraph-review-heading">
                 <h3>第 {paragraphNumber} 段</h3>
+                {group.sourceLabel ? <span>{group.sourceLabel}</span> : null}
                 {showCharacterCounts ? <span>
                   改后全段 <strong>{countTextCharactersIncludingPunctuation(paragraphReview.revisedText)}</strong> 字（含标点）
                 </span> : null}
               </div>
-              {showSourceCrops ? <ParagraphCropPreview
-                reviewId={reviewId}
-                paragraphNumber={paragraphNumber}
-                images={images}
-                segments={paragraph.segments}
-              /> : null}
+              {showSourceCrops ? group.paragraphs.map((source) => (
+                <ParagraphCropPreview
+                  key={source.id}
+                  reviewId={reviewId}
+                  paragraphNumber={source.paragraphIndex + 1}
+                  images={images}
+                  segments={source.segments}
+                />
+              )) : null}
 
               {showSuggestions ? <>
                 <h4>【修改动作】</h4>
@@ -129,7 +167,7 @@ export function ParagraphReviewEditor({
                           aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改动作`}
                           value={suggestion.advice}
                           disabled={disabled || rewriting}
-                          onChange={(event) => updateParagraph(paragraph.id, (current) => ({
+                          onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
                             ...current,
                             suggestions: current.suggestions.map((item, index) => index === suggestionIndex
                               ? { ...item, advice: event.target.value }
@@ -141,7 +179,7 @@ export function ParagraphReviewEditor({
                         type="button"
                         aria-label={`删除第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条建议`}
                         disabled={disabled || rewriting || paragraphReview.suggestions.length <= 1}
-                        onClick={() => updateParagraph(paragraph.id, (current) => ({
+                        onClick={() => updateParagraph(paragraphReview.paragraphId, (current) => ({
                           ...current,
                           suggestions: current.suggestions.filter((_, index) => index !== suggestionIndex),
                         }))}
@@ -153,7 +191,7 @@ export function ParagraphReviewEditor({
                   type="button"
                   aria-label={`新增第 ${paragraphNumber} 段建议`}
                   disabled={disabled || rewriting || paragraphReview.suggestions.length >= 4}
-                  onClick={() => updateParagraph(paragraph.id, (current) => ({
+                  onClick={() => updateParagraph(paragraphReview.paragraphId, (current) => ({
                     ...current,
                     suggestions: [...current.suggestions, emptySuggestion],
                   }))}
@@ -167,14 +205,14 @@ export function ParagraphReviewEditor({
                   aria-label={`第 ${paragraphNumber} 段${revisionLabel}`}
                   value={paragraphReview.revisedText}
                   disabled={disabled || rewriting}
-                  onChange={(event) => updateParagraph(paragraph.id, (current) => ({
+                  onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
                     ...current,
                     revisedText: event.target.value,
                   }))}
                 />
               </label>
               <RevisionPreview
-                runs={buildSentenceRevisionRuns(paragraph.text, paragraphReview.revisedText)}
+                runs={buildSentenceRevisionRuns(group.sourceText, paragraphReview.revisedText)}
                 sentenceHighlight
               />
               {onRewriteParagraph ? <div className="paragraph-rewrite-actions">
@@ -185,7 +223,7 @@ export function ParagraphReviewEditor({
                     disabled={disabled || rewritingParagraphId !== null}
                     onChange={(event) => setInstructions((current) => ({
                       ...current,
-                      [paragraph.id]: event.target.value,
+                      [paragraphReview.paragraphId]: event.target.value,
                     }))}
                   />
                 </label>
@@ -193,13 +231,13 @@ export function ParagraphReviewEditor({
                   type="button"
                   aria-label={`重新生成第 ${paragraphNumber} 段`}
                   disabled={disabled || rewritingParagraphId !== null}
-                  onClick={() => void onRewriteParagraph(paragraph.id)}
+                  onClick={() => void onRewriteParagraph(paragraphReview.paragraphId)}
                 >重新生成本段</button>
                 <button
                   type="button"
                   aria-label={`按要求重写第 ${paragraphNumber} 段`}
                   disabled={disabled || rewritingParagraphId !== null || !instruction.trim()}
-                  onClick={() => void onRewriteParagraph(paragraph.id, instruction.trim())}
+                  onClick={() => void onRewriteParagraph(paragraphReview.paragraphId, instruction.trim())}
                 >{rewriting ? "AI 正在生成…" : "按要求修改"}</button>
               </div> : null}
           </section>

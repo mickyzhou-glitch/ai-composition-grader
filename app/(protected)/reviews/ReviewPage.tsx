@@ -15,6 +15,7 @@ import {
   type ParagraphEvaluationReport,
   type ParagraphReview,
 } from "@/src/domain/contracts";
+import { paragraphReviewUsesGroups } from "@/src/domain/paragraph-review-groups";
 import { deliveryReadiness } from "@/src/delivery/readiness";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -494,12 +495,24 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           }),
         },
       );
-      changeReport({
-        ...report,
-        paragraphReviews: report.paragraphReviews.map((paragraph) => (
-          paragraph.paragraphId === paragraphId ? rewritten : paragraph
-        )),
-      });
+      const paragraphReviews = report.paragraphReviews.map((paragraph) => (
+        paragraph.paragraphId === paragraphId
+          ? {
+            ...rewritten,
+            paragraphId: paragraph.paragraphId,
+            ...(paragraph.sourceParagraphStart !== undefined ? { sourceParagraphStart: paragraph.sourceParagraphStart } : {}),
+            ...(paragraph.sourceParagraphEnd !== undefined ? { sourceParagraphEnd: paragraph.sourceParagraphEnd } : {}),
+          }
+          : paragraph
+      ));
+      const nextReport = { ...report, paragraphReviews };
+      if (
+        paragraphReviewUsesGroups(report.paragraphReviews)
+        && report.rewrittenEssay?.length === paragraphReviews.length
+      ) {
+        nextReport.rewrittenEssay = paragraphReviews.map((paragraph) => paragraph.revisedText);
+      }
+      changeReport(nextReport);
       const paragraphNumber = review.ocr.paragraphs.find(
         ({ id }) => id === paragraphId,
       )?.paragraphIndex;

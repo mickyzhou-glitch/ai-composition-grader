@@ -182,6 +182,75 @@ describe("复核页", () => {
     expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
   });
 
+  it("结构段归组后按组展示，单段重写保留原文范围并同步完整范文", async () => {
+    const essay = ["我为自己鼓掌。天很蓝。", "我明白了。"];
+    const grouped = {
+      ...paragraphReview,
+      ocr: {
+        ...paragraphReview.ocr,
+        paragraphs: [
+          paragraphReview.ocr.paragraphs[0],
+          {
+            id: "paragraph-2",
+            paragraphIndex: 1,
+            text: "天很蓝。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.4, width: 0.5, height: 0.08 }],
+          },
+          {
+            id: "paragraph-3",
+            paragraphIndex: 2,
+            text: "我明白了。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.6, width: 0.5, height: 0.08 }],
+          },
+        ],
+      },
+      report: {
+        ...paragraphReview.report,
+        rewrittenEssay: essay,
+        paragraphReviews: [
+          {
+            paragraphId: "paragraph-1",
+            sourceParagraphStart: 1,
+            sourceParagraphEnd: 2,
+            suggestions: [{ advice: "合并前两段。" }],
+            revisedText: essay[0],
+          },
+          {
+            paragraphId: "paragraph-3",
+            sourceParagraphStart: 3,
+            sourceParagraphEnd: 3,
+            suggestions: [{ advice: "保留结尾。" }],
+            revisedText: essay[1],
+          },
+        ],
+      },
+    };
+    const rewritten = {
+      paragraphId: "paragraph-1",
+      suggestions: [{ advice: "写得更具体。" }],
+      revisedText: "我听见呼吸声，为自己鼓掌。天很蓝。",
+    };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(grouped))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(rewritten));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    expect(await screen.findByText("对应原文第 1–2 段")).toBeInTheDocument();
+    expect(screen.getByText("对应原文第 3 段")).toBeInTheDocument();
+    expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(2);
+    expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
+    expect(screen.getByTestId("page-crop-1")).toBeInTheDocument();
+    expect(screen.getByTestId("page-crop-2")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重新生成第 1 段" }));
+
+    expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue(rewritten.revisedText);
+    expect(screen.getByLabelText("完整范文第 2 段")).toHaveValue(essay[1]);
+    expect(screen.getByText("对应原文第 1–2 段")).toBeInTheDocument();
+  });
+
   it("逐段报告整篇重生成使用当前 OCR 的 content_only 模式", async () => {
     const queuedJob = {
       id: "job-1", reviewId: "review-1", status: "queued", progressStage: "queued",

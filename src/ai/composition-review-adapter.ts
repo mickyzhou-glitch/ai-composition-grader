@@ -45,7 +45,7 @@ export interface CompositionReviewResult {
 
 const CONTENT_RESULT_SCHEMA = [
   "根对象={report:ParagraphEvaluationReport,annotationAnchors:ParagraphAnnotationAnchor[]}",
-  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},rewrittenEssay:string[],paragraphReviews:{paragraphId:string,suggestions:{advice:string}[],revisedText:string}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
+  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,themeReason:string,personalizedComment:string,painPoints:string[],commonIssues:string[],revisionSuggestions:string[],grade:A+|A|A-|B+|B|B-|C,diagnostics:{authenticityAndRelevance:{finding:string,action:string},materialAndDetails:{finding:string,action:string},structure:{finding:string,action:string},language:{finding:string,action:string}},rewrittenEssay:string[],paragraphReviews:{paragraphId:string,suggestions:{advice:string}[],revisedText:string,sourceParagraphStart?:number,sourceParagraphEnd?:number}[],parentFeedbacks:{style:warm|professional|concise,title:string,content:string}[]}",
   "ParagraphAnnotationAnchor={paragraphId:string,category:typo|punctuation|sentence|expression|structure|highlight,anchorText:string,comment:string,isHighlight:boolean}",
 ].join("\n");
 
@@ -102,12 +102,61 @@ function rewriteParagraphCount(input: AnalyzeOcrTextInput): number {
     ?? expectedSampleParagraphCount(input.config);
 }
 
+/** Teacher-specified structure length, when the original paragraphs can be grouped into it. */
+function structureGroupCount(input: AnalyzeOcrTextInput): number | undefined {
+  const count = explicitParagraphCount(input.teacherGuidance ?? "")
+    ?? explicitParagraphCount(input.config.structureRequirements, true);
+  if (count === undefined || count < 1 || count > input.paragraphs.length) return undefined;
+  return count;
+}
+
 function paragraphArrayRule(input: AnalyzeOcrTextInput): string {
-  return `paragraphReviews 必须恰好 ${input.paragraphs.length} 项，paragraphId 必须依次为 ${JSON.stringify(input.paragraphs.map(({ id }) => id))}；rewrittenEssay 必须恰好 ${rewriteParagraphCount(input)} 项。两个数组独立，不能混用段数或编号。`;
+  const groups = structureGroupCount(input);
+  if (groups) {
+    return `老师指定了 ${groups} 个结构段。paragraphReviews 与 rewrittenEssay 都必须恰好 ${groups} 项，按同一顺序一一对应。不要按原文 ${input.paragraphs.length} 个自然段各写一条。`;
+  }
+  const requested = explicitParagraphCount(input.teacherGuidance ?? "")
+    ?? explicitParagraphCount(input.config.structureRequirements, true);
+  const shorter = requested !== undefined && requested > input.paragraphs.length
+    ? "原文自然段少于老师要求的结构段数，paragraphReviews 仍按原文自然段逐段返回，不要把一个自然段拆成多条。"
+    : "原文没有单独的段落结构段数时，两个数组段数各自独立，不能混用段数或编号。";
+  return `paragraphReviews 必须恰好 ${input.paragraphs.length} 项，paragraphId 必须依次为 ${JSON.stringify(input.paragraphs.map(({ id }) => id))}；rewrittenEssay 必须恰好 ${rewriteParagraphCount(input)} 项。${shorter}`;
+}
+
+function evenParagraphRanges(paragraphCount: number, groupCount: number): Array<{ start: number; end: number }> {
+  const base = Math.floor(paragraphCount / groupCount);
+  let remainder = paragraphCount % groupCount;
+  let start = 1;
+  return Array.from({ length: groupCount }, () => {
+    const size = base + (remainder > 0 ? 1 : 0);
+    if (remainder > 0) remainder -= 1;
+    const end = start + size - 1;
+    const range = { start, end };
+    start = end + 1;
+    return range;
+  });
 }
 
 function outputTemplate(input: AnalyzeOcrTextInput): string {
   const diagnosis = { finding: "依据原文写具体发现", action: "写可执行的修改方法" };
+  const groups = structureGroupCount(input);
+  const essay = Array.from(
+    { length: rewriteParagraphCount(input) },
+    (_, index) => `按教师要求撰写的第${index + 1}自然段正文`,
+  );
+  const paragraphReviews = groups
+    ? evenParagraphRanges(input.paragraphs.length, groups).map((range, index) => ({
+      paragraphId: input.paragraphs[range.start - 1]?.id ?? `paragraph-${range.start}`,
+      sourceParagraphStart: range.start,
+      sourceParagraphEnd: range.end,
+      suggestions: [{ advice: "用一两句话说明这一组怎么改" }],
+      revisedText: essay[index],
+    }))
+    : input.paragraphs.map(({ id }) => ({
+      paragraphId: id,
+      suggestions: [{ advice: "用一两句话说明这一段怎么改" }],
+      revisedText: "该段按修改动作改完后的完整段落",
+    }));
   return JSON.stringify({
     report: {
       version: 2,
@@ -124,12 +173,8 @@ function outputTemplate(input: AnalyzeOcrTextInput): string {
         structure: { finding: "按前述逐项格式覆盖全部结构要求", action: "写具体结构调整" },
         language: diagnosis,
       },
-      rewrittenEssay: Array.from({ length: rewriteParagraphCount(input) }, (_, index) => `按教师要求撰写的第${index + 1}自然段正文`),
-      paragraphReviews: input.paragraphs.map(({ id }) => ({
-        paragraphId: id,
-        suggestions: [{ advice: "用一两句话说明这一段怎么改" }],
-        revisedText: "该段按修改动作改完后的完整段落",
-      })),
+      rewrittenEssay: essay,
+      paragraphReviews,
       parentFeedbacks: [
         { style: "warm", title: "亲切详细", content: "按前述家长称呼规则撰写反馈" },
         { style: "professional", title: "专业清晰", content: "按前述家长称呼规则撰写反馈" },
@@ -138,6 +183,30 @@ function outputTemplate(input: AnalyzeOcrTextInput): string {
     },
     annotationAnchors: [],
   }, null, 2);
+}
+
+function reviewAlignmentRule(input: AnalyzeOcrTextInput): string {
+  const groups = structureGroupCount(input);
+  if (!groups) {
+    return [
+      "必须同时返回逐段点评 paragraphReviews 和按要求重新组织的完整范文 rewrittenEssay。",
+      "没有单独的段落结构段数时，两者段数独立。原文段数只约束 paragraphReviews，绝不能限制完整范文段数。",
+      "paragraphReviews 必须与输入 paragraphs 数量、paragraphId 和顺序完全一致，每个 paragraphId 恰好出现一次。不要返回 sourceParagraphStart 或 sourceParagraphEnd。",
+    ].join("\n");
+  }
+  return [
+    `老师指定了 ${groups} 个结构段。逐段建议必须按这 ${groups} 个结构段归组，不能按原文 ${input.paragraphs.length} 个自然段逐段各写一条。`,
+    "把原文自然段按阅读顺序归入各结构段：连续的多个自然段可以并进同一组，每组至少一个自然段。各组首尾相接，覆盖全部原文，不能漏段、重叠或打乱顺序。",
+    "第 i 组 paragraphReviews 对应 rewrittenEssay 的第 i 段。paragraphId 用该组第一个原文段落的 id。sourceParagraphStart 和 sourceParagraphEnd 是该组覆盖的原文段号，从 1 计，含两端。界面会标注“对应原文第 x–y 段”。",
+    "每组 revisedText 必须与 rewrittenEssay 同一位置的那一段逐字相同，这样改后全段和完整范文始终对应。",
+  ].join("\n");
+}
+
+function revisedTextRule(input: AnalyzeOcrTextInput): string {
+  if (structureGroupCount(input)) {
+    return "每组 revisedText 是该结构段的改后全段，必须与 rewrittenEssay 的对应段逐字相同，且非空。导出时把这一段和该组原文逐句比对，只给改动或新增的句子加下划线。改后全段须保留学生的核心事实、人物关系和关键经历，不得为了文采编造内容。";
+  }
+  return "每段 revisedText 是该段的改后全段：按修改动作改完后的完整段落，必须非空，不能只写被改的句子。没有改动的句子必须与该段原文逐字相同；被修改或新增的内容必须写成完整句子。导出时会把改后全段与原段逐句比对，只给改动或新增的句子加下划线。改后全段须保留学生的核心事实、人物关系和关键经历，不得为了文采编造内容。";
 }
 
 function contentPrompt(input: AnalyzeOcrTextInput): string {
@@ -153,17 +222,16 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
       .replaceAll(" text", "正文")
       .replace("title、suggestion 和标点不计入。", "标点不计入。")
       .replace("教师填写的作业配置是唯一标准，通用教学建议不得覆盖或改写它。", "教师初始作业配置是批改基础，后续修改要求优先于与之冲突的初始写作要求；通用教学建议不得覆盖教师要求。"),
-    "必须同时返回原文逐段点评 paragraphReviews 和按要求重新组织的完整范文 rewrittenEssay；两者段数独立。原文段数只约束 paragraphReviews，绝不能限制完整范文段数。",
+    reviewAlignmentRule(input),
     "rewrittenEssay 是按顺序排列的正文字符串数组，每项恰好一个自然段，不含标题、段落编号、说明或换行；必须是一篇连贯完整的作文。不得把结构要求只写进诊断而不落实到正文。",
     "逐段落实结构要求中每段的功能、详略与过渡；写作要求中的手法和评分重点也必须体现在完整范文。欲扬先抑时，前半部分的抑应合理且略写，扬通过具体事件详写，抑扬之间自然过渡，结尾感悟须有事件支撑。",
     "themeFit 只能是 fits、partial、off_topic；偏题时 grade 必须为 C。grade 只能是 A+、A、A-、B+、B、B-、C。",
     "diagnostics 必须完整返回 authenticityAndRelevance、materialAndDetails、structure、language 四项；每项都包含非空 finding 和 action。",
     "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
-    "paragraphReviews 必须与输入 paragraphs 数量、paragraphId 和顺序完全一致，每个 paragraphId 恰好出现一次。",
     paragraphArrayRule(input),
-    "每段 suggestions 必须有 1 至 4 项；每项只写 advice，也就是修改动作，用一两句话说明具体怎么改。不要写问题描述，也不要写修改示例。",
+    "每组或每段 suggestions 必须有 1 至 4 项；每项只写 advice，也就是修改动作，用一两句话说明具体怎么改。不要写问题描述，也不要写修改示例。",
     "原文已经很好时，advice 仍须用一两句话说明要保留的具体写法。不得只写空泛判断。",
-    "每段 revisedText 是该段的改后全段：按修改动作改完后的完整段落，必须非空，不能只写被改的句子。没有改动的句子必须与该段原文逐字相同；被修改或新增的内容必须写成完整句子。导出时会把改后全段与原段逐句比对，只给改动或新增的句子加下划线。改后全段须保留学生的核心事实、人物关系和关键经历，不得为了文采编造内容。",
+    revisedTextRule(input),
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 paragraphId、category、anchorText、comment、isHighlight。paragraphId 必须来自输入，按输入段落顺序排列；anchorText 必须逐字来自对应段落原文，无法确定时不要返回。",
     "根对象、report 和所有嵌套对象都不得添加结构中未列明的字段；不得额外返回作文标题、总字数或旧版范文字段。完整范文只能放在 rewrittenEssay 数组中。",
@@ -190,6 +258,8 @@ function validationCode(error: unknown): string {
   if (error.message.startsWith("structure coverage invalid")) return "structure_coverage";
   if (error.message.includes("parent feedback count")) return "parent_feedback_count";
   if (error.message.includes("parent feedback semantics")) return "parent_feedback_semantics";
+  if (error.message.startsWith("paragraph_review_group_count_")) return error.message.slice(0, 64);
+  if (error.message.startsWith("paragraph_review_revised_mismatch")) return "paragraph_review_revised_mismatch";
   if (error.message.includes("paragraphReviews")) return "paragraph_review_coverage";
   if (error.message.includes("off_topic")) return "off_topic_grade";
   if (error.message.includes("annotation paragraph")) return "annotation_paragraph";
@@ -262,16 +332,71 @@ function validateParagraphInput(paragraphs: AnalyzeOcrTextInput["paragraphs"]): 
   }
 }
 
+function alignGroupedRevisedText(report: ParagraphEvaluationReport): ParagraphEvaluationReport {
+  if (!report.rewrittenEssay || report.rewrittenEssay.length !== report.paragraphReviews.length) return report;
+  return {
+    ...report,
+    paragraphReviews: report.paragraphReviews.map((review, index) => ({
+      ...review,
+      revisedText: report.rewrittenEssay?.[index] ?? review.revisedText,
+    })),
+  };
+}
+
+function assertStructureGroups(
+  report: ParagraphEvaluationReport,
+  input: AnalyzeOcrTextInput,
+  alignRevisedText: boolean,
+): ParagraphEvaluationReport {
+  const groups = structureGroupCount(input);
+  const reviews = report.paragraphReviews;
+  const usesGroups = reviews.some((review) => (
+    review.sourceParagraphStart !== undefined || review.sourceParagraphEnd !== undefined
+  ));
+  if (!groups) {
+    if (usesGroups) throw new Error("paragraphReviews must exactly match validated paragraph IDs in order");
+    return report;
+  }
+  if (reviews.length !== groups) throw new Error(`paragraph_review_group_count_expected_${groups}`);
+  let cursor = 0;
+  reviews.forEach((review) => {
+    const start = review.sourceParagraphStart;
+    const end = review.sourceParagraphEnd;
+    const expectedId = input.paragraphs[cursor]?.id;
+    if (
+      start !== cursor + 1
+      || end === undefined
+      || end < start
+      || end > input.paragraphs.length
+      || review.paragraphId !== expectedId
+    ) {
+      throw new Error("paragraphReviews must cover original paragraphs in order");
+    }
+    cursor = end;
+  });
+  if (cursor !== input.paragraphs.length) {
+    throw new Error("paragraphReviews must cover original paragraphs in order");
+  }
+  const aligned = alignRevisedText ? alignGroupedRevisedText(report) : report;
+  aligned.paragraphReviews.forEach((review, index) => {
+    if (review.revisedText !== aligned.rewrittenEssay?.[index]) {
+      throw new Error(`paragraph_review_revised_mismatch_${index + 1}`);
+    }
+  });
+  return aligned;
+}
+
 function validateContentResult(
   content: string,
   input: AnalyzeOcrTextInput,
-  options: { salvageAnnotations?: boolean } = {},
+  options: { salvageAnnotations?: boolean; alignGroupedRevisedText?: boolean } = {},
 ): CompositionReviewResult {
   const parsed = resultSchema.parse(dropUnrecognizedKeys(parseJsonResponse(content), resultSchema));
   if (parsed.report.rewrittenEssay?.length !== rewriteParagraphCount(input)) {
     throw new Error(`rewritten_essay_paragraph_count_expected_${rewriteParagraphCount(input)}`);
   }
   validateTeacherRewriteLengths(parsed.report.rewrittenEssay!, input.teacherGuidance);
+  parsed.report = assertStructureGroups(parsed.report, input, options.alignGroupedRevisedText === true);
   const paragraphIds = input.paragraphs.map(({ id }) => id);
   const paragraphsById = new Map(input.paragraphs.map((paragraph, index) =>
     [paragraph.id, { ...paragraph, index }] as const));
@@ -399,6 +524,13 @@ export class CompositionReviewAdapter {
         }
         return validateContentResult(repairedContent, safeInput);
       } catch (repairError) {
+        if (validationCode(repairError) === "paragraph_review_revised_mismatch") {
+          try {
+            return validateContentResult(repairedContent, safeInput, { alignGroupedRevisedText: true });
+          } catch {
+            // The groups themselves are still invalid.
+          }
+        }
         const salvaged = salvageAnnotationFailure([
           isAnnotationIssue(repairError) ? repairedContent : "",
           isAnnotationIssue(initialError) ? content : "",

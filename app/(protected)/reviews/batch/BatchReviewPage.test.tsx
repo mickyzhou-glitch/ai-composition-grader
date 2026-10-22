@@ -212,6 +212,107 @@ describe("BatchReviewPage", () => {
     });
   });
 
+  it("老师指定结构段时按组展示改后全段，并标出对应原文范围", async () => {
+    const essay = ["我走上台。天很蓝。", "我终于明白了。"];
+    const groupedReport = {
+      ...paragraphReport,
+      rewrittenEssay: essay,
+      paragraphReviews: [
+        {
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "合并前两段。" }],
+          revisedText: essay[0],
+        },
+        {
+          paragraphId: "paragraph-3",
+          sourceParagraphStart: 3,
+          sourceParagraphEnd: 3,
+          suggestions: [{ advice: "收束主题。" }],
+          revisedText: essay[1],
+        },
+      ],
+    };
+    const groupedDetail = {
+      ...detail("review-1", "张小明", 1, groupedReport),
+      ocr: {
+        version: 2 as const,
+        ocrRevision: 1,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: "张小明的作文原文", readable: true, warnings: [] }],
+        paragraphs: [
+          {
+            id: "paragraph-1",
+            paragraphIndex: 0,
+            text: "我走上台。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+          },
+          {
+            id: "paragraph-2",
+            paragraphIndex: 1,
+            text: "天很蓝。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.4, width: 0.5, height: 0.1 }],
+          },
+          {
+            id: "paragraph-3",
+            paragraphIndex: 2,
+            text: "我终于明白了。",
+            segments: [{ pageIndex: 0, x: 0.1, y: 0.6, width: 0.5, height: 0.1 }],
+          },
+        ],
+      },
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === "/api/reviews/review-queue") {
+        return Response.json({ ok: true, data: [queueItem("review-1", "张小明", 1)] });
+      }
+      if (url === "/api/reviews") return Response.json({ ok: true, data: [groupedDetail] });
+      if (url === "/api/reviews/review-1/teacher-review" && init?.method === "POST") {
+        return Response.json({
+          ok: true,
+          data: { ...groupedDetail, revision: 2, teacherReviewedAt: "2026-08-22T06:00:00.000Z" },
+        });
+      }
+      if (url === "/api/reviews/review-1") return Response.json({ ok: true, data: groupedDetail });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+
+    expect(await screen.findByText("对应原文第 1–2 段")).toBeVisible();
+    expect(screen.getByText("对应原文第 3 段")).toBeVisible();
+    expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(2);
+    expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /修改动作/u })).not.toBeInTheDocument();
+    const revised = screen.getByLabelText("第 1 段改后全段");
+    await user.clear(revised);
+    await user.type(revised, "我听见呼吸声，走上了台。天很蓝。");
+    await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
+
+    const teacherCall = fetchMock.mock.calls.find(([input]) => (
+      String(input) === "/api/reviews/review-1/teacher-review"
+    ));
+    expect(JSON.parse(String(teacherCall?.[1]?.body)).report).toMatchObject({
+      rewrittenEssay: ["我听见呼吸声，走上了台。天很蓝。", essay[1]],
+      paragraphReviews: [
+        {
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          revisedText: "我听见呼吸声，走上了台。天很蓝。",
+        },
+        {
+          paragraphId: "paragraph-3",
+          sourceParagraphStart: 3,
+          sourceParagraphEnd: 3,
+          revisedText: essay[1],
+        },
+      ],
+    });
+  });
+
   it("returns an unsuitable review with the revision guard and immediately opens a prefetched successor", async () => {
     const queue = [
       queueItem("review-1", "张小明", 7),

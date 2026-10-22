@@ -222,7 +222,30 @@ export const paragraphReviewSchema = z.object({
   paragraphId: z.string().regex(/^paragraph-[1-9]\d*$/u),
   suggestions: z.array(paragraphSuggestionSchema).min(1).max(4),
   revisedText: z.string().trim().min(1),
-}).strict();
+  // Present only when suggestions are grouped by the teacher's structure.
+  // Inclusive 1-based positions in the original natural-paragraph order.
+  sourceParagraphStart: z.number().int().min(1).max(99).optional(),
+  sourceParagraphEnd: z.number().int().min(1).max(99).optional(),
+}).strict().superRefine((value, context) => {
+  const hasStart = value.sourceParagraphStart !== undefined;
+  const hasEnd = value.sourceParagraphEnd !== undefined;
+  if (hasStart !== hasEnd) {
+    context.addIssue({
+      code: "custom",
+      message: "source paragraph range must include both ends",
+    });
+  }
+  if (
+    value.sourceParagraphStart !== undefined
+    && value.sourceParagraphEnd !== undefined
+    && value.sourceParagraphEnd < value.sourceParagraphStart
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "source paragraph range is reversed",
+    });
+  }
+});
 export type ParagraphReview = z.infer<typeof paragraphReviewSchema>;
 
 export const paragraphEvaluationReportSchema = reportContentBaseSchema.extend({

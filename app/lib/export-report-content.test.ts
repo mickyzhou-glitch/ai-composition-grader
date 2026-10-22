@@ -82,4 +82,51 @@ describe("导出段落只含修改动作和改后全段", () => {
     ]);
     expect(runs.find((run) => run.text === "灯光很亮。")?.style).toBe("plain");
   });
+
+  it("结构段归组后按组合并原文做逐句下划线，并标出原文范围", () => {
+    const source = review();
+    const originals = ["甲句。", "乙句。", "丙句。"];
+    source.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+      paragraphs: originals.map((text, index) => ({
+        id: `paragraph-${index + 1}`,
+        paragraphIndex: index,
+        text,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.1 + index * 0.1, width: 0.5, height: 0.08 }],
+      })),
+    };
+    source.report = {
+      ...(source.report as object),
+      rewrittenEssay: ["甲句。新的经过。", "丙句。"],
+      paragraphReviews: [
+        {
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "合并前两段。" }],
+          revisedText: "甲句。新的经过。",
+        },
+        {
+          paragraphId: "paragraph-3",
+          sourceParagraphStart: 3,
+          sourceParagraphEnd: 3,
+          suggestions: [{ advice: "保留结尾。" }],
+          revisedText: "丙句。",
+        },
+      ],
+    } as ExportReviewSource["report"];
+
+    const content = buildExportReportContent(source);
+    expect(content.pages[0]?.paragraphs).toHaveLength(2);
+    expect(content.pages[0]?.paragraphs[0]?.sourceLabel).toBe("对应原文第 1–2 段");
+    expect(content.pages[0]?.paragraphs[0]?.revisionRuns).toEqual([
+      { text: "甲句。", changed: false },
+      { text: "新的经过。", changed: true },
+    ]);
+    expect(exportParagraphRuns(content.pages[0]!.paragraphs[0]!).map((run) => run.text).join(""))
+      .toContain("对应原文第 1–2 段");
+  });
 });
