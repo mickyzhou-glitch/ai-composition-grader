@@ -134,6 +134,39 @@ describe("ParagraphReviewEditor", () => {
     }));
   });
 
+  it("批量审核可以隐藏建议编辑，改示范文时仍保留原建议", () => {
+    const onChange = vi.fn();
+    render(<ParagraphReviewEditor
+      reviewId="review-1"
+      report={report}
+      ocr={ocr}
+      images={[]}
+      disabled={false}
+      onChange={onChange}
+      showSuggestions={false}
+      showCharacterCounts
+      revisionHeading="示范文"
+      revisionLabel="完整示范文"
+    />);
+
+    expect(screen.queryByText("【修改动作】")).not.toBeInTheDocument();
+    expect(screen.queryByText("【修改建议】")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("第 1 段第 1 条修改动作")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("第 1 段第 1 条问题描述")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "删除第 1 段第 1 条建议" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "新增第 1 段建议" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "第 1 段" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("第 1 段完整示范文"), {
+      target: { value: "我听见了雨声。" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      paragraphReviews: [expect.objectContaining({
+        suggestions: report.paragraphReviews[0].suggestions,
+        revisedText: "我听见了雨声。",
+      })],
+    }));
+  });
+
   it("把可选要求交给同一段重写回调", () => {
     const onRewriteParagraph = vi.fn(async () => undefined);
     render(<ParagraphReviewEditor

@@ -21,6 +21,7 @@ interface ParagraphReviewEditorProps {
   rewritingParagraphId?: string | null;
   showSourceCrops?: boolean;
   showCharacterCounts?: boolean;
+  showSuggestions?: boolean;
   revisionHeading?: string;
   revisionLabel?: string;
 }
@@ -38,6 +39,7 @@ export function ParagraphReviewEditor({
   rewritingParagraphId = null,
   showSourceCrops = true,
   showCharacterCounts = false,
+  showSuggestions = true,
   revisionHeading = "改后全段",
   revisionLabel = "改后全段",
 }: ParagraphReviewEditorProps) {
@@ -116,45 +118,47 @@ export function ParagraphReviewEditor({
                 segments={paragraph.segments}
               /> : null}
 
-              <h4>【修改动作】</h4>
-              <div className="paragraph-suggestion-list">
-                {paragraphReview.suggestions.map((suggestion, suggestionIndex) => (
-                  <fieldset className="paragraph-suggestion" key={suggestionIndex}>
-                    <legend>建议 {suggestionIndex + 1}</legend>
-                    <label>修改动作
-                      <input
-                        aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改动作`}
-                        value={suggestion.advice}
-                        disabled={disabled || rewriting}
-                        onChange={(event) => updateParagraph(paragraph.id, (current) => ({
+              {showSuggestions ? <>
+                <h4>【修改动作】</h4>
+                <div className="paragraph-suggestion-list">
+                  {paragraphReview.suggestions.map((suggestion, suggestionIndex) => (
+                    <fieldset className="paragraph-suggestion" key={suggestionIndex}>
+                      <legend>建议 {suggestionIndex + 1}</legend>
+                      <label>修改动作
+                        <input
+                          aria-label={`第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条修改动作`}
+                          value={suggestion.advice}
+                          disabled={disabled || rewriting}
+                          onChange={(event) => updateParagraph(paragraph.id, (current) => ({
+                            ...current,
+                            suggestions: current.suggestions.map((item, index) => index === suggestionIndex
+                              ? { ...item, advice: event.target.value }
+                              : item),
+                          }))}
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        aria-label={`删除第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条建议`}
+                        disabled={disabled || rewriting || paragraphReview.suggestions.length <= 1}
+                        onClick={() => updateParagraph(paragraph.id, (current) => ({
                           ...current,
-                          suggestions: current.suggestions.map((item, index) => index === suggestionIndex
-                            ? { ...item, advice: event.target.value }
-                            : item),
+                          suggestions: current.suggestions.filter((_, index) => index !== suggestionIndex),
                         }))}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      aria-label={`删除第 ${paragraphNumber} 段第 ${suggestionIndex + 1} 条建议`}
-                      disabled={disabled || rewriting || paragraphReview.suggestions.length <= 1}
-                      onClick={() => updateParagraph(paragraph.id, (current) => ({
-                        ...current,
-                        suggestions: current.suggestions.filter((_, index) => index !== suggestionIndex),
-                      }))}
-                    >删除建议</button>
-                  </fieldset>
-                ))}
-              </div>
-              <button
-                type="button"
-                aria-label={`新增第 ${paragraphNumber} 段建议`}
-                disabled={disabled || rewriting || paragraphReview.suggestions.length >= 4}
-                onClick={() => updateParagraph(paragraph.id, (current) => ({
-                  ...current,
-                  suggestions: [...current.suggestions, emptySuggestion],
-                }))}
-              >新增建议</button>
+                      >删除建议</button>
+                    </fieldset>
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  aria-label={`新增第 ${paragraphNumber} 段建议`}
+                  disabled={disabled || rewriting || paragraphReview.suggestions.length >= 4}
+                  onClick={() => updateParagraph(paragraph.id, (current) => ({
+                    ...current,
+                    suggestions: [...current.suggestions, emptySuggestion],
+                  }))}
+                >新增建议</button>
+              </> : null}
 
               <h4>【{revisionHeading}】</h4>
               <label>{revisionLabel}
