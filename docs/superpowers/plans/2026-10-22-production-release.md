@@ -134,3 +134,12 @@
 - 上一版本（回滚用）：`a7fd38b7-ee74-4c86-80d8-84907fd76167`
 - 冒烟（未登录）：页面与 PDF worker 均 200；`/api/reviews`、`/api/classes`、`/api/grading-opinions`、`/api/rule-candidates`（含 `?count=1`）、`POST /api/rule-candidates/x/approve` 均 401；`/dev/package.json` 404
 - 回填：只跑了 `--dry-run`，未写入。预览共 34 条候选（这件事打动了我：两个账号分别 31 条、1 条；为自己鼓掌 2 条），与预期 12 + 1 不符，且大量是单篇作文的具体意见（人物、情节），不适合作长期规则，暂停等用户决定
+
+## 历史意见清理与回填（2026-10-22 22:28–22:35）
+
+- 界点：状态重置时间 2026-10-22 20:34:47（上海）= 1792672487000 ms（库内为 UTC 毫秒时间戳）
+- 备份：`backups/d1-prod-before-opinion-cleanup-20261022-222846.sql`
+- 统计：grading_opinions 23 条全部在界点之后（standing 13、essay 10），界点前 0 条；分析任务里的历史意见（teacher_guidance）界点前 36 条、界点后 16 条
+- 清理：把界点前 36 条分析任务的 teacher_guidance 置空（UPDATE，不删行、无级联）；作文、图片、报告、批注、长期规则均未动。执行：`backups/opinion-cleanup-20261022-222846.sql`；回滚：`backups/opinion-cleanup-rollback-20261022-222846.sql`（已在备份副本上往返验证）
+- 条数核对（前 → 后）：users 4、reviews 46（有报告 44）、review_images 98、annotations 182、analysis_jobs 179、grading_opinions 23（standing 13）、saved_assignments 7 均不变；带意见的任务 52 → 16
+- 回填：脚本新增 `--since`（提交 `10ca316`），dry-run 后写入 3 条待审批候选（这件事打动了我），未自动通过；第一栏的 13 条共性意见已是生效规则，跳过
