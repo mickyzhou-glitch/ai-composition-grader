@@ -5,7 +5,6 @@ import { opinionSourceTitle } from "../src/grading-opinions/grading-opinion-repo
 import {
   planRuleCandidates,
   rejectionOpinionText,
-  splitOpinionLines,
   type ExistingRule,
   type RuleCandidateDraft,
   type RuleSourceOpinion,
@@ -27,6 +26,13 @@ function jsonValue(value: unknown): unknown {
   try { return JSON.parse(value) as unknown; } catch { return value; }
 }
 
+function sourceOpinions(value: unknown): RuleSourceOpinion[] {
+  const parsed = jsonValue(value);
+  return Array.isArray(parsed)
+    ? parsed.filter((item): item is RuleSourceOpinion => typeof item === "object" && item !== null && typeof item.text === "string")
+    : [];
+}
+
 function sqlText(value: string | null): string {
   return value === null ? "NULL" : `'${value.replace(/'/gu, "''")}'`;
 }
@@ -41,7 +47,7 @@ export interface BackfillTitlePlan {
 
 /**
  * 只读收集历史意见：已存档的意见（不含已生效的长期规则）、旧任务里的退回说明、作文上的退回意见。
- * 按 owner + 同名题目分组，归纳成候选规则（只生成待审批，不自动通过）。
+ * 按 owner + 同名题目分组，保留原话生成候选规则（只生成待审批，不自动通过）。
  */
 /** 一眼可见的通用要求（结构、段落、字数、开头结尾、名言、详略等）。 */
 const GENERAL_OPINION = /结构|五段|段|名人名言|名言|欲扬先抑|抑|扬|字数|开头|结尾|框架|详略|铺垫|引入|语言/u;
@@ -50,11 +56,6 @@ const SPECIFIC_OPINION = /[“"「][^”"」]{2,}[”"」]|爷爷|奶奶|阿姨|
 
 export function isGeneralOpinion(text: string): boolean {
   return GENERAL_OPINION.test(text) && !SPECIFIC_OPINION.test(text);
-}
-
-/** 拆成单句要求，便于合并相近意见。 */
-export function opinionClauses(text: string): string[] {
-  return splitOpinionLines(text).flatMap((line) => line.split(/[；;]/u)).map((item) => item.trim().replace(/[，,。]$/u, "")).filter(Boolean);
 }
 
 /** 从任务里的老师补充意见取出两栏：只取本次提交部分，不含后面附带的长期规则清单。 */
@@ -67,7 +68,7 @@ export function revisionSections(guidance: string): { common: string; content: s
 
 /**
  * --since：只收界点之后的意见。第一栏（结构 / 共性问题）全部收；
- * 第二栏和退回意见只收明显通用的句子。按 owner + 同名题目合并相近意见。
+ * 第二栏和退回意见只收整体明显通用的原话。按 owner + 同名题目合并完全相同原文。
  */
 export async function planBackfillSince(execute: Execute, since: number, titles?: string[]): Promise<BackfillTitlePlan[]> {
   const wanted = titles?.length ? new Set(titles.map(normalizeAssignmentTitle)) : null;
@@ -83,14 +84,13 @@ export async function planBackfillSince(execute: Execute, since: number, titles?
     const title = opinionSourceTitle(jsonValue(row.config));
     const { common, content } = revisionSections(str(row.teacher_guidance));
     const base = { reviewId: str(row.review_id) || null, studentName: str(row.student_name), kind: "history" as const };
-    opinionClauses(common).forEach((text) => add(str(row.owner_id), title, { ...base, text }));
-    opinionClauses(content).filter(isGeneralOpinion).forEach((text) => add(str(row.owner_id), title, { ...base, text }));
+    if (common) add(str(row.owner_id), title, { ...base, text: common });
+    if (isGeneralOpinion(content)) add(str(row.owner_id), title, { ...base, text: content });
   }
   for (const row of execute(`SELECT id, owner_id, student_name, config, rejection_reason, rejection_change_request FROM reviews WHERE deleting_at IS NULL AND updated_at >= ${sinceSql} AND (rejection_reason IS NOT NULL OR rejection_change_request IS NOT NULL)`).rows) {
     const title = opinionSourceTitle(jsonValue(row.config));
-    opinionClauses(rejectionOpinionText(str(row.rejection_reason), str(row.rejection_change_request)))
-      .filter(isGeneralOpinion)
-      .forEach((text) => add(str(row.owner_id), title, { text, reviewId: str(row.id), studentName: str(row.student_name), kind: "rejection" }));
+    const text = rejectionOpinionText(str(row.rejection_reason), str(row.rejection_change_request));
+    if (isGeneralOpinion(text)) add(str(row.owner_id), title, { text, reviewId: str(row.id), studentName: str(row.student_name), kind: "rejection" });
   }
   return finishPlans(execute, [...buckets.values()]);
 }
@@ -102,9 +102,9 @@ async function finishPlans(execute: Execute, buckets: Array<{ ownerId: string; t
   for (const { ownerId, title, opinions } of buckets) {
     const existing: ExistingRule[] = [
       ...pendingRows.filter((row) => str(row.owner_id) === ownerId && normalizeAssignmentTitle(str(row.source_title)) === title)
-        .map((row) => ({ id: str(row.id), ruleText: str(row.rule_text), status: "pending" as const, sources: (jsonValue(row.sources) as RuleSourceOpinion[]) ?? [] })),
+        .map((row) => ({ id: str(row.id), ruleText: str(row.rule_text), status: "pending" as const, sources: sourceOpinions(row.sources) })),
       ...standingRows.filter((row) => str(row.owner_id) === ownerId && normalizeAssignmentTitle(str(row.source_title)) === title)
-        .flatMap((row) => opinionClauses(str(row.change_request)).map((text) => ({ id: str(row.id), ruleText: text, status: "approved" as const, sources: [] }))),
+        .map((row) => ({ id: str(row.id), ruleText: str(row.change_request), status: "approved" as const, sources: [] })),
     ];
     const plan = await planRuleCandidates({ title, opinions, existing });
     plans.push({ ownerId, title, inspected: opinions.length, create: plan.create, skipped: plan.skipped.length + plan.merge.reduce((sum, item) => sum + item.sources.length, 0) });
@@ -126,10 +126,8 @@ export async function planBackfill(execute: Execute, titles: string[] = DEFAULT_
     if (!wanted.has(title)) continue;
     const target = bucket(str(row.owner_id), title);
     if (str(row.source_job_id)) target.jobIds.add(str(row.source_job_id));
-    const text = str(row.change_request).trim() || str(row.reason).trim() || str(row.body).trim();
-    for (const line of splitOpinionLines(text)) {
-      target.opinions.push({ text: line, reviewId: str(row.source_review_id) || null, studentName: str(row.source_student_name), kind: "history" });
-    }
+    const text = [str(row.change_request), str(row.reason), str(row.body)].find((value) => value.trim()) ?? "";
+    target.opinions.push({ text, reviewId: str(row.source_review_id) || null, studentName: str(row.source_student_name), kind: "history" });
   }
   for (const row of execute("SELECT j.id AS job_id, j.owner_id, j.review_id, j.teacher_guidance, r.student_name, r.config FROM analysis_jobs j INNER JOIN reviews r ON r.id = j.review_id WHERE j.teacher_guidance IS NOT NULL ORDER BY j.created_at, j.id").rows) {
     const title = opinionSourceTitle(jsonValue(row.config));
@@ -147,21 +145,8 @@ export async function planBackfill(execute: Execute, titles: string[] = DEFAULT_
     const text = rejectionOpinionText(str(row.rejection_reason), str(row.rejection_change_request));
     if (text) bucket(str(row.owner_id), title).opinions.push({ text, reviewId: str(row.id), studentName: str(row.student_name), kind: "rejection" });
   }
-  const pendingRows = execute("SELECT id, owner_id, source_title, rule_text, sources FROM grading_rule_candidates WHERE status = 'pending'").rows;
-  const standingRows = execute("SELECT id, owner_id, source_title, change_request FROM grading_opinions WHERE scope = 'standing'").rows;
-  const plans: BackfillTitlePlan[] = [];
-  for (const { ownerId, title, opinions } of buckets.values()) {
-    const existing: ExistingRule[] = [
-      ...pendingRows.filter((row) => str(row.owner_id) === ownerId && normalizeAssignmentTitle(str(row.source_title)) === title)
-        .map((row) => ({ id: str(row.id), ruleText: str(row.rule_text), status: "pending" as const, sources: (jsonValue(row.sources) as RuleSourceOpinion[]) ?? [] })),
-      ...standingRows.filter((row) => str(row.owner_id) === ownerId && normalizeAssignmentTitle(str(row.source_title)) === title)
-        .map((row) => ({ id: str(row.id), ruleText: str(row.change_request), status: "approved" as const, sources: [] })),
-    ];
-    // 回填不合并进已有待审批候选，也不重复导入：与已有候选相近的意见跳过。
-    const plan = await planRuleCandidates({ title, opinions, existing });
-    plans.push({ ownerId, title, inspected: opinions.length, create: plan.create, skipped: plan.skipped.length + plan.merge.reduce((sum, item) => sum + item.sources.length, 0) });
-  }
-  return plans.sort((a, b) => a.title.localeCompare(b.title));
+  // 离线回填只规划新候选，已有候选的相同原话计为跳过，不修改已有来源。
+  return finishPlans(execute, [...buckets.values()]);
 }
 
 export function backfillInsertStatements(plans: BackfillTitlePlan[], now = Date.now(), createId: () => string = randomUUID): string[] {

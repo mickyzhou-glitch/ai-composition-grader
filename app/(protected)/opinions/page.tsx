@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { originalRuleTexts } from "@/src/grading-opinions/rule-candidates";
 
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -242,10 +243,15 @@ export default function GradingOpinionsPage() {
         {loading ? <p className="loading-note" role="status">正在读取批改规则…</p> : null}
         {candidates.length > 0 ? <section className="rule-candidate-list" aria-label="待审批的候选规则">
           <h2>待审批（{candidates.length}）</h2>
-          <p className="muted">由 AI 从修改意见和退回意见归纳而来。通过后写入该题目的长期规则并立即生效；驳回则不导入。</p>
-          {candidates.map((candidate) => <article className="opinion-card" key={candidate.id} aria-label={`候选规则：${candidate.ruleText}`}>
+          <p className="muted">保留老师提交的原话，只合并完全相同的内容。通过后每条不同原话分别写入该题目的长期规则并立即生效；驳回则不导入。</p>
+          {candidates.map((candidate) => {
+            const originals = originalRuleTexts(candidate);
+            return <article className="opinion-card" key={candidate.id} aria-label={`候选规则：${originals.join(" ")}`}>
             <p className="opinion-card-meta muted">题目：{candidate.title} · {candidate.category} · {formatTime(candidate.createdAt)}</p>
-            <p><b>归纳后的规则：</b>{candidate.ruleText}</p>
+            <b>老师原话：</b>
+            <ul className="rule-candidate-originals" aria-label="老师原话">
+              {originals.map((text) => <li key={text}>{text}</li>)}
+            </ul>
             <details open>
               <summary>来源意见（{candidate.sources.length} 条）</summary>
               <ul className="rule-candidate-sources">
@@ -256,7 +262,8 @@ export default function GradingOpinionsPage() {
               <AsyncButton type="button" className="button button--primary" busy={busyId === candidate.id} busyLabel="正在处理…" disabled={busyId !== null} onClick={() => void decide(candidate, "approve")}>通过</AsyncButton>
               <button type="button" className="button button--danger-quiet" disabled={busyId !== null} onClick={() => void decide(candidate, "reject")}>驳回</button>
             </div>
-          </article>)}
+          </article>;
+          })}
         </section> : null}
         {!loading ? <OpinionStats label="长期规则统计" opinions={standing} /> : null}
         {!loading ? <OpinionStats label="仅当前文章统计" opinions={essay} /> : null}

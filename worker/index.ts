@@ -12,8 +12,7 @@ import {
 } from "../src/cloudflare/d1-reanalysis";
 import { D1GradingOpinions } from "../src/cloudflare/d1-grading-opinions";
 import { D1RuleCandidates } from "../src/cloudflare/d1-rule-candidates";
-import { RuleCandidateAdapter } from "../src/ai/rule-candidate-adapter";
-import { rejectionOpinionText, splitOpinionLines, type RuleSourceOpinion } from "../src/grading-opinions/rule-candidates";
+import type { RuleSourceOpinion } from "../src/grading-opinions/rule-candidates";
 import { opinionSourceTitle } from "../src/grading-opinions/grading-opinion-repository";
 import { OPINION_CATEGORIES } from "../src/grading-opinions/standing-guidance";
 import { verifyAiImageUrl } from "../src/cloudflare/ai-image-url";
@@ -219,7 +218,7 @@ function workerAiSettings(env: WorkerEnv) {
   return createWorkerAiSettingsSource(env);
 }
 
-/** 把老师刚提交的意见交给 AI 归纳成候选长期规则；失败只记日志，不影响主流程。 */
+/** 把老师刚提交的原话存为候选长期规则；失败只记日志，不影响主流程。 */
 async function ingestRuleCandidates(
   env: WorkerEnv,
   ownerId: string,
@@ -232,9 +231,8 @@ async function ingestRuleCandidates(
       .bind(reviewId, ownerId).first<{ config: string; student_name: string | null }>();
     if (!row) return;
     const title = opinionSourceTitle(JSON.parse(row.config) as unknown);
-    const summarizer = new RuleCandidateAdapter(workerAiSettings(env), { clientFactory: createWorkerOpenAIClient });
     const withStudent = opinions.map((item) => ({ ...item, reviewId, studentName: row.student_name ?? "" }));
-    await new D1RuleCandidates(env.DB).ingest(ownerId, title, withStudent, summarizer);
+    await new D1RuleCandidates(env.DB).ingest(ownerId, title, withStudent);
   } catch (error) {
     console.error(JSON.stringify({ event: "rule_candidate_ingest_failed", reviewId, error: error instanceof Error ? error.message : String(error) }));
   }
@@ -365,17 +363,8 @@ export default {
       const candidateId = decodeURIComponent(ruleCandidateMatch[1]!);
       if (!reanalysisRouteIdPattern.test(candidateId)) return apiError("VALIDATION_ERROR", "请求参数无效", 400);
       const candidates = new D1RuleCandidates(env.DB);
-      let ruleText: string | undefined;
-      if (ruleCandidateMatch[2] === "approve") {
-        try {
-          const body = await request.json().catch(() => ({})) as { ruleText?: unknown };
-          ruleText = typeof body.ruleText === "string" ? body.ruleText : undefined;
-        } catch {
-          ruleText = undefined;
-        }
-      }
       const done = ruleCandidateMatch[2] === "approve"
-        ? await candidates.approve(user.id, candidateId, ruleText)
+        ? await candidates.approve(user.id, candidateId)
         : await candidates.reject(user.id, candidateId);
       return done
         ? Response.json({ ok: true, data: { id: candidateId, status: ruleCandidateMatch[2] === "approve" ? "approved" : "rejected" } }, { headers: { "cache-control": "no-store" } })
@@ -510,8 +499,10 @@ export default {
       }
       try {
         const rejected = await new D1Reanalysis(env.DB).rejectReview(user.id, reviewId, input);
-        const rejectionText = rejectionOpinionText(input.reason, input.changeRequest);
-        await runInBackground(ctx, ingestRuleCandidates(env, user.id, reviewId, rejectionText ? [{ text: rejectionText, kind: "rejection" }] : []));
+        const opinions: RuleSourceOpinion[] = input.reason.trim()
+          ? [{ text: input.reason, kind: "rejection" }]
+          : [];
+        await runInBackground(ctx, ingestRuleCandidates(env, user.id, reviewId, opinions));
         return Response.json({ ok: true, data: rejected }, { headers: { "cache-control": "no-store" } });
       } catch (error) {
         return reanalysisFailure(error);
@@ -542,11 +533,10 @@ export default {
         return compensateQueueDispatch(reanalysis, user.id, [result.job.id]);
       }
       {
-        const revision = input as { commonIssue: string; contentSuggestion: string };
-        const opinions: RuleSourceOpinion[] = [
-          ...splitOpinionLines(revision.commonIssue).map((text) => ({ text, kind: "revision" as const })),
-          ...(revision.contentSuggestion.trim() ? [{ text: revision.contentSuggestion.trim(), kind: "revision" as const }] : []),
-        ];
+        const revision = input as { commonIssue: string };
+        const opinions: RuleSourceOpinion[] = revision.commonIssue.trim()
+          ? [{ text: revision.commonIssue, kind: "revision" }]
+          : [];
         await runInBackground(ctx, ingestRuleCandidates(env, user.id, reviewId!, opinions));
       }
       return Response.json({ ok: true, data: result }, {

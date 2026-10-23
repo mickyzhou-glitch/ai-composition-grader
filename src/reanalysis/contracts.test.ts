@@ -9,6 +9,7 @@ import {
   batchReanalysisPreviewInputSchema,
   formatRevisionTeacherGuidance,
   normalizeAssignmentTitle,
+  rejectReviewInputSchema,
   revisionRequestInputSchema,
 } from "./contracts";
 
@@ -46,18 +47,29 @@ describe("reanalysis contracts", () => {
     }).success).toBe(false);
   });
 
-  it("trims revision fields and rejects unknown fields", () => {
+  it("preserves revision fields verbatim and rejects unknown fields", () => {
     expect(revisionRequestInputSchema.parse({
       expectedRevision: 3,
-      commonIssue: "  严格五段  ",
+      commonIssue: "  严格五段！\n 保留详略。  ",
       contentSuggestion: "  写具体  ",
-    })).toEqual({ expectedRevision: 3, commonIssue: "严格五段", contentSuggestion: "写具体" });
+    })).toEqual({ expectedRevision: 3, commonIssue: "  严格五段！\n 保留详略。  ", contentSuggestion: "  写具体  " });
     expect(revisionRequestInputSchema.safeParse({
       expectedRevision: 3,
       commonIssue: "严格五段",
       contentSuggestion: "写具体",
       extra: true,
     }).success).toBe(false);
+  });
+
+  it("preserves rejection fields verbatim while allowing an empty rejection", () => {
+    expect(rejectReviewInputSchema.parse({
+      expectedRevision: 3,
+      reason: "  严格五段！\n 保留详略。  ",
+      changeRequest: "  写具体  ",
+    })).toEqual({ expectedRevision: 3, reason: "  严格五段！\n 保留详略。  ", changeRequest: "  写具体  " });
+    expect(rejectReviewInputSchema.parse({ expectedRevision: 3 })).toEqual({
+      expectedRevision: 3, reason: "", changeRequest: "",
+    });
   });
 
   it("normalizes assignment titles by trimming only", () => {

@@ -78,30 +78,43 @@ describe("长期批改规则页", () => {
     expect(essayStats).toHaveTextContent("共 1 条");
   });
 
-  it("待审批候选规则显示归纳规则和来源意见，通过后写入长期规则，驳回则移除", async () => {
+  it("旧候选以不同老师原话为主文案，通过后每条原话入库，驳回则移除", async () => {
     const candidates = [
-      { id: "cand-1", title: "这件事打动了我", ruleText: "第三段要写出被打动的细节。", category: "结构", sources: [{ text: "第三段细节不够", studentName: "小明" }, { text: "第三段要具体", studentName: "小红" }], createdAt: "2026-10-22T03:00:00.000Z" },
+      { id: "cand-1", title: "这件事打动了我", ruleText: "第三段要写出被打动的细节。", category: "结构", sources: [{ text: "第三段细节不够", studentName: "小明" }, { text: "第三段要具体", studentName: "小红" }, { text: "第三段细节不够", studentName: "小刚" }], createdAt: "2026-10-22T03:00:00.000Z" },
       { id: "cand-2", title: "这件事打动了我", ruleText: "结尾点题。", category: "结构", sources: [{ text: "结尾没点题" }], createdAt: "2026-10-22T03:00:00.000Z" },
     ];
-    const approvedRule = { ...standing, id: "op-new", text: "第三段要写出被打动的细节。", sourceTitle: "这件事打动了我" };
+    const approvedRules = ["第三段细节不够", "第三段要具体"].map((text, index) => ({ ...standing, id: `op-new-${index}`, text, sourceTitle: "这件事打动了我" }));
     const fetchMock = vi.spyOn(globalThis, "fetch")
       .mockImplementationOnce(() => jsonResponse({ ok: true, data: [] }))
       .mockImplementationOnce(() => jsonResponse({ ok: true, data: candidates }))
       .mockImplementationOnce(() => jsonResponse({ ok: true, data: { id: "cand-1", status: "approved" } }))
-      .mockImplementationOnce(() => jsonResponse({ ok: true, data: [approvedRule] }))
+      .mockImplementationOnce(() => jsonResponse({ ok: true, data: approvedRules }))
       .mockImplementationOnce(() => jsonResponse({ ok: true, data: { id: "cand-2", status: "rejected" } }));
     const user = userEvent.setup();
     render(<GradingOpinionsPage />);
-    const first = await screen.findByRole("article", { name: "候选规则：第三段要写出被打动的细节。" });
+    const first = await screen.findByRole("article", { name: "候选规则：第三段细节不够 第三段要具体" });
+    expect(within(first).getByRole("list", { name: "老师原话" }).children).toHaveLength(2);
+    expect(first).not.toHaveTextContent("第三段要写出被打动的细节。");
+    expect(screen.queryByText(/归纳后的规则|由 AI 从/)).not.toBeInTheDocument();
     expect(first).toHaveTextContent("第三段细节不够（小明）");
-    expect(first).toHaveTextContent("来源意见（2 条）");
+    expect(first).toHaveTextContent("来源意见（3 条）");
     await user.click(within(first).getByRole("button", { name: "通过" }));
-    await waitFor(() => expect(screen.getByRole("textbox", { name: /的长期规则$/u })).toHaveValue("第三段要写出被打动的细节。"));
+    await waitFor(() => expect(screen.getAllByRole("textbox", { name: /的长期规则$/u }).map((field) => (field as HTMLTextAreaElement).value)).toEqual(["第三段细节不够", "第三段要具体"]));
     expect(String(fetchMock.mock.calls[2]?.[0])).toBe("/api/rule-candidates/cand-1/approve");
-    const second = screen.getByRole("article", { name: "候选规则：结尾点题。" });
+    const second = screen.getByRole("article", { name: "候选规则：结尾没点题" });
     await user.click(within(second).getByRole("button", { name: "驳回" }));
     await waitFor(() => expect(screen.queryByRole("region", { name: "待审批的候选规则" })).not.toBeInTheDocument());
     expect(String(fetchMock.mock.calls[4]?.[0])).toBe("/api/rule-candidates/cand-2/reject");
+  });
+
+  it("缺少历史来源时展示保存的文字，不丢失换行和空格", async () => {
+    const original = "第一段先铺垫。\n保留  两处停顿！";
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => jsonResponse({ ok: true, data: [] }))
+      .mockImplementationOnce(() => jsonResponse({ ok: true, data: [{ id: "old", title: "题目", ruleText: original, sources: [], category: "结构", createdAt: "2026-10-22T03:00:00.000Z" }] }));
+    render(<GradingOpinionsPage />);
+    const originals = await screen.findByRole("list", { name: "老师原话" });
+    expect(originals.children[0].textContent).toBe(original);
   });
 
   it("相同长期规则按次数统计", async () => {

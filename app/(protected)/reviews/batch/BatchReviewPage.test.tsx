@@ -1,6 +1,7 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ParagraphEvaluationReport } from "../../../../src/domain/contracts";
 
 const reviewExports = vi.hoisted(() => ({
   batch: vi.fn().mockResolvedValue("作文批改批量导出.zip"),
@@ -40,7 +41,7 @@ const report = {
   parentFeedbacks: [],
 };
 
-const paragraphReport = {
+const paragraphReport: ParagraphEvaluationReport = {
   version: 2 as const,
   themeFit: "fits" as const,
   themeReason: "切题",
@@ -116,6 +117,7 @@ function mockReviewApi(
     const url = String(input);
     if (url === "/api/reviews/review-queue") return Response.json({ ok: true, data: queue });
     if (url === "/api/reviews") return Response.json({ ok: true, data: [...details.values()] });
+    if (url === "/api/grading-opinions") return Response.json({ ok: true, data: [] });
     const teacherMatch = /^\/api\/reviews\/(review-\d)\/teacher-review$/u.exec(url);
     if (teacherMatch && init?.method === "POST") {
       if (options.rejectTeacherReview) {
@@ -138,6 +140,64 @@ function mockReviewApi(
 }
 
 describe("BatchReviewPage", () => {
+  it("退回弹窗仅追加同题已通过规则，保留原文并可手改", async () => {
+    const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1)]);
+    const originalFetch = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((input, init) => String(input) === "/api/grading-opinions"
+      ? Promise.resolve(Response.json({ ok: true, data: [
+        { text: "开头点题。\n保留  停顿！", scope: "standing", sourceTitle: "作文1" },
+        { text: "开头点题。\n保留  停顿！", scope: "standing", sourceTitle: "作文1" },
+        { text: "别的题目的规则", scope: "standing", sourceTitle: "作文2" },
+        { text: "只用于本篇的建议", scope: "essay", sourceTitle: "作文1" },
+      ] })) : originalFetch(input, init));
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+    await screen.findByRole("heading", { name: "张小明" });
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    const rules = await screen.findByRole("group", { name: "已通过的长期规则" });
+    expect(within(rules).getAllByRole("button")).toHaveLength(1);
+    await user.click(within(rules).getByRole("button"));
+    const common = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
+    expect(common).toHaveValue("开头点题。\n保留  停顿！");
+    await user.type(common, "\n手改补充");
+    expect(common).toHaveValue("开头点题。\n保留  停顿！\n手改补充");
+    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("");
+  });
+
+  it("关闭后切换作文，忽略上一轮迟到的规则响应", async () => {
+    const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1), queueItem("review-2", "李安然", 2)]);
+    const originalFetch = fetchMock.getMockImplementation()!;
+    let resolveOld!: (response: Response) => void;
+    let oldSignal: AbortSignal | null | undefined;
+    let ruleRequests = 0;
+    fetchMock.mockImplementation((input, init) => {
+      if (String(input) !== "/api/grading-opinions") return originalFetch(input, init);
+      ruleRequests += 1;
+      if (ruleRequests === 1) {
+        oldSignal = init?.signal;
+        return new Promise<Response>((resolve) => { resolveOld = resolve; });
+      }
+      return Promise.resolve(Response.json({ ok: true, data: [{ text: "作文二的规则", scope: "standing", sourceTitle: "作文2" }] }));
+    });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+    await screen.findByRole("heading", { name: "张小明" });
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "加载期间也能输入");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(screen.getByRole("button", { name: /李安然/ }));
+    await screen.findByRole("heading", { name: "李安然" });
+    await user.click(screen.getByRole("button", { name: "不合适" }));
+    await screen.findByRole("button", { name: "追加规则：作文二的规则" });
+    await act(async () => {
+      resolveOld(Response.json({ ok: true, data: [{ text: "迟到的作文一规则", scope: "standing", sourceTitle: "作文1" }] }));
+    });
+    expect(oldSignal?.aborted).toBe(true);
+    expect(screen.queryByRole("button", { name: "追加规则：迟到的作文一规则" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "追加规则：作文二的规则" })).toBeVisible();
+    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("");
+  });
+
   it("审核操作栏在三栏上方，底部不再有重复按钮", async () => {
     mockReviewApi([queueItem("review-1", "张小明", 1)], { currentReport: paragraphReport });
     const { container } = render(<BatchReviewPage />);

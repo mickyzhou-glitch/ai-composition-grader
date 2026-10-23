@@ -1,11 +1,11 @@
 import { normalizeAssignmentTitle } from "../reanalysis/contracts";
 import {
   planRuleCandidates,
+  originalRuleTexts,
   type ExistingRule,
   type RuleSourceOpinion,
-  type RuleSummarizer,
 } from "../grading-opinions/rule-candidates";
-import { MAX_GRADING_OPINION_BODY_CHARS } from "../grading-opinions/standing-guidance";
+import { classifyOpinion, paragraphLabelFromText } from "../grading-opinions/standing-guidance";
 
 export interface RuleCandidateView {
   id: string;
@@ -43,13 +43,14 @@ function parseSources(value: string): RuleSourceOpinion[] {
 }
 
 function toView(row: CandidateRow): RuleCandidateView {
+  const sources = parseSources(row.sources);
   return {
     id: row.id,
     title: row.source_title,
-    ruleText: row.rule_text,
+    ruleText: originalRuleTexts({ ruleText: row.rule_text, sources }).join("\n"),
     category: row.category,
     paragraphLabel: row.paragraph_label,
-    sources: parseSources(row.sources),
+    sources,
     status: row.status === "approved" || row.status === "rejected" ? row.status : "pending",
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
@@ -96,17 +97,16 @@ export class D1RuleCandidates {
     ];
   }
 
-  /** 把新意见归纳成候选规则写入待审批。返回新建和合并的候选数量。 */
+  /** 把老师原话写入待审批，仅合并完全相同原文的来源。 */
   async ingest(
     ownerId: string,
     title: string,
     opinions: RuleSourceOpinion[],
-    summarizer?: RuleSummarizer,
   ): Promise<{ created: number; merged: number }> {
     const normalized = normalizeAssignmentTitle(title);
     if (!normalized || opinions.length === 0) return { created: 0, merged: 0 };
     const existing = await this.existingRules(ownerId, normalized);
-    const plan = await planRuleCandidates({ title: normalized, opinions, existing, summarizer });
+    const plan = await planRuleCandidates({ title: normalized, opinions, existing });
     const now = this.now();
     const statements: D1PreparedStatement[] = [];
     for (const merge of plan.merge) {
@@ -122,7 +122,7 @@ export class D1RuleCandidates {
           id, owner_id, source_title, rule_text, category, paragraph_label, sources, status, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
       `).bind(
-        this.createId(), ownerId, draft.title, draft.ruleText.slice(0, MAX_GRADING_OPINION_BODY_CHARS),
+        this.createId(), ownerId, draft.title, draft.ruleText,
         draft.category, draft.paragraphLabel, JSON.stringify(draft.sources), now, now,
       ));
     }
@@ -131,32 +131,52 @@ export class D1RuleCandidates {
   }
 
   /** 通过：写入该题目的长期规则（scope='standing'），之后的分析立即带上。 */
-  async approve(ownerId: string, id: string, ruleText?: string): Promise<boolean> {
+  async approve(ownerId: string, id: string): Promise<boolean> {
     const row = await this.database.prepare(`
       SELECT id, source_title, rule_text, category, paragraph_label, sources, status, created_at, updated_at
       FROM grading_rule_candidates WHERE id = ? AND owner_id = ? AND status = 'pending'
     `).bind(id, ownerId).first<CandidateRow>();
     if (!row) return false;
-    const text = (ruleText?.trim() || row.rule_text).slice(0, MAX_GRADING_OPINION_BODY_CHARS);
-    const opinionId = this.createId();
+    const texts = originalRuleTexts({ ruleText: row.rule_text, sources: parseSources(row.sources) });
+    if (texts.length === 0) return false;
+    // 本次审批的唯一标记，使并发请求不能在状态已变更后重复写入。
+    const approvalId = this.createId();
+    const title = normalizeAssignmentTitle(row.source_title);
     const now = this.now();
     const outcomes = await this.database.batch([
       this.database.prepare(`
         UPDATE grading_rule_candidates
         SET status = 'approved', rule_text = ?, approved_opinion_id = ?, decided_at = ?, updated_at = ?
         WHERE id = ? AND owner_id = ? AND status = 'pending'
-      `).bind(text, opinionId, now, now, id, ownerId),
-      this.database.prepare(`
+      `).bind(texts.join("\n"), approvalId, now, now, id, ownerId),
+      ...texts.map((text, index) => this.database.prepare(`
         INSERT INTO grading_opinions (
           id, owner_id, body, reason, change_request, paragraph_label, category, scope,
           source_review_id, source_job_id, source_student_name, source_class_name, source_title,
           created_at, updated_at
         )
-        SELECT ?, owner_id, ?, '', ?, paragraph_label, category, 'standing',
+        SELECT ?, owner_id, ?, '', ?, ?, ?, 'standing',
           NULL, NULL, '', '', source_title, ?, ?
         FROM grading_rule_candidates
-        WHERE id = ? AND owner_id = ? AND approved_opinion_id = ?
-      `).bind(opinionId, text, text, now, now, id, ownerId, opinionId),
+        WHERE id = ? AND owner_id = ? AND status = 'approved' AND approved_opinion_id = ?
+          AND NOT EXISTS (
+            SELECT 1 FROM grading_opinions
+            WHERE owner_id = ? AND scope = 'standing' AND trim(source_title) = ? AND change_request = ?
+          )
+      `).bind(
+        index === 0 ? approvalId : this.createId(), text, text,
+        paragraphLabelFromText(text), classifyOpinion(text, ""), now, now,
+        id, ownerId, approvalId, ownerId, title, text,
+      )),
+      // 保留代表规则的有效关联；第一条原话已存在时关联已有规则。
+      this.database.prepare(`
+        UPDATE grading_rule_candidates SET approved_opinion_id = (
+          SELECT id FROM grading_opinions
+          WHERE owner_id = ? AND scope = 'standing' AND trim(source_title) = ? AND change_request = ?
+          ORDER BY created_at, id LIMIT 1
+        )
+        WHERE id = ? AND owner_id = ? AND status = 'approved' AND approved_opinion_id = ?
+      `).bind(ownerId, title, texts[0]!, id, ownerId, approvalId),
     ]) as Array<{ meta?: { changes?: number } }>;
     return (outcomes[0]?.meta?.changes ?? 0) === 1;
   }

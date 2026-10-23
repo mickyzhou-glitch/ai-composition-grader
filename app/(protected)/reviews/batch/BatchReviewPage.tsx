@@ -67,6 +67,8 @@ export function BatchReviewPage() {
   const [error, setError] = useState("");
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
   const [standingRules, setStandingRules] = useState<string[]>([]);
+  const [standingRulesLoading, setStandingRulesLoading] = useState(false);
+  const [standingRulesError, setStandingRulesError] = useState("");
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
   const [revisionError, setRevisionError] = useState("");
   const [revisionNotice, setRevisionNotice] = useState("");
@@ -152,6 +154,26 @@ export function BatchReviewPage() {
     }).catch((caught) => { if (active && !(caught instanceof DOMException && caught.name === "AbortError")) setError(errorMessage(caught)); });
     return () => { active = false; };
   }, [activeId, activeItem, loadDetail]);
+
+  const revisionTitle = review?.config.title.trim();
+  const revisionReviewId = review?.id;
+  useEffect(() => {
+    if (!revisionDialogOpen || !revisionTitle || !revisionReviewId) return;
+    const controller = new AbortController();
+    void apiFetch<Array<{ text: string; scope: string; sourceTitle: string }>>("/api/grading-opinions", { signal: controller.signal })
+      .then((opinions) => {
+        if (controller.signal.aborted || !Array.isArray(opinions)) return;
+        const rules = opinions
+          .filter((item) => item.scope === "standing" && item.sourceTitle.trim() === revisionTitle && item.text.trim())
+          .map((item) => item.text);
+        setStandingRules([...new Set(rules)]);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setStandingRulesError("同题规则读取失败，可继续手写，或关闭后重试。");
+      })
+      .finally(() => { if (!controller.signal.aborted) setStandingRulesLoading(false); });
+    return () => controller.abort();
+  }, [revisionDialogOpen, revisionReviewId, revisionTitle]);
 
   useEffect(() => {
     if (!activeId) return;
@@ -281,17 +303,9 @@ export function BatchReviewPage() {
     setRevisionError("");
     setRevisionNotice("");
     setStandingRules([]);
+    setStandingRulesLoading(Boolean(review.config.title.trim()));
+    setStandingRulesError("");
     setRevisionDialogOpen(true);
-    const title = review.config.title.trim();
-    void apiFetch<Array<{ text: string; scope: string; sourceTitle: string }>>("/api/grading-opinions")
-      .then((opinions) => {
-        if (!Array.isArray(opinions)) return;
-        const rules = opinions
-          .filter((item) => item.scope === "standing" && item.sourceTitle.trim() === title && item.text.trim())
-          .map((item) => item.text.trim());
-        setStandingRules([...new Set(rules)]);
-      })
-      .catch(() => undefined);
   }
 
   async function rejectReview(input: { commonIssue: string; contentSuggestion: string }) {
@@ -423,6 +437,6 @@ export function BatchReviewPage() {
         </section>
       </div>}
     </main>
-    {revisionDialogOpen ? <RevisionRequestDialog open standingRules={standingRules} submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
+    {revisionDialogOpen ? <RevisionRequestDialog open standingRules={standingRules} standingRulesLoading={standingRulesLoading} standingRulesError={standingRulesError} submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
   </div>;
 }

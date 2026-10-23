@@ -1,8 +1,8 @@
-import { within, render, screen } from "@testing-library/react";
+import { fireEvent, within, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { appendRuleText, removeRuleText, RevisionRequestDialog } from "./RevisionRequestDialog";
+import { appendRuleText, RevisionRequestDialog } from "./RevisionRequestDialog";
 
 describe("RevisionRequestDialog", () => {
   function renderDialog(overrides: Partial<React.ComponentProps<typeof RevisionRequestDialog>> = {}) {
@@ -23,7 +23,7 @@ describe("RevisionRequestDialog", () => {
     return { onClose, onSubmit, onReject, ...view };
   }
 
-  it("requires at least one trimmed field and submits trimmed values", async () => {
+  it("requires at least one nonblank field and submits the original values", async () => {
     const user = userEvent.setup();
     const { onSubmit } = renderDialog();
 
@@ -38,11 +38,11 @@ describe("RevisionRequestDialog", () => {
     await user.type(commonIssue, "  严格五段  ");
     expect(submit).toBeEnabled();
     await user.click(submit);
-    expect(onSubmit).toHaveBeenCalledWith({ commonIssue: "严格五段", contentSuggestion: "" });
+    expect(onSubmit).toHaveBeenCalledWith({ commonIssue: "  严格五段  ", contentSuggestion: "" });
 
     await user.type(contentSuggestion, "  写具体心理  ");
     await user.click(submit);
-    expect(onSubmit).toHaveBeenLastCalledWith({ commonIssue: "严格五段", contentSuggestion: "写具体心理" });
+    expect(onSubmit).toHaveBeenLastCalledWith({ commonIssue: "  严格五段  ", contentSuggestion: "  写具体心理  " });
     expect(screen.getByRole("button", { name: "完全不能用" })).toBeEnabled();
   });
 
@@ -90,18 +90,20 @@ describe("RevisionRequestDialog", () => {
     await user.type(screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" }), "  离题  ");
     await user.type(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), "  不必改  ");
     await user.click(screen.getByRole("button", { name: "完全不能用" }));
-    expect(onReject).toHaveBeenLastCalledWith({ commonIssue: "离题", contentSuggestion: "不必改" });
+    expect(onReject).toHaveBeenLastCalledWith({ commonIssue: "  离题  ", contentSuggestion: "  不必改  " });
     expect(screen.getByRole("button", { name: "提交后台修改并继续" })).toBeEnabled();
   });
 
   it("closes on cancel or Escape only when it is not submitting", async () => {
     const user = userEvent.setup();
-    const { onClose } = renderDialog();
+    const { onClose, rerender } = renderDialog();
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(onClose).toHaveBeenCalledTimes(1);
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(2);
 
     const blockedClose = vi.fn();
-    render(
+    rerender(
       <RevisionRequestDialog
         open
         submitting
@@ -115,20 +117,24 @@ describe("RevisionRequestDialog", () => {
     expect(blockedClose).toHaveBeenCalledTimes(0);
   });
 
-  it("列出已通过的长期规则，可多选填入输入框，取消时删掉对应文字", async () => {
+  it("点选规则仅追加原话，可继续手改，重复点击不会删除或重复原文", async () => {
     const onSubmit = vi.fn();
     const user = userEvent.setup();
     render(<RevisionRequestDialog open standingRules={["开头点题。", "结尾升华。"]} submitting={false} error="" onClose={vi.fn()} onSubmit={onSubmit} onReject={vi.fn()} />);
     const field = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
     const rules = screen.getByRole("group", { name: "已通过的长期规则" });
-    await user.click(within(rules).getByRole("checkbox", { name: "开头点题。" }));
-    await user.click(within(rules).getByRole("checkbox", { name: "结尾升华。" }));
-    expect(field).toHaveValue("开头点题。\n结尾升华。");
-    await user.type(field, "\n第三段写细节");
-    await user.click(within(rules).getByRole("checkbox", { name: "开头点题。" }));
-    expect(field).toHaveValue("结尾升华。\n第三段写细节");
+    await user.type(field, "老师先写的意见  ");
+    await user.click(within(rules).getByRole("button", { name: "追加规则：开头点题。" }));
+    await user.click(within(rules).getByRole("button", { name: "追加规则：结尾升华。" }));
+    expect(field).toHaveValue("老师先写的意见  \n开头点题。\n结尾升华。");
+    await user.click(within(rules).getByRole("button", { name: "追加规则：开头点题。" }));
+    expect(field).toHaveValue("老师先写的意见  \n开头点题。\n结尾升华。");
+    await user.clear(field);
+    await user.type(field, "开头点题，并写清时间。\n第三段写细节");
+    await user.click(within(rules).getByRole("button", { name: "追加规则：开头点题。" }));
+    expect(field).toHaveValue("开头点题，并写清时间。\n第三段写细节\n开头点题。");
     await user.click(screen.getByRole("button", { name: "提交后台修改并继续" }));
-    expect(onSubmit).toHaveBeenCalledWith({ commonIssue: "结尾升华。\n第三段写细节", contentSuggestion: "" });
+    expect(onSubmit).toHaveBeenCalledWith({ commonIssue: "开头点题，并写清时间。\n第三段写细节\n开头点题。", contentSuggestion: "" });
   });
 
   it("没有已通过规则时不显示选项", () => {
@@ -136,9 +142,61 @@ describe("RevisionRequestDialog", () => {
     expect(screen.queryByRole("group", { name: "已通过的长期规则" })).not.toBeInTheDocument();
   });
 
-  it("removeRuleText 只删完全相同的一行，编辑过的保留", () => {
-    expect(removeRuleText("开头点题。\n开头点题，并写清时间。", "开头点题。")).toBe("开头点题，并写清时间。");
-    expect(removeRuleText("开头点题，并写清时间。", "开头点题。")).toBe("开头点题，并写清时间。");
+  it("追加保留手写空白与规则换行，仅去重完全相同的整条规则", () => {
     expect(appendRuleText("", "a")).toBe("a");
+    expect(appendRuleText("手写  \n", "第一段。\n保留  停顿！")).toBe("手写  \n第一段。\n保留  停顿！");
+    expect(appendRuleText("手写\n第一段。\n保留  停顿！", "第一段。\n保留  停顿！")).toBe("手写\n第一段。\n保留  停顿！");
+    expect(appendRuleText("开头点题。", "开头点题")).toBe("开头点题。\n开头点题");
+  });
+
+  it("追加超长规则时提示且完整保留两个框，手改后仍能追加", async () => {
+    const user = userEvent.setup();
+    renderDialog({ standingRules: ["细节".repeat(260), "结尾点题。"] });
+    const common = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
+    const content = screen.getByRole("textbox", { name: "内容建议（仅当前文章）" });
+    await user.type(common, "先写的原话  ");
+    await user.type(content, "仅本篇建议");
+    await user.click(screen.getByRole("button", { name: `追加规则：${"细节".repeat(260)}` }));
+    expect(screen.getByRole("alert")).toHaveTextContent("追加后超过 500 字");
+    expect(common).toHaveValue("先写的原话  ");
+    expect(content).toHaveValue("仅本篇建议");
+    await user.clear(common);
+    await user.type(common, "缩短后的意见");
+    await user.click(screen.getByRole("button", { name: "追加规则：结尾点题。" }));
+    expect(common).toHaveValue("缩短后的意见\n结尾点题。");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("超长内容也不能经完全不能用按钮绕过校验", () => {
+    const { onReject } = renderDialog();
+    fireEvent.change(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" }), { target: { value: "长".repeat(501) } });
+    fireEvent.click(screen.getByRole("button", { name: "完全不能用" }));
+    expect(onReject).not.toHaveBeenCalled();
+  });
+
+  it("弹窗置于页面容器外，锁定页面滚动，Tab 不逃出弹窗且关闭后恢复焦点", async () => {
+    const user = userEvent.setup();
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    const previousOverflow = document.body.style.overflow;
+    const { container, unmount } = renderDialog();
+    const dialog = screen.getByRole("dialog");
+    const common = screen.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
+    expect(container).not.toContainElement(dialog);
+    expect(document.body.style.overflow).toBe("hidden");
+    expect(common).toHaveFocus();
+    await user.type(common, "规则");
+    expect(common).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "提交后台修改并继续" })).toHaveFocus();
+    await user.tab();
+    expect(common).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveFocus();
+    unmount();
+    expect(document.body.style.overflow).toBe(previousOverflow);
+    expect(trigger).toHaveFocus();
+    trigger.remove();
   });
 });
