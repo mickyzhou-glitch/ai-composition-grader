@@ -178,7 +178,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-review-actionbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 .revision-job-notice { width: min(1100px, calc(100% - 32px)); margin: 12px auto 0; padding: 10px 12px; border: 1px solid #e7c7a6; background: #fff8ef; color: #7a481e; }
 .revision-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; isolation: isolate; display: grid; grid-template-rows: minmax(0, 1fr); padding: 20px; place-items: center; overflow: hidden; overscroll-behavior: contain; background: rgb(22 27 25 / 48%); }
-.revision-dialog { position: relative; display: flex; width: min(640px, 100%); min-width: 0; max-height: min(760px, calc(100dvh - 40px)); overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 20px 55px rgb(22 27 25 / 22%); }
+.revision-dialog { position: relative; display: flex; width: min(640px, 100%); min-width: 0; max-height: min(760px, calc(100vh - 40px)); overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 20px 55px rgb(22 27 25 / 22%); }
+@supports (height: 100dvh) { .revision-dialog { max-height: min(760px, calc(100dvh - 40px)); } }
 .revision-dialog-form { display: flex; min-height: 0; max-height: inherit; min-width: 0; width: 100%; flex-direction: column; }
 .revision-dialog-heading { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 22px 24px 14px; border-bottom: 1px solid var(--line); }
 .revision-dialog-heading h2 { margin: 0; font-size: 1.35rem; }
@@ -589,7 +590,8 @@ textarea { min-height: 100px; resize: vertical; }
 
 @media (max-width: 720px) {
   .revision-dialog-backdrop { align-items: end; padding: 0; }
-  .revision-dialog { width: 100%; max-height: min(760px, 92dvh); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 8px 8px 0 0; }
+  .revision-dialog { width: 100%; max-height: min(760px, 92vh); border-right: 0; border-bottom: 0; border-left: 0; border-radius: 8px 8px 0 0; }
+  @supports (height: 100dvh) { .revision-dialog { max-height: min(760px, 92dvh); } }
   .revision-dialog-heading { padding: 18px 18px 12px; }
   .revision-dialog-body { padding: 16px 18px; }
   .revision-dialog-actions { padding: 10px 18px 16px; }

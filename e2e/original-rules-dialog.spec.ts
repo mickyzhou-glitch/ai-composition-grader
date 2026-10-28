@@ -108,6 +108,29 @@ for (const viewport of [
   });
 }
 
+test("return dialog keeps submit reachable when dynamic viewport units are unsupported", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 569 });
+  await page.route("**/_next/static/chunks/*.css", async (route) => {
+    const response = await route.fetch();
+    const body = (await response.text()).replaceAll("dvh", "unsupported-vh");
+    await route.fulfill({ response, body });
+  });
+  await mockApis(page);
+  await page.goto("/reviews/batch");
+  await page.getByRole("button", { name: "不合适", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "退回后台修改" });
+  await expect(dialog).toBeVisible();
+  const common = dialog.getByRole("textbox", { name: "结构问题 / 共性问题（仅同名作文）" });
+  await common.fill("请说明开头名言与正文的关系");
+  const submit = dialog.getByRole("button", { name: "提交后台修改并继续" });
+  const bounds = await dialog.boundingBox();
+  expect(bounds).not.toBeNull();
+  expect(bounds!.y).toBeGreaterThanOrEqual(0);
+  expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(569);
+  await expect(submit).toBeEnabled();
+  await submit.click({ trial: true });
+});
+
 test("pending rules show distinct original wording instead of an AI rewrite", async ({ page }) => {
   await mockApis(page);
   await page.goto("/opinions");
