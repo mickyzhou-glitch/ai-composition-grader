@@ -36,13 +36,14 @@ describe("describeUpstreamAiError", () => {
     expect(described.message).toBe("AI 服务请求失败：Model does not exist");
   });
 
-  it("redacts sk-, Bearer, and xai- secrets", () => {
+  it("redacts sk-, Bearer, xai-, and api_key-style secrets", () => {
     const described = describeUpstreamAiError({
-      message: "Unauthorized Bearer sk-abcdefghijklmnop and xai-SecretKey123456",
+      message: "Unauthorized Bearer sk-abcdefghijklmnop and xai-SecretKey123456 api_key=secretvalue99",
     });
     expect(described.message).toContain("[密钥]");
     expect(described.message).not.toContain("sk-abcdefghijklmnop");
     expect(described.message).not.toContain("xai-SecretKey123456");
+    expect(described.message).not.toContain("secretvalue99");
     expect(described.message).not.toMatch(/Bearer\s+\S/u);
   });
 

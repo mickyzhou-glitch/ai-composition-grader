@@ -11,7 +11,6 @@ export interface PublicAnalysisFailure {
 export function sanitizeAnalysisDetail(value: string | null | undefined): string | null {
   if (!value || value.startsWith(ANALYSIS_JOB_METADATA_PREFIX)) return null;
   const text = redactAiSecrets(value.replace(/data:[^\s]+/giu, "[图片数据]"))
-    .replace(/(api[_-]?key|token|secret)\s*[:=]\s*\S+/giu, "[密钥]")
     .replace(/[\u4e00-\u9fff，。！？、“”]{40,}/gu, "[正文已省略]")
     .replace(/\s+/gu, " ")
     .trim();

@@ -74,6 +74,7 @@ export async function completionWithFinish(
     const choice = response.choices[0] as { message: { content?: string | null }; finish_reason?: string | null } | undefined;
     return { content: choice?.message.content ?? "", truncated: choice?.finish_reason === "length" };
   } catch (error) {
+    if (error instanceof AiAdapterError) throw error;
     const { upstreamStatus, upstreamCode, message } = describeUpstreamAiError(error);
     throw new AiAdapterError("AI_REQUEST_FAILED", message, 502, upstreamStatus, upstreamCode);
   }

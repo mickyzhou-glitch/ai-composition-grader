@@ -9,8 +9,9 @@ const UPSTREAM_DETAIL_LIMIT = 160;
 export function redactAiSecrets(value: string): string {
   return value
     .replace(/sk-[A-Za-z0-9_-]{8,}/gu, "[密钥]")
+    .replace(/xai-[A-Za-z0-9_-]{8,}/giu, "[密钥]")
     .replace(/Bearer\s+\S+/giu, "[密钥]")
-    .replace(/xai-[A-Za-z0-9_-]{8,}/giu, "[密钥]");
+    .replace(/(?:api[_-]?key|token|secret)\s*[:=]\s*\S+/giu, "[密钥]");
 }
 
 export function timeoutForBaseUrl(baseUrl: string): number {
