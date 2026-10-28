@@ -828,7 +828,7 @@ export default {
       console.info(JSON.stringify({
         event: "analysis_timeout_recovery",
         recovered,
-        reason: "运行超过 10 分钟仍未结束，已标记为超时",
+        reason: `运行超过 ${MAX_CLOUD_ANALYSIS_RUN_MS / 60_000} 分钟仍未结束，已标记为超时`,
       }));
     }
   },

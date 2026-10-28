@@ -7,14 +7,16 @@ import {
   type AssignmentGuidanceInput,
 } from "../domain/assignment-guidance";
 import {
+  AI_MAX_RETRIES,
+  describeUpstreamAiError,
+  timeoutForBaseUrl,
+} from "./ai-client-options";
+import {
   AiAdapterError,
   type AiSettingsSource,
   type OpenAIClientFactory,
   type OpenAICompatibleClient,
 } from "./openai-review-adapter";
-
-const AI_TIMEOUT_MS = 180_000;
-const AI_MAX_RETRIES = 1;
 
 export type { AssignmentGuidanceInput, AssignmentGuidance } from "../domain/assignment-guidance";
 
@@ -49,7 +51,7 @@ export class AssignmentGuidanceAdapter {
     const client = this.clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     });
     let content: string;
@@ -80,8 +82,10 @@ export class AssignmentGuidanceAdapter {
         ],
       });
       content = completion.choices[0]?.message.content ?? "";
-    } catch {
-      throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502);
+    } catch (error) {
+      if (error instanceof AiAdapterError) throw error;
+      const described = describeUpstreamAiError(error);
+      throw new AiAdapterError("AI_REQUEST_FAILED", described.message, 502, described.upstreamStatus, described.upstreamCode);
     }
     try {
       const guidance = assignmentGuidanceSchema.parse(parseJson(content));

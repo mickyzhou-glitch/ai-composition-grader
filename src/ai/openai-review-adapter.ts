@@ -13,6 +13,11 @@ import {
 } from "../domain/contracts";
 import { collapseParagraphSuggestions } from "../domain/paragraph-actions";
 import { validateReport } from "../domain/report-validation";
+import {
+  AI_MAX_RETRIES,
+  describeUpstreamAiError,
+  timeoutForBaseUrl,
+} from "./ai-client-options";
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import {
   buildSampleWritingRule,
@@ -23,9 +28,6 @@ import {
   buildStructureReviewRule,
   validateStructureRequirementCoverage,
 } from "./structure-review-requirements";
-
-const AI_TIMEOUT_MS = 180_000;
-const AI_MAX_RETRIES = 1;
 
 export interface OpenAIClientOptions {
   apiKey: string;
@@ -519,18 +521,8 @@ async function completionContent(
     return content ?? "";
   } catch (error) {
     if (error instanceof AiAdapterError) throw error;
-    const upstreamStatus = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
-      ? error.status
-      : undefined;
-    const rawUpstreamCode = typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
-      ? error.code
-      : typeof error === "object" && error !== null && "type" in error && typeof error.type === "string"
-        ? error.type
-        : undefined;
-    const upstreamCode = rawUpstreamCode && /^[A-Za-z0-9._-]{1,64}$/u.test(rawUpstreamCode)
-      ? rawUpstreamCode
-      : undefined;
-    throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502, upstreamStatus, upstreamCode);
+    const { upstreamStatus, upstreamCode, message } = describeUpstreamAiError(error);
+    throw new AiAdapterError("AI_REQUEST_FAILED", message, 502, upstreamStatus, upstreamCode);
   }
 }
 
@@ -586,7 +578,7 @@ export class OpenAIReviewAdapter {
     const client = this.clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     });
     const content = await completionContent(client, {
@@ -703,7 +695,7 @@ export class OpenAIReviewAdapter {
     const client = this.clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     });
     const current = input.sampleParagraphs[input.index];
@@ -756,7 +748,7 @@ export class OpenAIReviewAdapter {
     const client = this.clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     });
     const request = (content: string) => completionContent(client, {
@@ -801,7 +793,7 @@ export class OpenAIReviewAdapter {
     const client = this.clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     });
     const sectionLabel = input.section === "strengths" ? "优点" : "需要修改";
@@ -844,7 +836,7 @@ export class OpenAIReviewAdapter {
     const client = this.clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     });
     const expected = resolveSampleWritingRequirements(input.config);
@@ -890,7 +882,7 @@ export async function testOpenAIConnection(
   const client = clientFactory({
     apiKey: input.apiKey,
     baseURL: input.baseUrl,
-    timeout: AI_TIMEOUT_MS,
+    timeout: timeoutForBaseUrl(input.baseUrl),
     maxRetries: AI_MAX_RETRIES,
   });
   const content = await completionContent(client, {
