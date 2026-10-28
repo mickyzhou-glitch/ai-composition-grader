@@ -61,6 +61,8 @@ export function describePublicAnalysisFailure(input: {
     summary = "AI 生成的范文未满足指定字数，请重新生成整篇批改";
   } else if (errorCode.startsWith("AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_")) {
     summary = "AI 生成的范文未满足指定段数，请重新生成整篇批改";
+  } else if (errorCode.startsWith("AI_INVALID_RESPONSE_rewritten_essay_structure")) {
+    summary = "AI 生成的范文未满足逐段结构要求，请重新分析";
   } else if (errorCode.includes("annotation_anchor")) {
     summary = `批注对不上原文${paragraph ? `（${paragraph}）` : ""}，请重新分析`;
   } else if (errorCode.includes("annotation_paragraph")) {

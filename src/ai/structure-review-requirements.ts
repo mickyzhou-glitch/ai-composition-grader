@@ -2,6 +2,26 @@ const NUMBERED_ITEM = /(?:^|[\s])([1-9]\d?)[.、．)）]\s*/gu;
 
 export const STRUCTURE_COVERAGE_ERROR_PREFIX = "structure coverage invalid";
 
+const PARAGRAPH_NUMBERS: Record<string, number> = {
+  一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
+};
+
+/** Only treat an explicit, complete paragraph outline as one-to-one essay tasks. */
+export function parseParagraphStructurePlan(value: string, paragraphCount: number): string[] | null {
+  const lines = value.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  if (lines.length !== paragraphCount || paragraphCount < 2) return null;
+  const tasks = lines.map((line, index) => {
+    const heading = line.match(/^(开头段|首段|结尾段|末段|第\s*([一二三四五六七八九十]|10|[1-9])\s*段)/u);
+    if (!heading) return null;
+    const number = /^(?:开头段|首段)$/u.test(heading[1]!) ? 1
+      : /^(?:结尾段|末段)$/u.test(heading[1]!) ? paragraphCount
+        : (PARAGRAPH_NUMBERS[heading[2] ?? ""] ?? Number(heading[2]));
+    const task = line.slice(heading[0].length).trim();
+    return number === index + 1 && task.length > 0 ? line : null;
+  });
+  return tasks.every((task): task is string => task !== null) ? tasks : null;
+}
+
 export function parseNumberedStructureRequirements(value: string): string[] | null {
   const matches = [...value.matchAll(NUMBERED_ITEM)];
   if (matches.length < 2) return null;

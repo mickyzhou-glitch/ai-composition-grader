@@ -158,6 +158,53 @@ async function expectInvalidTwice(value: unknown) {
 describe("CompositionReviewAdapter", () => {
   const fiveParagraphConfig = { ...config, structureRequirements: "严格五段式：引入、抑、扬、真相、升华。抑略写，扬详写。" };
   const rewrittenEssay = ["清晨的街角藏着一个身影。", "起初我觉得她沉默寡言。", "那天清晨，我看见她弓着身子，耐心地扫净路面。", "我渐渐明白，每一处整洁都离不开这份辛劳。", "此后再走过街角，我总会向她道一声早安。"];
+  const paragraphPlanConfig = {
+    ...config,
+    structureRequirements: [
+      "开头段（建议字数：100-150字）：点明礼物是什么和珍贵的原因。",
+      "第二段（建议字数：100-150字）：描写礼物的样子。",
+      "第三段（建议字数：200-250字）：详写围绕礼物发生的一件事。",
+      "第四段（建议字数：100-150字）：写事件结局和精神影响。",
+      "结尾段（建议字数：100-150字）：总结感悟。",
+    ].join("\n\n"),
+  };
+
+  it("明确的逐段结构要复核正文，偏离时只重写范文并再次复核", async () => {
+    const harness = setup();
+    const corrected = ["妈妈给我的书令我珍惜。", "书的封面是蓝色的。", "我读书时遇到困难，妈妈陪我一起查资料。", "我们找到了答案，我也学会了求助。", "这份陪伴比书更珍贵。"];
+    harness.create
+      .mockResolvedValueOnce(completion(validResult))
+      .mockResolvedValueOnce(completion({ checks: [
+        { paragraph: 1, follows: false, reason: "首段只写天气，没有点明礼物。" },
+        ...[2, 3, 4, 5].map((paragraph) => ({ paragraph, follows: true, reason: "符合。" })),
+      ] }))
+      .mockResolvedValueOnce(completion({ rewrittenEssay: corrected }))
+      .mockResolvedValueOnce(completion({ checks: corrected.map((_, index) => ({ paragraph: index + 1, follows: true, reason: "符合。" })) }));
+
+    const result = await harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
+
+    expect(result.report.rewrittenEssay).toEqual(corrected);
+    expect(result.report.paragraphReviews.map((item) => item.revisedText)).toEqual(corrected);
+    expect(harness.create).toHaveBeenCalledTimes(4);
+    expect(requestAt(harness.create, 1).messages[0].content).toContain("点明礼物是什么和珍贵的原因");
+    expect(requestAt(harness.create, 2).messages[1].content).toContain("首段只写天气");
+  });
+
+  it("逐段结构复核后仍不符合时拒绝保存范文", async () => {
+    const harness = setup();
+    const failedCheck = { checks: [
+      { paragraph: 1, follows: false, reason: "首段没有点明礼物。" },
+      ...[2, 3, 4, 5].map((paragraph) => ({ paragraph, follows: true, reason: "符合。" })),
+    ] };
+    harness.create
+      .mockResolvedValueOnce(completion(validResult))
+      .mockResolvedValueOnce(completion(failedCheck))
+      .mockResolvedValueOnce(completion({ rewrittenEssay: report.rewrittenEssay }))
+      .mockResolvedValueOnce(completion(failedCheck));
+
+    await expect(harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" }))
+      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "rewritten_essay_structure" });
+  });
 
   it.each([
     { structureRequirements: "第一段：引入。第二段：抑。第三段：扬。第四段：真相。第五段：升华。", teacherGuidance: undefined },

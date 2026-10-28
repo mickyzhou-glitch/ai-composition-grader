@@ -4,11 +4,29 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildStructureReviewRule,
+  parseParagraphStructurePlan,
   parseNumberedStructureRequirements,
   validateStructureRequirementCoverage,
 } from "./structure-review-requirements";
 
 const numberedRequirements = "1. 开头倒叙。 2. 交代困难。 3. 详写努力。";
+
+describe("explicit paragraph structure plan", () => {
+  it("识别开头、编号段和结尾组成的完整五段任务", () => {
+    expect(parseParagraphStructurePlan([
+      "开头段（建议字数：100-150字）：点明礼物。",
+      "第二段：描写礼物。",
+      "第三段：详写事件。",
+      "第四段：交代结局。",
+      "结尾段：总结感悟。",
+    ].join("\n\n"), 5)).toHaveLength(5);
+  });
+
+  it("不把一般编号评分点误当作逐段任务", () => {
+    expect(parseParagraphStructurePlan(numberedRequirements, 3)).toBeNull();
+    expect(parseParagraphStructurePlan("第一段：开头。\n第三段：结尾。", 2)).toBeNull();
+  });
+});
 
 describe("parseNumberedStructureRequirements", () => {
   it("拆分同一行的连续编号要求", () => {
