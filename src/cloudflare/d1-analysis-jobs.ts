@@ -7,9 +7,11 @@ import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { ocrCheckpointSchema, type OcrCheckpoint } from "../ocr/contracts";
 import type { AnalysisJobMode } from "./cloud-analysis-pipeline";
 
-// A full run has at most three sequential 180-second AI requests (OCR,
-// review, and one repair). Leave a minute for storage and validation.
-export const MAX_CLOUD_ANALYSIS_RUN_MS = 10 * 60_000;
+// Queue consumers stop at 15 minutes of wall time. xAI content calls may use
+// that whole window; leave one extra minute so a response that arrives just
+// before the platform stops the consumer can still be saved, and so the
+// scheduled recovery does not fail a run that is still executing.
+export const MAX_CLOUD_ANALYSIS_RUN_MS = 16 * 60_000;
 
 const stages = new Set(["queued", "reading_images", "saving_ocr", "generating_review", "mapping_annotations", "validating_result", "saving_result"]);
 const statuses = new Set(["queued", "running", "succeeded", "failed", "canceled"]);

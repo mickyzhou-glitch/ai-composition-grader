@@ -40,8 +40,28 @@ describe("公开的分析失败说明", () => {
 
   it("原始信息去掉密钥、图片数据和长正文，内部标记不展示", () => {
     expect(sanitizeAnalysisDetail("Bearer sk-abcdefghi123 以及 data:image/jpeg;base64,AAAA")).toBe("[密钥] 以及 [图片数据]");
+    expect(sanitizeAnalysisDetail("token xai-SecretKey123456")).toBe("token [密钥]");
     expect(sanitizeAnalysisDetail(`${"我".repeat(50)}。`)).toBe("[正文已省略]");
     expect(sanitizeAnalysisDetail(`${ANALYSIS_JOB_METADATA_PREFIX}ordinary-bound`)).toBeNull();
+  });
+
+  it("把已脱敏的上游失败说明放到详情里，400 仍使用原来的摘要", () => {
+    expect(describePublicAnalysisFailure({
+      errorCode: "AI_REQUEST_FAILED",
+      progressStage: "generating_review",
+      rawMessage: "AI 服务请求失败：Unknown model grok-4.7",
+    })).toEqual({
+      summary: "分析失败，停在「生成批改」，请重新分析",
+      detail: "AI 服务请求失败：Unknown model grok-4.7",
+    });
+    expect(describePublicAnalysisFailure({
+      errorCode: "AI_UPSTREAM_HTTP_400_invalid_request_error",
+      progressStage: "generating_review",
+      rawMessage: "AI 服务请求失败：Unknown model grok-4.7",
+    })).toMatchObject({
+      summary: "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入",
+      detail: "AI 服务请求失败：Unknown model grok-4.7",
+    });
   });
 
   it.each([

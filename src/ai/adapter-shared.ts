@@ -1,8 +1,14 @@
+import {
+  AI_MAX_RETRIES,
+  AI_TIMEOUT_MS,
+  describeUpstreamAiError,
+  timeoutForBaseUrl,
+  XAI_AI_TIMEOUT_MS,
+} from "./ai-client-options";
 import type { AiSettingsSource, OpenAIClientFactory, OpenAICompatibleClient } from "./openai-review-adapter";
 import { AiAdapterError } from "./openai-review-adapter";
 
-export const AI_TIMEOUT_MS = 180_000;
-export const AI_MAX_RETRIES = 1;
+export { AI_MAX_RETRIES, AI_TIMEOUT_MS, describeUpstreamAiError, timeoutForBaseUrl, XAI_AI_TIMEOUT_MS };
 
 /** Strip markdown fences and any prose around the outermost JSON object before parsing. */
 export function cleanJsonResponse(content: string): string {
@@ -49,7 +55,7 @@ export async function roleClient(
     client: clientFactory({
       apiKey: settings.apiKey,
       baseURL: settings.baseUrl,
-      timeout: AI_TIMEOUT_MS,
+      timeout: timeoutForBaseUrl(settings.baseUrl),
       maxRetries: AI_MAX_RETRIES,
     }),
   };
@@ -68,9 +74,7 @@ export async function completionWithFinish(
     const choice = response.choices[0] as { message: { content?: string | null }; finish_reason?: string | null } | undefined;
     return { content: choice?.message.content ?? "", truncated: choice?.finish_reason === "length" };
   } catch (error) {
-    const upstreamStatus = typeof error === "object" && error !== null && "status" in error && typeof error.status === "number"
-      ? error.status
-      : undefined;
-    throw new AiAdapterError("AI_REQUEST_FAILED", "AI 服务请求失败", 502, upstreamStatus);
+    const { upstreamStatus, upstreamCode, message } = describeUpstreamAiError(error);
+    throw new AiAdapterError("AI_REQUEST_FAILED", message, 502, upstreamStatus, upstreamCode);
   }
 }

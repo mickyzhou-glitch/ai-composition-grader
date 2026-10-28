@@ -1,3 +1,4 @@
+import { redactAiSecrets } from "../ai/ai-client-options";
 import { analysisInterruptedMessage, analysisStageLabel } from "../cloudflare/analysis-failure";
 import { ANALYSIS_JOB_METADATA_PREFIX } from "./analysis-job-metadata";
 
@@ -9,10 +10,7 @@ export interface PublicAnalysisFailure {
 /** Drop secrets, data URLs, and long essay text before a teacher can open the raw note. */
 export function sanitizeAnalysisDetail(value: string | null | undefined): string | null {
   if (!value || value.startsWith(ANALYSIS_JOB_METADATA_PREFIX)) return null;
-  const text = value
-    .replace(/data:[^\s]+/giu, "[图片数据]")
-    .replace(/sk-[A-Za-z0-9_-]{8,}/gu, "[密钥]")
-    .replace(/Bearer\s+\S+/giu, "[密钥]")
+  const text = redactAiSecrets(value.replace(/data:[^\s]+/giu, "[图片数据]"))
     .replace(/(api[_-]?key|token|secret)\s*[:=]\s*\S+/giu, "[密钥]")
     .replace(/[\u4e00-\u9fff，。！？、“”]{40,}/gu, "[正文已省略]")
     .replace(/\s+/gu, " ")
@@ -85,7 +83,7 @@ export function describePublicAnalysisFailure(input: {
     summary = image ? `第 ${image} 张图片过大，请重新拍摄后再分析` : "图片过大，请重新拍摄后再分析";
   } else if (status?.startsWith("5")) {
     summary = `模型或代理返回 ${status}，停在「${stage}」，请稍后重新分析`;
-  } else if (errorCode === "AI_UPSTREAM_HTTP_400") {
+  } else if (errorCode === "AI_UPSTREAM_HTTP_400" || errorCode.startsWith("AI_UPSTREAM_HTTP_400_")) {
     summary = "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入";
   } else if (errorCode.startsWith("AI_UPSTREAM_HTTP_402")) {
     summary = "AI 内容批改服务额度不足，请联系管理员充值后重试";

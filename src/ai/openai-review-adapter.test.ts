@@ -1336,7 +1336,7 @@ describe("OpenAIReviewAdapter", () => {
   it.each([
     Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
     Object.assign(new Error("rate limited"), { status: 429 }),
-  ])("将 SDK 最终 timeout/429 转成不泄漏请求内容的 502", async (providerError) => {
+  ])("将 SDK 最终 timeout/429 转成带上游摘要的 502", async (providerError) => {
     const harness = setup([providerError]);
 
     await expect(
@@ -1345,12 +1345,12 @@ describe("OpenAIReviewAdapter", () => {
       expect.objectContaining({
         code: "AI_REQUEST_FAILED",
         status: 502,
-        message: "AI 服务请求失败",
+        message: expect.stringMatching(/^AI 服务请求失败：/),
       }),
     );
   });
 
-  it("retains a safe upstream error category without exposing provider details", async () => {
+  it("retains upstream category and a sanitized message for teachers", async () => {
     const harness = setup([Object.assign(new Error("provider detail"), { status: 400, code: "image_input_denied" })]);
 
     await expect(
@@ -1359,8 +1359,42 @@ describe("OpenAIReviewAdapter", () => {
       code: "AI_REQUEST_FAILED",
       upstreamStatus: 400,
       upstreamCode: "image_input_denied",
-      message: "AI 服务请求失败",
+      message: "AI 服务请求失败：provider detail",
     }));
+  });
+
+  it("redacts secrets from upstream error messages", async () => {
+    const harness = setup([
+      Object.assign(new Error("Unauthorized Bearer sk-abcdefghijklmnop"), { status: 401 }),
+    ]);
+    const rejection = harness.adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] });
+    await expect(rejection).rejects.toMatchObject({
+      code: "AI_REQUEST_FAILED",
+      upstreamStatus: 401,
+    });
+    await expect(rejection).rejects.toThrow(/\[密钥\]/);
+    await expect(rejection).rejects.not.toThrow(/sk-abcdefghijklmnop/);
+  });
+
+  it("api.x.ai 使用更长的客户端超时", async () => {
+    const create = vi.fn(async () => ({ choices: [{ message: { content: JSON.stringify(successEnvelope) } }] }));
+    const factory = vi.fn((): OpenAICompatibleClient => ({ chat: { completions: { create } } }));
+    const adapter = new OpenAIReviewAdapter({
+      getRuntimeConfig: async () => ({
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-4.7",
+        apiKey: "secret-key",
+      }),
+    }, { clientFactory: factory });
+
+    await adapter.analyze({ config, imageDataUrls: ["data:image/jpeg;base64,eA=="] });
+
+    expect(factory).toHaveBeenCalledWith({
+      apiKey: "secret-key",
+      baseURL: "https://api.x.ai/v1",
+      timeout: 900_000,
+      maxRetries: 1,
+    });
   });
 
   it("拒绝 readable=false 携带 report 并尝试修复", async () => {
