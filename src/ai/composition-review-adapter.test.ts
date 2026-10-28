@@ -127,6 +127,7 @@ function setup(options: { baseUrl?: string; response?: unknown } = {}) {
   };
   return {
     create,
+    factory,
     settings,
     adapter: new CompositionReviewAdapter(settings, { clientFactory: factory }),
   };
@@ -156,6 +157,45 @@ async function expectInvalidTwice(value: unknown) {
 }
 
 describe("CompositionReviewAdapter", () => {
+  it("api.x.ai 使用更长的客户端超时，其他地址保持三分钟", async () => {
+    const xai = setup({ baseUrl: "https://api.x.ai/v1" });
+    await xai.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    expect(xai.factory).toHaveBeenCalledWith(expect.objectContaining({
+      baseURL: "https://api.x.ai/v1",
+      timeout: 900_000,
+      maxRetries: 1,
+    }));
+
+    const other = setup({ baseUrl: "https://api.deepseek.com/v1" });
+    await other.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    expect(other.factory).toHaveBeenCalledWith(expect.objectContaining({
+      baseURL: "https://api.deepseek.com/v1",
+      timeout: 180_000,
+    }));
+  });
+
+  it("内容模型请求失败时把已脱敏的上游原因写入错误信息", async () => {
+    const harness = setup();
+    harness.create.mockRejectedValueOnce(Object.assign(new Error("AI upstream request failed"), {
+      status: 400,
+      code: "invalid_request_error",
+      error: { message: "Unknown model grok-4.7 Bearer sk-abcdefghijklmnop xai-SecretKey123456" },
+    }));
+
+    const rejection = harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    await expect(rejection).rejects.toMatchObject({
+      code: "AI_REQUEST_FAILED",
+      status: 502,
+      upstreamStatus: 400,
+      upstreamCode: "invalid_request_error",
+    });
+    await expect(rejection).rejects.toThrow(/AI 服务请求失败：Unknown model grok-4\.7/);
+    await expect(rejection).rejects.toThrow(/\[密钥\]/);
+    await expect(rejection).rejects.not.toThrow(/sk-abcdefghijklmnop/);
+    await expect(rejection).rejects.not.toThrow(/xai-SecretKey123456/);
+  });
+
+
   const fiveParagraphConfig = { ...config, structureRequirements: "严格五段式：引入、抑、扬、真相、升华。抑略写，扬详写。" };
   const rewrittenEssay = ["清晨的街角藏着一个身影。", "起初我觉得她沉默寡言。", "那天清晨，我看见她弓着身子，耐心地扫净路面。", "我渐渐明白，每一处整洁都离不开这份辛劳。", "此后再走过街角，我总会向她道一声早安。"];
   const paragraphPlanConfig = {

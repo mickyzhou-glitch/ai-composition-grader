@@ -1,3 +1,4 @@
+import { redactAiSecrets } from "../ai/ai-client-options";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "../ai/openai-review-adapter";
 import { aiRequestHeaders } from "./ai-request-headers";
 
@@ -14,6 +15,24 @@ function safeProviderCode(payload: unknown): string | undefined {
 
 async function responsePayload(response: Response): Promise<unknown> {
   try { return await response.json(); } catch { return undefined; }
+}
+
+const UPSTREAM_DETAIL_LIMIT = 500;
+
+function upstreamErrorDetail(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const body = payload as { error?: unknown; message?: unknown };
+  const nested = body.error;
+  const detail = typeof nested === "string"
+    ? nested
+    : typeof nested === "object" && nested !== null && "message" in nested && typeof nested.message === "string"
+      ? nested.message
+      : typeof body.message === "string"
+        ? body.message
+        : "";
+  const compact = redactAiSecrets(detail).replace(/\s+/gu, " ").trim();
+  if (!compact) return undefined;
+  return compact.length > UPSTREAM_DETAIL_LIMIT ? `${compact.slice(0, UPSTREAM_DETAIL_LIMIT)}…` : compact;
 }
 
 /**
@@ -33,9 +52,11 @@ export const createWorkerOpenAIClient: OpenAIClientFactory = (options): OpenAICo
         });
         const payload = await responsePayload(response);
         if (!response.ok) {
+          const detail = upstreamErrorDetail(payload);
           throw Object.assign(new Error("AI upstream request failed"), {
             status: response.status,
             code: safeProviderCode(payload),
+            ...(detail ? { error: { message: detail } } : {}),
           });
         }
         if (typeof payload !== "object" || payload === null || !("choices" in payload) || !Array.isArray(payload.choices)) {

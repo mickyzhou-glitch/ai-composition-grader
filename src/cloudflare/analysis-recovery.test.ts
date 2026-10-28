@@ -2,13 +2,13 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeSchema } from "../db/init";
-import { D1AnalysisJobs } from "./d1-analysis-jobs";
+import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "./d1-analysis-jobs";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 import { CompositionReviewAdapter } from "../ai/composition-review-adapter";
 import worker, { savePipelineResult } from "../../worker/index";
 
 const NOW = 1_790_000_000_000;
-const TIMEOUT = 10 * 60_000;
+const TIMEOUT = MAX_CLOUD_ANALYSIS_RUN_MS;
 const config = { title: "春天", grade: "六年级", writingRequirements: "叙事", targetCharacters: 600, structureRequirements: "完整", scoringFocus: "细节", templateType: "custom" };
 const recognized = {
   pages: [{ pageIndex: 0, text: "原文", readable: true, warnings: [], blocks: [] }],
