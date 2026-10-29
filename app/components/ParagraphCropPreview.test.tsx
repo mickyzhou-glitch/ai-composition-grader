@@ -16,7 +16,7 @@ describe("ParagraphCropPreview", () => {
 
   it("按片段页序加载 ai 图片、裁图并清理临时资源", async () => {
     vi.spyOn(globalThis, "fetch")
-      .mockImplementation(async () => new Response(new Blob(["page"])));
+      .mockImplementation(async () => new Response("page"));
     const close = vi.fn();
     vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 1000, height: 1500, close })));
     const createObjectURL = vi.spyOn(URL, "createObjectURL")
@@ -38,6 +38,10 @@ describe("ParagraphCropPreview", () => {
       .toHaveAttribute("src", "blob:crop-1");
     expect(screen.getByRole("img", { name: "第 1 段原文裁图，第 2 页" }))
       .toHaveAttribute("src", "blob:crop-2");
+    for (const image of screen.getAllByRole("img")) {
+      expect(image).toHaveAttribute("width", "520");
+      expect(image).toHaveAttribute("height", "480");
+    }
     expect(screen.getByText("第 2 页续")).toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenNthCalledWith(
       1,

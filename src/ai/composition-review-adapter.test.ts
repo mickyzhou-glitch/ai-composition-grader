@@ -456,6 +456,66 @@ describe("CompositionReviewAdapter", () => {
   });
 
   it.each([
+    ["正如法国罗丹所说美到处都有的，对于我们的眼睛，不是缺少美，而是发现美。", "正如法国罗丹所说美到处都", "名言被写断了，缺冒号和引号，读起来不通。要改成完整、准确的一句话。"],
+    ["老师常说：只要肯努力，\n就会有所收获。", "老师常说：只要肯努力，", "引语不完整，应补全名言。"],
+    ["我先走进教室，然后坐下等待老师。", "我先走进教室，", "句子没有写完，请补完整。"],
+  ])("不因短锚点误判同句后文已存在的原文：%s", async (text, anchorText, comment) => {
+    const response = {
+      ...validResult,
+      annotationAnchors: [
+        { ...validResult.annotationAnchors[0], category: "expression", anchorText, comment },
+        { ...validResult.annotationAnchors[0], paragraphId: "paragraph-2", anchorText: "坚持的意义" },
+      ],
+    };
+    const harness = setup({ response });
+    const result = await harness.adapter.analyzeText({
+      config, paragraphs: [{ ...paragraphs[0], text }, paragraphs[1]], studentName: "小艾",
+    });
+
+    expect(result.annotationAnchors).toEqual([response.annotationAnchors[1]]);
+    expect(harness.create).toHaveBeenCalledTimes(1);
+    const request = requestAt(harness.create);
+    expect(request.messages[0].content).toContain("完整段落");
+    expect(request.messages[0].content).toContain("锚点只是定位片段");
+    expect(request.messages[0].content).toContain("标点问题");
+    expect(JSON.parse(request.messages[1].content).paragraphs[0].text).toBe(text);
+  });
+
+  it.each([
+    ["老师常说：只要肯努力", "只要肯努力", "引语没有写完，需要补全。"],
+    ["老师说：只要。后来我才明白。", "老师说：只要", "引语不完整，需要补全。"],
+    ["老师说：只要. 后来我才明白。", "老师说：只要", "引语不完整，需要补全。"],
+    ["老师说：只要！后来我才明白。", "老师说：只要！", "引语不完整，需要补全。"],
+    ["我先走进教室，然后坐下。", "我先走进教室", "补充进教室时的动作细节。"],
+    ["老师常说只要肯努力，就会有所收获。", "老师常说只要肯努力", "引用处缺少冒号和引号，请补上。"],
+  ])("保留真实残句、其他问题和单独的标点建议：%s", async (text, anchorText, comment) => {
+    const response = {
+      ...validResult,
+      annotationAnchors: [{ ...validResult.annotationAnchors[0], anchorText, comment }],
+    };
+    const harness = setup({ response });
+    const result = await harness.adapter.analyzeText({
+      config, paragraphs: [{ ...paragraphs[0], text }, paragraphs[1]], studentName: "小艾",
+    });
+    expect(result.annotationAnchors).toEqual(response.annotationAnchors);
+  });
+
+  it("批注修复失败后的兜底也不保留短锚点引发的写断误判", async () => {
+    const response = {
+      ...validResult,
+      annotationAnchors: [
+        { ...validResult.annotationAnchors[0], anchorText: "那天的雨", comment: "句子被写断了，请补完整。" },
+        { ...validResult.annotationAnchors[0], paragraphId: "paragraph-99" },
+      ],
+    };
+    const harness = setup({ response });
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(result.annotationAnchors).toEqual([]);
+    expect(result.report.grade).toBe("A");
+  });
+
+  it.each([
     ["未知段落 ID", invalidResult((value) => { value.annotationAnchors[0].paragraphId = "paragraph-99"; })],
     ["原文不存在的锚点", invalidResult((value) => { value.annotationAnchors[0].anchorText = "原文没有这句话"; })],
   ])("%s时先带错误重试，仍失败则丢弃该条批注并保留整篇", async (_reason, value) => {

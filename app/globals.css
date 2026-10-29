@@ -445,9 +445,9 @@ textarea { min-height: 100px; resize: vertical; }
 .batch-legacy-paragraph > label { display: grid; min-width: 0; gap: 5px; color: #3d3d3d; font-size: .8rem; font-weight: 700; }
 .batch-legacy-paragraph > label textarea { width: 100%; min-height: 92px; resize: vertical; }
 .paragraph-crop-list { display: grid; min-width: 0; gap: 10px; }
-.paragraph-crop { display: grid; width: 100%; min-height: 150px; max-height: 340px; aspect-ratio: 16 / 5; margin: 0; overflow: hidden; border: 1px solid var(--line); background: #fff; }
+.paragraph-crop { display: grid; width: 100%; min-width: 0; margin: 0; border: 1px solid var(--line); background: #fff; }
 .paragraph-crop figcaption { padding: 5px 10px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .78rem; }
-.paragraph-crop img { display: block; width: 100%; min-width: 0; height: 100%; max-height: 310px; object-fit: contain; }
+.paragraph-crop img { display: block; width: 100%; min-width: 0; height: auto; object-fit: contain; }
 .paragraph-crop-loading, .paragraph-crop-error, .paragraph-review-error { padding: 14px 16px; border-left: 3px solid var(--line); background: #f7f8f7; color: var(--muted); }
 .paragraph-crop-error, .paragraph-review-error { border-left-color: #c91f32; color: #8c1725; }
 .paragraph-suggestion-list { display: grid; gap: 10px; }
@@ -675,7 +675,6 @@ textarea { min-height: 100px; resize: vertical; }
   .sample-ai-all-buttons, .sample-ai-actions > div { display: grid; grid-template-columns: 1fr; }
   .sample-ai-all-buttons button, .sample-ai-actions button { width: 100%; }
   .paragraph-review-unit { padding: 20px 0 24px; }
-  .paragraph-crop { min-height: 120px; aspect-ratio: 3 / 1; }
   .paragraph-suggestion { padding: 12px; }
   .paragraph-rewrite-actions { grid-template-columns: 1fr; }
   .paragraph-rewrite-actions label { grid-column: auto; }
