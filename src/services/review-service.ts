@@ -271,7 +271,7 @@ export class ReviewService {
     ownerId: string,
     id: string,
     paragraphId: string,
-    input: { paragraphReviews: ParagraphReview[]; instruction?: string },
+    input: { paragraphReviews: ParagraphReview[]; instruction?: string; teacherGuidance?: string },
   ): Promise<ParagraphReview> {
     const review = this.get(ownerId, id);
     if (!review.report) {
@@ -298,10 +298,13 @@ export class ReviewService {
         409,
       );
     }
+    const current = input.paragraphReviews.find(({ paragraphId: candidateId }) => (
+      candidateId === paragraphId
+    ));
     const paragraph = review.ocr.paragraphs.find(({ id: candidateId }) => (
       candidateId === paragraphId
     ));
-    if (!paragraph) {
+    if (!paragraph && !current?.noSourceParagraph) {
       throw new ReviewServiceError(
         "PARAGRAPH_NOT_FOUND",
         "自然段不存在",
@@ -320,9 +323,6 @@ export class ReviewService {
         400,
       );
     }
-    const current = input.paragraphReviews.find(({ paragraphId: candidateId }) => (
-      candidateId === paragraphId
-    ));
     if (!current) {
       throw new ReviewServiceError(
         "PARAGRAPH_NOT_FOUND",
@@ -342,6 +342,8 @@ export class ReviewService {
       current,
       paragraphId,
       instruction: input.instruction,
+      paragraphReviews: input.paragraphReviews,
+      ...(input.teacherGuidance ? { teacherGuidance: input.teacherGuidance } : {}),
     });
   }
 

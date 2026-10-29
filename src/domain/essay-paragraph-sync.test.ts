@@ -4,9 +4,11 @@ import { paragraphEvaluationReportSchema, type ParagraphEvaluationReport } from 
 import { paragraphReviewCoverageMessage } from "./paragraph-review-groups";
 import {
   applyEssayToParagraphReviews,
+  deriveEssayFromParagraphReviews,
   essayDiffersFromParagraphReviews,
   splitEssayIntoReviewParagraphs,
   syncEssayBeforeApproval,
+  syncEssayFromParagraphReviews,
 } from "./essay-paragraph-sync";
 
 const diagnostics = {
@@ -117,16 +119,26 @@ describe("完整范文切到逐段改后全段", () => {
     });
   });
 
-  it("审核通过前的同步与「同步到逐段」一致，一致时返回原对象", () => {
-    const essay = ["一。", "二。", "三。"];
+  it("审核通过前以 paragraphReviews[].revisedText 为唯一编辑源刷新 rewrittenEssay，绝不反向覆盖", () => {
+    const oldEssay = ["旧范文一。", "旧范文二。", "旧范文三。"];
+    const teacherRevised = ["老师改后一。", "老师改后二。"];
     const ocr = { paragraphs: [{ id: "paragraph-2", paragraphIndex: 1 }, { id: "paragraph-1", paragraphIndex: 0 }] };
-    const source = report(essay, ["旧一", "旧二"]);
+    const source = report(oldEssay, teacherRevised);
+    expect(deriveEssayFromParagraphReviews(source.paragraphReviews)).toEqual(teacherRevised);
     const synced = syncEssayBeforeApproval(source, ocr);
-    expect(synced).toEqual(applyEssayToParagraphReviews(source, ["paragraph-1", "paragraph-2"]));
-    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(synced).toEqual(syncEssayFromParagraphReviews(source));
+    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(teacherRevised);
+    expect(synced.rewrittenEssay).toEqual(teacherRevised);
     expect(syncEssayBeforeApproval(synced, ocr)).toBe(synced);
-    const same = report(essay, essay);
+    const same = report(teacherRevised, teacherRevised);
     expect(syncEssayBeforeApproval(same, ocr)).toBe(same);
-    expect(syncEssayBeforeApproval(report(essay, ["甲", "乙", "丙"]), null).paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+    expect(syncEssayBeforeApproval(report(oldEssay, ["甲", "乙", "丙"]), null)).toMatchObject({
+      rewrittenEssay: ["甲", "乙", "丙"],
+      paragraphReviews: [
+        expect.objectContaining({ revisedText: "甲" }),
+        expect.objectContaining({ revisedText: "乙" }),
+        expect.objectContaining({ revisedText: "丙" }),
+      ],
+    });
   });
 });

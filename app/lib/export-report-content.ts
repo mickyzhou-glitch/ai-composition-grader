@@ -3,6 +3,7 @@ import {
   paragraphEvaluationReportSchema,
   type ParagraphSuggestion,
 } from "@/src/domain/contracts";
+import { deriveEssayFromParagraphReviews } from "@/src/domain/essay-paragraph-sync";
 import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import {
@@ -205,7 +206,11 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
         image,
         paragraphs: paragraphsByPage.get(image.position) ?? [],
       })),
-    rewrittenEssay: report.rewrittenEssay ?? [],
+    rewrittenEssay: report.rewrittenEssay?.length
+      ? (report.rewrittenEssay.length === report.paragraphReviews.length
+        ? deriveEssayFromParagraphReviews(report.paragraphReviews)
+        : report.rewrittenEssay)
+      : [],
   };
 }
 

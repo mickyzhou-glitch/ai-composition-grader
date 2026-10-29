@@ -67,6 +67,7 @@ export function BatchReviewPage() {
   const [error, setError] = useState("");
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
   const [standingRules, setStandingRules] = useState<string[]>([]);
+  const [essayRules, setEssayRules] = useState<string[]>([]);
   const [standingRulesLoading, setStandingRulesLoading] = useState(false);
   const [standingRulesError, setStandingRulesError] = useState("");
   const [revisionSubmitting, setRevisionSubmitting] = useState(false);
@@ -160,13 +161,17 @@ export function BatchReviewPage() {
   useEffect(() => {
     if (!revisionDialogOpen || !revisionTitle || !revisionReviewId) return;
     const controller = new AbortController();
-    void apiFetch<Array<{ text: string; scope: string; sourceTitle: string }>>("/api/grading-opinions", { signal: controller.signal })
+    void apiFetch<Array<{ text: string; scope: string; sourceTitle: string; sourceReviewId?: string | null }>>("/api/grading-opinions", { signal: controller.signal })
       .then((opinions) => {
         if (controller.signal.aborted || !Array.isArray(opinions)) return;
         const rules = opinions
           .filter((item) => item.scope === "standing" && item.sourceTitle.trim() === revisionTitle && item.text.trim())
           .map((item) => item.text);
+        const currentEssayRules = opinions
+          .filter((item) => item.scope === "essay" && item.sourceReviewId === revisionReviewId && item.text.trim())
+          .map((item) => item.text);
         setStandingRules([...new Set(rules)]);
+        setEssayRules([...new Set(currentEssayRules)]);
       })
       .catch(() => {
         if (!controller.signal.aborted) setStandingRulesError("同题规则读取失败，可继续手写，或关闭后重试。");
@@ -303,6 +308,7 @@ export function BatchReviewPage() {
     setRevisionError("");
     setRevisionNotice("");
     setStandingRules([]);
+    setEssayRules([]);
     setStandingRulesLoading(Boolean(review.config.title.trim()));
     setStandingRulesError("");
     setRevisionDialogOpen(true);
@@ -437,6 +443,6 @@ export function BatchReviewPage() {
         </section>
       </div>}
     </main>
-    {revisionDialogOpen ? <RevisionRequestDialog open standingRules={standingRules} standingRulesLoading={standingRulesLoading} standingRulesError={standingRulesError} submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
+    {revisionDialogOpen ? <RevisionRequestDialog open standingRules={standingRules} essayOpinions={essayRules} standingRulesLoading={standingRulesLoading} standingRulesError={standingRulesError} submitting={revisionSubmitting} error={revisionError} onClose={closeRevisionDialog} onSubmit={(input) => { void requestRevision(input); }} onReject={(input) => { void rejectReview(input); }} /> : null}
   </div>;
 }

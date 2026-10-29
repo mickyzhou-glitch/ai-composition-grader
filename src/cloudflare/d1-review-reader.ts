@@ -7,6 +7,7 @@ import {
 } from "../domain/contracts";
 import { deliveryReadiness } from "../delivery/readiness";
 import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
+import { STANDING_GUIDANCE_HEADER } from "../grading-opinions/standing-guidance";
 import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 
@@ -28,6 +29,7 @@ interface ReviewRow {
   teacher_reviewed_at: number | null;
   rejection_reason: string | null;
   rejection_change_request: string | null;
+  teacher_guidance?: string | null;
   expires_at: number | null;
   created_at: number;
   updated_at: number;
@@ -167,7 +169,16 @@ export class D1ReviewReader {
 
   async get(ownerId: string, reviewId: string): Promise<unknown | null> {
     const row = await this.database.prepare(`
-      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
+      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at,
+        (
+          SELECT teacher_guidance FROM analysis_jobs
+          WHERE analysis_jobs.review_id = reviews.id
+            AND analysis_jobs.owner_id = reviews.owner_id
+            AND analysis_jobs.teacher_guidance IS NOT NULL
+            AND TRIM(analysis_jobs.teacher_guidance) <> ''
+          ORDER BY analysis_jobs.created_at DESC, analysis_jobs.id DESC
+          LIMIT 1
+        ) AS teacher_guidance
       FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
     `).bind(reviewId, ownerId).first<ReviewRow>();
     return row ? this.hydrate(ownerId, row) : null;
@@ -232,12 +243,14 @@ export class D1ReviewReader {
     );
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
     const analysisFailure = review.status === "failed" ? await this.latestFailure(ownerId, review.id) : null;
+    const teacherGuidance = stripStandingGuidanceBlock(review.teacher_guidance);
     return {
       id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, className: review.class_name ?? "", config, report,
       revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at),
       teacherReviewedAt: date(review.teacher_reviewed_at),
       rejectionReason: review.rejection_reason,
       rejectionChangeRequest: review.rejection_change_request,
+      ...(teacherGuidance ? { teacherGuidance } : {}),
       expiresAt: date(review.expires_at),
       images, annotations, ocr, reportStale, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,
       ...(analysisFailure ? { analysisFailure } : {}),
@@ -268,4 +281,11 @@ export class D1ReviewReader {
 function normalizedRotation(value: number): 0 | 90 | 180 | 270 {
   if (value === 0 || value === 90 || value === 180 || value === 270) return value;
   throw new TypeError("Invalid image rotation");
+}
+
+function stripStandingGuidanceBlock(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const headerIndex = raw.indexOf(STANDING_GUIDANCE_HEADER);
+  const directPart = (headerIndex >= 0 ? raw.slice(0, headerIndex) : raw).trim();
+  return directPart || null;
 }

@@ -1,6 +1,6 @@
 import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
-import type { Annotation, AssignmentConfig, EvaluationReport } from "../domain/contracts";
+import type { Annotation, AssignmentConfig, EvaluationReport, ParagraphEvaluationReport } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
@@ -24,6 +24,7 @@ export interface CloudAnalysisPipelineJob {
   config: AssignmentConfig;
   teacherGuidance?: string;
   studentName?: string;
+  previousReport?: ParagraphEvaluationReport | null;
 }
 
 export interface CloudAnalysisPipelineDependencies {
@@ -41,6 +42,7 @@ export interface CloudAnalysisPipelineDependencies {
     paragraphs: Array<{ id: string; text: string }>;
     teacherGuidance?: string;
     studentName?: string;
+    previousReport?: ParagraphEvaluationReport | null;
   }): Promise<CompositionReviewResult>;
   updateStage(jobId: string, stage: CloudAnalysisProgressStage): Promise<void>;
   saveResult(job: CloudAnalysisPipelineJob, input: {
@@ -95,6 +97,7 @@ export class CloudAnalysisPipeline {
       paragraphs: checkpoint.paragraphs.map(({ id, text }) => ({ id, text })),
       teacherGuidance: job.teacherGuidance,
       studentName: job.studentName,
+      ...(job.previousReport ? { previousReport: job.previousReport } : {}),
     });
     await this.dependencies.updateStage(job.id, "mapping_annotations");
     const annotations = mapAnnotationAnchors(checkpoint, result.annotationAnchors);

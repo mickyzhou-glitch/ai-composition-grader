@@ -1,5 +1,5 @@
 import { opinionSourceTitle } from "../grading-opinions/grading-opinion-repository";
-import { listD1StandingOpinions } from "./d1-grading-opinions";
+import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
 import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
@@ -133,9 +133,13 @@ export class D1AnalysisJobs {
       const checkpoint = parsed;
       analysisModeForCheckpoint(mode, checkpoint);
     }
+    const [standingOpinions, essayOpinions] = await Promise.all([
+      listD1StandingOpinions(this.database, ownerId, titleFromStoredConfig(review.config)),
+      listD1EssayOpinions(this.database, ownerId, reviewId),
+    ]);
     const storedGuidance = guidanceWithStandingOpinions(
       guidance,
-      await listD1StandingOpinions(this.database, ownerId, titleFromStoredConfig(review.config)),
+      [...standingOpinions, ...essayOpinions],
     );
     const id = crypto.randomUUID();
     const now = Date.now();

@@ -227,7 +227,7 @@ describe("ParagraphReviewEditor", () => {
     expect(paragraph.querySelector(".revision-preview")?.textContent).toBe("我非常高兴！天很蓝。");
   });
 
-  it("结构段归组后每组一个框，编辑一边不会改另一边，下划线对照合并后的原文", () => {
+  it("结构段归组后每组一个框，编辑任一边实时同步另一边，下划线对照合并后的原文", () => {
     const onChange = vi.fn();
     const essay = ["我很高兴。天很蓝。", "结尾保留。"];
     render(<ParagraphReviewEditor
@@ -285,7 +285,7 @@ describe("ParagraphReviewEditor", () => {
       target: { value: "我非常高兴。天很蓝。" },
     });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      rewrittenEssay: essay,
+      rewrittenEssay: ["我非常高兴。天很蓝。", "结尾保留。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: "我非常高兴。天很蓝。" }),
         expect.objectContaining({ revisedText: "结尾保留。" }),
@@ -299,12 +299,12 @@ describe("ParagraphReviewEditor", () => {
       rewrittenEssay: [essay[0], "结尾改过。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: essay[0] }),
-        expect.objectContaining({ revisedText: essay[1] }),
+        expect.objectContaining({ revisedText: "结尾改过。" }),
       ],
     }));
   });
 
-  it("结构归组的旧差异不会在打开或编辑时自动改写", () => {
+  it("编辑改后全段时以 revisedText 为权威实时刷新完整范文", () => {
     const onChange = vi.fn();
     render(<ParagraphReviewEditor
       reviewId="review-1"
@@ -365,13 +365,12 @@ describe("ParagraphReviewEditor", () => {
       target: { value: "新乙。" },
     });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      rewrittenEssay: ["范文甲。", "范文乙。"],
+      rewrittenEssay: ["旧甲。", "新乙。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: "旧甲。" }),
         expect.objectContaining({ revisedText: "新乙。" }),
       ],
     }));
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
   });
 
   it("同步到逐段以完整范文覆盖五段改后全段，并重算下划线和字数", () => {

@@ -1,4 +1,4 @@
-import { listD1StandingOpinions } from "./d1-grading-opinions";
+import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
 import { describeScopedOpinion, guidanceWithStandingOpinions, type OpinionScope } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
@@ -328,16 +328,20 @@ export class D1Reanalysis {
     const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
     const standingIssue = input.commonIssue ? describeScopedOpinion(input.commonIssue) : null;
     const essaySuggestion = input.contentSuggestion ? describeScopedOpinion(input.contentSuggestion) : null;
-    const standing = await listD1StandingOpinions(this.database, ownerId, configTitle(row!.config));
+    const [standing, essayOpinions] = await Promise.all([
+      listD1StandingOpinions(this.database, ownerId, configTitle(row!.config)),
+      listD1EssayOpinions(this.database, ownerId, reviewId),
+    ]);
+    const combinedOpinions = [...standing, ...essayOpinions];
     if (standingIssue) {
-      standing.unshift({
+      combinedOpinions.unshift({
         text: standingIssue.text,
         paragraphLabel: standingIssue.paragraphLabel,
         category: standingIssue.category,
         createdAt: now,
       });
     }
-    const teacherGuidance = guidanceWithStandingOpinions(formattedGuidance, standing) ?? formattedGuidance;
+    const teacherGuidance = guidanceWithStandingOpinions(formattedGuidance, combinedOpinions) ?? formattedGuidance;
     const mode = reanalysisMode(row!);
     const statements = this.requestStatements(
       ownerId,
@@ -429,9 +433,13 @@ export class D1Reanalysis {
     const mode = reanalysisMode(row!);
     const jobId = crypto.randomUUID();
     const now = Date.now();
+    const [standingOpinions, essayOpinions] = await Promise.all([
+      listD1StandingOpinions(this.database, ownerId, review.title),
+      listD1EssayOpinions(this.database, ownerId, item.reviewId),
+    ]);
     const teacherGuidance = guidanceWithStandingOpinions(
       null,
-      await listD1StandingOpinions(this.database, ownerId, review.title),
+      [...standingOpinions, ...essayOpinions],
     );
     const statements = this.commitStatements(
       ownerId,

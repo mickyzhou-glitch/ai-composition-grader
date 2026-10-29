@@ -735,7 +735,7 @@ export class ReviewRepository {
       input.report !== undefined
         ? markReviewed
           ? validateReport(syncEssayBeforeApproval(input.report, checkpoint), { config, ocr: checkpoint ?? undefined })
-          : validateReport(input.report, {
+          : validateReport(syncEssayBeforeApproval(input.report, checkpoint), {
               templateType: config.templateType,
               ocr: checkpoint ?? undefined,
             })

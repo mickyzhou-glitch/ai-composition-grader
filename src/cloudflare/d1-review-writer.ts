@@ -86,7 +86,7 @@ export class D1ReviewWriter {
     const report = parsed.config
       ? null
       : parsed.report !== undefined
-        ? validateReport(parsed.report, { templateType: config.templateType, ocr: checkpoint })
+        ? validateReport(syncEssayBeforeApproval(parsed.report, checkpoint), { templateType: config.templateType, ocr: checkpoint })
         : current.report === null
           ? null
           : evaluationReportSchema.parse(JSON.parse(current.report));

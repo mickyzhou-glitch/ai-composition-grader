@@ -325,16 +325,29 @@ export default function Home() {
           error: "",
         });
       }
-      for (const item of submittedJobs) {
-        const outcome = await pollRegradeJob(item.reviewId, item.jobId);
-        if (outcome.status === "failed" || outcome.status === "running") {
+      const pollConcurrency = Math.min(4, Math.max(1, submittedJobs.length));
+      const pollOutcomes = new Array<{ status: "succeeded" | "failed" | "running"; message?: string | null }>(submittedJobs.length);
+      let nextPollIndex = 0;
+      await Promise.all(
+        Array.from({ length: pollConcurrency }, async () => {
+          while (nextPollIndex < submittedJobs.length) {
+            const index = nextPollIndex;
+            nextPollIndex += 1;
+            const item = submittedJobs[index]!;
+            pollOutcomes[index] = await pollRegradeJob(item.reviewId, item.jobId);
+          }
+        }),
+      );
+      submittedJobs.forEach((item, index) => {
+        const outcome = pollOutcomes[index];
+        if (outcome && (outcome.status === "failed" || outcome.status === "running")) {
           failures.push({
             reviewId: item.reviewId,
             studentName: names.get(item.reviewId) ?? "未填写",
             summary: outcome.message ?? "分析失败，请重新分析",
           });
         }
-      }
+      });
       await load();
       setFailedRegrade({
         running: false,

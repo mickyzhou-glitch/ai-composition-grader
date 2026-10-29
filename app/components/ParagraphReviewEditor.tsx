@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
 import {
   applyEssayToParagraphReviews,
+  deriveEssayFromParagraphReviews,
   essayDiffersFromParagraphReviews,
 } from "@/src/domain/essay-paragraph-sync";
 import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
@@ -53,24 +54,25 @@ export function ParagraphReviewEditor({
   const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
   const groups = resolveReviewGroups(report.paragraphReviews, paragraphs);
   const essayOutOfSync = essayDiffersFromParagraphReviews(report);
-  const totalCharacters = report.rewrittenEssay
-    ? report.rewrittenEssay.reduce((total, text) => total + countTextCharactersIncludingPunctuation(text), 0)
-    : paragraphs.reduce((total, paragraph) => {
-    const paragraphReview = report.paragraphReviews.find(
-      ({ paragraphId }) => paragraphId === paragraph.id,
-    );
-    return total + countTextCharactersIncludingPunctuation(paragraphReview?.revisedText ?? "");
-  }, 0);
+  const totalCharacters = report.paragraphReviews.reduce(
+    (total, review) => total + countTextCharactersIncludingPunctuation(review.revisedText),
+    0,
+  );
 
   function updateParagraph(
     paragraphId: string,
     update: (review: ParagraphReview) => ParagraphReview,
+    syncEssay = false,
   ) {
+    const nextParagraphReviews = report.paragraphReviews.map((review) => (
+      review.paragraphId === paragraphId ? update(review) : review
+    ));
     onChange({
       ...report,
-      paragraphReviews: report.paragraphReviews.map((review) => (
-        review.paragraphId === paragraphId ? update(review) : review
-      )),
+      paragraphReviews: nextParagraphReviews,
+      ...(syncEssay && report.rewrittenEssay
+        ? { rewrittenEssay: deriveEssayFromParagraphReviews(nextParagraphReviews) }
+        : {}),
     });
   }
 
@@ -96,9 +98,17 @@ export function ParagraphReviewEditor({
             disabled={disabled}
             onChange={(event) => {
             const nextText = event.target.value;
+            const nextEssay = report.rewrittenEssay!.map((current, i) => i === index ? nextText : current);
             onChange({
               ...report,
-              rewrittenEssay: report.rewrittenEssay!.map((current, i) => i === index ? nextText : current),
+              rewrittenEssay: nextEssay,
+              ...(nextEssay.length === report.paragraphReviews.length
+                ? {
+                    paragraphReviews: report.paragraphReviews.map((review, i) => (
+                      i === index ? { ...review, revisedText: nextText } : review
+                    )),
+                  }
+                : {}),
             });
           }}
           />
@@ -178,7 +188,7 @@ export function ParagraphReviewEditor({
                   onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
                     ...current,
                     revisedText: event.target.value,
-                  }))}
+                  }), true)}
                 />
               </label>
               <RevisionPreview

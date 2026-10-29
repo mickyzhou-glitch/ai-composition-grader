@@ -1,6 +1,6 @@
 "use client";
 
-import { syncEssayBeforeApproval } from "@/src/domain/essay-paragraph-sync";
+import { deriveEssayFromParagraphReviews, syncEssayBeforeApproval } from "@/src/domain/essay-paragraph-sync";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -163,6 +163,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setClassName(loaded.className ?? "");
     setReport(loaded.report);
     setAnnotations(loaded.annotations ?? []);
+    if (loaded.teacherGuidance?.trim()) {
+      setTeacherGuidance((current) => current || loaded.teacherGuidance?.trim() || "");
+    }
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
   }, []);
 
@@ -493,6 +496,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           body: JSON.stringify({
             paragraphReviews: report.paragraphReviews,
             ...(instruction?.trim() ? { instruction: instruction.trim() } : {}),
+            ...(teacherGuidance.trim() ? { teacherGuidance: teacherGuidance.trim() } : {}),
           }),
         },
       );
@@ -507,7 +511,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           }
           : paragraph
       ));
-      changeReport({ ...report, paragraphReviews });
+      changeReport({
+        ...report,
+        paragraphReviews,
+        ...(report.rewrittenEssay ? { rewrittenEssay: deriveEssayFromParagraphReviews(paragraphReviews) } : {}),
+      });
       const paragraphNumber = review.ocr.paragraphs.find(
         ({ id }) => id === paragraphId,
       )?.paragraphIndex;
@@ -566,6 +574,8 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setBusy("save");
     setError("");
     try {
+      const synced = syncEssayBeforeApproval(report, review.ocr?.version === 2 ? review.ocr : null);
+      if (synced !== report) setReport(synced);
       const saved = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -573,7 +583,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           expectedRevision: review.revision,
           studentName,
           ...(className !== (review.className ?? "") ? { className } : {}),
-          report,
+          report: synced,
           annotations,
         }),
       });

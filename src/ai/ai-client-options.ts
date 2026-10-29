@@ -1,6 +1,6 @@
 export const AI_TIMEOUT_MS = 180_000;
-/** xAI reasoning models often need several minutes. Stay within the 15-minute queue consumer wall clock. */
-export const XAI_AI_TIMEOUT_MS = 900_000;
+/** xAI reasoning models need a slightly longer timeout than standard providers, capped at 4 minutes so a single hung connection cannot stall the 15-minute queue consumer. */
+export const XAI_AI_TIMEOUT_MS = 240_000;
 export const AI_MAX_RETRIES = 1;
 
 const UPSTREAM_DETAIL_LIMIT = 160;

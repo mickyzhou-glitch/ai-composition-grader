@@ -86,6 +86,34 @@ export async function listD1StandingOpinions(
   });
 }
 
+export async function listD1EssayOpinions(
+  database: D1Database,
+  ownerId: string,
+  reviewId: string,
+): Promise<StandingOpinionInput[]> {
+  if (!reviewId.trim()) return [];
+  const bound = database.prepare(`
+    SELECT change_request AS text, paragraph_label AS paragraphLabel,
+      category, source_review_id AS sourceReviewId, updated_at AS updatedAt
+    FROM grading_opinions
+    WHERE owner_id = ? AND scope = 'essay' AND source_review_id = ?
+    ORDER BY updated_at DESC, created_at DESC, id DESC
+  `).bind(ownerId, reviewId) as D1PreparedStatement & {
+    all?: () => Promise<{ results?: Array<Record<string, unknown>> }>;
+  };
+  if (typeof bound.all !== "function") return [];
+  const result = await bound.all();
+  return (result.results ?? []).flatMap((row) => {
+    const text = typeof row.text === "string" ? row.text.trim() : "";
+    const sourceReviewId = typeof row.sourceReviewId === "string" ? row.sourceReviewId : "";
+    if (!text || sourceReviewId !== reviewId) return [];
+    const createdAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
+    const category = typeof row.category === "string" && isOpinionCategory(row.category) ? row.category : undefined;
+    const paragraphLabel = typeof row.paragraphLabel === "string" ? row.paragraphLabel : null;
+    return [{ text, paragraphLabel, category, createdAt }];
+  });
+}
+
 export class D1GradingOpinions {
   constructor(private readonly database: D1Database) {}
 

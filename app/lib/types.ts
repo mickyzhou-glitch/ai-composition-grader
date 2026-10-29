@@ -45,6 +45,7 @@ export interface ReviewView {
   reportStale: boolean;
   hasPdf: boolean;
   pdfFilename: string | null;
+  teacherGuidance?: string | null;
   analysisFailure?: {
     summary: string;
     detail: string | null;

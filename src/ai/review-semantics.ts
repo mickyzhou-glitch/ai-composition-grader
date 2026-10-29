@@ -44,38 +44,44 @@ export function validateGeneratedReportSemantics(
   const report = validatedParagraphIds
     ? validateGeneratedParagraphReport(input, validatedParagraphIds)
     : validateReport(input, { config, ocr });
-  if (!report.diagnostics) {
-    throw new Error("report diagnostics missing after validation");
-  }
-  validateStructureRequirementCoverage(
-    report.diagnostics.structure.finding,
-    config.structureRequirements,
-  );
-  const feedbacks = report.parentFeedbacks ?? [];
-  if (feedbacks.length !== EXPECTED_PARENT_FEEDBACKS.length) {
-    throw new Error("parent feedback count must be three");
-  }
-  const expectedGreeting = studentName?.trim() ? `${studentName.trim()}家长` : "家长您好";
-  feedbacks.forEach((feedback, index) => {
-    const expected = EXPECTED_PARENT_FEEDBACKS[index];
-    if (
-      feedback.style !== expected.style ||
-      feedback.title !== expected.title ||
-      !feedback.content.startsWith(expectedGreeting)
-    ) {
-      throw new Error("parent feedback semantics are invalid");
+  const isParagraphReport = "version" in report && report.version === 2;
+  if (!isParagraphReport) {
+    if (!report.diagnostics) {
+      throw new Error("report diagnostics missing after validation");
     }
-  });
-  const strengths = report.personalizedComment
-    .split(/\r?\n/u)
-    .map(normalizeFeedbackItem)
-    .filter(Boolean);
-  const painPoints = report.painPoints
+    validateStructureRequirementCoverage(
+      report.diagnostics.structure.finding,
+      config.structureRequirements,
+    );
+    const feedbacks = report.parentFeedbacks ?? [];
+    if (feedbacks.length !== EXPECTED_PARENT_FEEDBACKS.length) {
+      throw new Error("parent feedback count must be three");
+    }
+    const expectedGreeting = studentName?.trim() ? `${studentName.trim()}家长` : "家长您好";
+    feedbacks.forEach((feedback, index) => {
+      const expected = EXPECTED_PARENT_FEEDBACKS[index];
+      if (
+        feedback.style !== expected.style ||
+        feedback.title !== expected.title ||
+        !feedback.content.startsWith(expectedGreeting)
+      ) {
+        throw new Error("parent feedback semantics are invalid");
+      }
+    });
+  }
+  const strengths = report.personalizedComment !== undefined
+    ? report.personalizedComment
+      .split(/\r?\n/u)
+      .map(normalizeFeedbackItem)
+      .filter(Boolean)
+      .join("\n")
+    : undefined;
+  const painPoints = (report.painPoints ?? [])
     .map(normalizeFeedbackItem)
     .filter(Boolean);
   return {
     ...report,
-    personalizedComment: strengths.join("\n"),
+    ...(strengths !== undefined ? { personalizedComment: strengths } : {}),
     painPoints,
     commonIssues: [],
     revisionSuggestions: [],

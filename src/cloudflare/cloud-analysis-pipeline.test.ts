@@ -256,6 +256,43 @@ describe("CloudAnalysisPipeline", () => {
     }));
   });
 
+  it("content_only 退回重算时向 analyzeText 透传 previousReport", async () => {
+    const deps = dependencies({ readCheckpoint: vi.fn(async () => recognizedCheckpoint) });
+    const previousReport = {
+      version: 2 as const,
+      overallTheme: "写难忘的课堂瞬间",
+      themeReason: "主题明确",
+      paragraphReviews: [{
+        paragraphId: "paragraph-1",
+        suggestions: [{ target: "自然段", advice: "展开细节" }],
+        revisedText: "旧版第 1 段修改草稿。",
+      }],
+      rewrittenEssay: ["旧版第 1 段修改草稿。"],
+      painPoints: [],
+      commonIssues: [],
+      revisionSuggestions: [],
+      personalizedComment: "继续保持",
+      diagnostics: {
+        handwritingClarity: 5,
+        punctuationUsage: 5,
+        typoCount: 0,
+        typos: [],
+        sickSentenceCount: 0,
+        sickSentences: [],
+      },
+    };
+
+    await new CloudAnalysisPipeline(deps).run({
+      ...job,
+      mode: "content_only",
+      previousReport,
+    });
+
+    expect(deps.analyzeText).toHaveBeenCalledWith(expect.objectContaining({
+      previousReport,
+    }));
+  });
+
   it.each([
     ["missing OCR", null],
     ["OCR v1", v1Checkpoint],

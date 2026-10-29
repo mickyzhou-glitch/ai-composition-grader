@@ -162,7 +162,7 @@ describe("CompositionReviewAdapter", () => {
     await xai.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
     expect(xai.factory).toHaveBeenCalledWith(expect.objectContaining({
       baseURL: "https://api.x.ai/v1",
-      timeout: 900_000,
+      timeout: 240_000,
       maxRetries: 1,
     }));
 
@@ -310,15 +310,15 @@ describe("CompositionReviewAdapter", () => {
     expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("输出被截断时调高输出上限自动重试一次", async () => {
+  it("首次调用与截断重试都显式传入 max_tokens: 8192", async () => {
     const harness = setup();
     const text = JSON.stringify(validResult);
     harness.create.mockResolvedValueOnce({ choices: [{ message: { content: text.slice(0, 200) }, finish_reason: "length" }] } as never);
     await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
       .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
     expect(harness.create).toHaveBeenCalledTimes(2);
+    expect((harness.create.mock.calls[0][0] as { max_tokens?: number }).max_tokens).toBe(8192);
     expect((harness.create.mock.calls[1][0] as { max_tokens?: number }).max_tokens).toBe(8192);
-    expect((harness.create.mock.calls[0][0] as { max_tokens?: number }).max_tokens).toBeUndefined();
   });
 
   it("重试后仍被截断时报 output_truncated", async () => {
@@ -644,19 +644,20 @@ describe("CompositionReviewAdapter", () => {
     expect(result.report).not.toHaveProperty("wordCount");
   });
 
-  it("按真实原文段数和目标范文段数给出可解析的嵌套 JSON 模板", async () => {
+  it("按真实原文段数和目标范文段数给出精简嵌套 JSON 模板（不重复输出双份范文或僵尸字段）", async () => {
     const harness = setup();
     await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
     const prompt = requestAt(harness.create).messages[0].content;
     const template = JSON.parse(prompt.split("输出 JSON 模板（说明字符串必须替换为实际内容）：\n")[1]);
     expect(Object.keys(template).sort()).toEqual(["annotationAnchors", "report"]);
+    expect(Object.keys(template.report).sort()).toEqual(["grade", "paragraphReviews", "themeFit", "version"]);
     expect(template.report.paragraphReviews.map((item: { paragraphId: string }) => item.paragraphId))
       .toEqual(["paragraph-1", "paragraph-3", "paragraph-4", "paragraph-5", "paragraph-2"]);
     expect(template.report.paragraphReviews.filter((item: { noSourceParagraph?: true }) => item.noSourceParagraph))
       .toHaveLength(3);
-    expect(template.report.rewrittenEssay).toHaveLength(5);
-    expect(template.report.parentFeedbacks).toHaveLength(3);
-    expect(prompt).toContain("paragraphReviews 与 rewrittenEssay 都必须恰好 5 项");
+    expect(prompt).toContain("paragraphReviews 必须恰好 5 项");
+    expect(prompt).not.toContain("没有改动的句子必须与该段原文逐字相同");
+    expect(prompt).toContain("静默修通原句的语病、错别字、标点错误、指代不明与主语断层");
   });
 
   it("后续修改意见位于初始写作规则之后，避免初始字数覆盖最新要求", async () => {
@@ -745,17 +746,27 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("与原文冲突时以原文事实为准");
   });
 
-  it("提示并校验编号结构要求和固定三份家长反馈", async () => {
-    const harness = setup();
+  it("提示编号结构要求，且精简 v2 报告无需 diagnostics/parentFeedbacks/rewrittenEssay 即可通过校验并自动派生完整范文", async () => {
+    const slimResponse = {
+      report: {
+        version: 2 as const,
+        themeFit: "fits" as const,
+        grade: "B+" as const,
+        paragraphReviews: byModelParagraphs(report.paragraphReviews, report.rewrittenEssay!),
+      },
+      annotationAnchors: validResult.annotationAnchors,
+    };
+    const harness = setup({ response: slimResponse });
 
-    await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
 
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("【第1项】");
     expect(prompt).toContain("【第2项】");
-    expect(prompt).toContain("style=warm、title=亲切详细");
-    expect(prompt).toContain("style=professional、title=专业清晰");
-    expect(prompt).toContain("style=concise、title=简短微信版");
+    expect(prompt).not.toContain("parentFeedbacks");
+    expect(prompt).not.toContain("diagnostics");
+    expect(result.report.rewrittenEssay).toEqual(report.rewrittenEssay);
+    expect(result.report.paragraphReviews.map((item) => item.revisedText)).toEqual(report.rewrittenEssay);
   });
 
   it("偏题报告只能使用 C 等级", async () => {
@@ -766,9 +777,20 @@ describe("CompositionReviewAdapter", () => {
     await expectInvalidTwice(value);
   });
 
-  it("拒绝缺少固定三份家长反馈的报告", async () => {
-    const value = invalidResult((result) => { result.report.parentFeedbacks = []; });
-    await expectInvalidTwice(value);
+  it("退回重分析传入 previousReport 时将上一版批改作为修订底稿写入提示词", async () => {
+    const harness = setup();
+
+    await harness.adapter.analyzeText({
+      config,
+      paragraphs,
+      studentName: "小艾",
+      teacherGuidance: "只重写第 2 段，增加外貌细节",
+      previousReport: report,
+    });
+
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("上一版批改底稿");
+    expect(prompt).toContain("未被要求修改的段落请尽量保持其修改动作（suggestions.advice）与改后段落（revisedText）稳定");
   });
 
   it("老师要求严格三段时按结构段归组，改后全段与完整范文逐段相同", async () => {
