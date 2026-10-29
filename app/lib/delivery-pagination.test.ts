@@ -41,6 +41,16 @@ function documentWith(...paragraphs: DeliveryParagraph[]): DeliveryDocument {
 }
 
 describe("交付文档分页", () => {
+  it.each([[520, 1800], [1600, 180]])("导出保留 %s×%s 段落图的完整宽高比例", (width, height) => {
+    const pages = paginateDeliveryDocument(documentWith(paragraph(1, {
+      crops: [{ width, height }],
+    })), { measureText });
+    const crops = pages.flatMap((page) => page.blocks).filter((block) => block.kind === "crop");
+    expect(crops).toHaveLength(1);
+    expect(crops[0].widthMm / crops[0].heightMm).toBeCloseTo(width / height);
+    expect(pages.every((page) => page.remainingHeightMm >= 0)).toBe(true);
+  });
+
   it("完整范文跨页时保留范文段号并完整输出，不生成空点评标题", () => {
     const text = "这是一段需要完整保留的范文。".repeat(350);
     const essay = { ...paragraph(4, { crops: [], suggestionCount: 0, revisionText: text }), essayParagraphNumber: 1 };

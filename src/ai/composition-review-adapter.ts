@@ -249,6 +249,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     revisedTextRule(input),
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",
     "annotationAnchors 只返回 paragraphId、category、anchorText、comment、isHighlight。paragraphId 必须来自输入，按输入段落顺序排列；anchorText 必须逐字来自对应段落原文，无法确定时不要返回。",
+    "判断名言、引语或句子是否写断、残缺前，必须通读完整段落及相邻段落，核对跨行、跨页的后续原文。锚点只是定位片段，不代表整句；不得因短锚点在句中结束就判定原文缺失。原文已包含后半句时，不得生成“名言被写断”“句子没写完”类批注。确有残缺时，anchorText 应覆盖完整的可疑句或直至段尾，不能只截取句首作证据。缺少冒号、引号属于标点问题，不能据此推断名言内容不完整；只能就能确认的标点问题单独给建议。此规则也适用于诊断、修改建议和家长反馈，不得在其他字段重复误判。",
     "根对象、report 和所有嵌套对象都不得添加结构中未列明的字段；不得额外返回作文标题、总字数或旧版范文字段。完整范文只能放在 rewrittenEssay 数组中。",
     teacherGuidanceRule(input.teacherGuidance),
     teacherRewriteLengthRule(input.teacherGuidance),
@@ -454,6 +455,25 @@ function assertStructureGroups(
   return aligned;
 }
 
+function hasUnverifiedIncompleteClaim(anchor: ParagraphAnnotationAnchor, paragraphText: string): boolean {
+  if (anchor.isHighlight || anchor.category === "highlight") return false;
+  const incompleteClaim = /(?:名言|引文|引语|引用|句子|语句|原句|这句|此句)[^。！？!?\n]{0,16}(?:写断|截断|残缺|不完整|未写完|没(?:有)?写完)|(?:补全|补完整)[^。！？!?\n]{0,8}(?:名言|引文|引语|引用|句子|语句|原句)/u;
+  if (!incompleteClaim.test(anchor.comment)) return false;
+
+  // OCR 的换行不是句末。锚点后仍有同句正文时，短锚点不足以证明句子残缺。
+  // 保守去掉此类断言；真实残句应按提示词锚到完整可疑句或段尾。
+  const text = paragraphText.replace(/\s+/gu, "");
+  const excerpt = anchor.anchorText.replace(/\s+/gu, "");
+  if (!excerpt || /[。！？.!?][”’"']*$/u.test(excerpt)) return false;
+  let offset = text.indexOf(excerpt);
+  while (offset >= 0) {
+    const continuation = text.slice(offset + excerpt.length).split(/[。！？.!?]/u, 1)[0];
+    if (/[\p{L}\p{N}]/u.test(continuation)) return true;
+    offset = text.indexOf(excerpt, offset + 1);
+  }
+  return false;
+}
+
 function validateContentResult(
   content: string,
   input: AnalyzeOcrTextInput,
@@ -480,7 +500,8 @@ function validateContentResult(
   if (options.salvageAnnotations) {
     const kept = parsed.annotationAnchors.flatMap((anchor, index) => {
       const paragraph = paragraphsById.get(anchor.paragraphId);
-      if (!paragraph || !paragraph.text.includes(anchor.anchorText)) return [];
+      if (!paragraph || !paragraph.text.includes(anchor.anchorText)
+        || hasUnverifiedIncompleteClaim(anchor, paragraph.text)) return [];
       return [{ anchor, index, paragraphIndex: paragraph.index }];
     });
     kept.sort((left, right) => left.paragraphIndex - right.paragraphIndex || left.index - right.index);
@@ -498,7 +519,12 @@ function validateContentResult(
     }
     previousAnchorParagraphIndex = paragraph.index;
   });
-  return { report, annotationAnchors: parsed.annotationAnchors };
+  return {
+    report,
+    annotationAnchors: parsed.annotationAnchors.filter((anchor) => (
+      !hasUnverifiedIncompleteClaim(anchor, paragraphsById.get(anchor.paragraphId)!.text)
+    )),
+  };
 }
 
 function salvageAnnotationFailure(
