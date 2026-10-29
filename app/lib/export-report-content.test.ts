@@ -59,7 +59,7 @@ function review(): ExportReviewSource {
   };
 }
 
-describe("导出段落只含修改动作和改后全段", () => {
+describe("导出段落建议正文与改后全段，不含标签", () => {
   it("用与原段的逐句比对标记修改句和新增句", () => {
     const content = buildExportReportContent(review());
     const paragraph = content.pages[0]?.paragraphs[0];
@@ -72,8 +72,9 @@ describe("导出段落只含修改动作和改后全段", () => {
     const runs = exportParagraphRuns(paragraph!);
     const visible = runs.map((run) => run.text).join("");
     expect(content.pages[0]?.paragraphs).toHaveLength(1);
-    expect(runs.filter((run) => run.text.startsWith("修改动作："))).toHaveLength(1);
-    expect(visible).toContain("修改动作：1. 写清迈步的感觉\n2. 保留灯光这一句\n");
+    expect(runs.filter((run) => run.style === "suggestion")).toHaveLength(1);
+    expect(visible).toContain("1. 写清迈步的感觉\n2. 保留灯光这一句\n");
+    expect(visible).not.toContain("修改动作：");
     expect(visible).toContain("改后全段：");
     expect(visible).toContain("我终于走上台。灯光很亮。我听见自己的呼吸。");
     expect(visible).not.toContain("动作略快");
@@ -132,7 +133,7 @@ describe("导出段落只含修改动作和改后全段", () => {
       { text: "新的经过。", changed: true },
     ]);
     expect(exportParagraphRuns(content.pages[0]!.paragraphs[0]!).map((run) => run.text).join(""))
-      .toContain("对应原文第 1–2 段");
+      .not.toContain("对应原文第 1–2 段");
   });
 
   it("同段多条建议合并后框数仍等于段数", () => {
@@ -165,10 +166,11 @@ describe("导出段落只含修改动作和改后全段", () => {
     const boxes = content.pages[0]?.paragraphs ?? [];
     expect(boxes).toHaveLength(paragraphs.length);
     const first = exportParagraphRuns(boxes[0]!).map((run) => run.text).join("");
-    expect(first).toContain("修改动作：1. 补听觉\n2. 补动作\n3. 收束主题\n");
+    expect(first).toContain("1. 补听觉\n2. 补动作\n3. 收束主题\n");
+    expect(first).not.toContain("修改动作：");
     expect(first.match(/改后全段：/gu)).toHaveLength(1);
     expect(first).toContain("开篇改后。");
-    expect(exportParagraphRuns(boxes[1]!).map((run) => run.text).join("")).toContain("修改动作：本段无需修改");
+    expect(exportParagraphRuns(boxes[1]!).map((run) => run.text).join("")).toContain("本段无需修改\n改后全段：");
   });
 
   it("同步到逐段后导出改后全段使用范文，并按同步后的文本重算下划线", () => {

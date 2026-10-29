@@ -143,7 +143,7 @@ describe("PDF 文件下载", () => {
 
     await downloadReviewPdf("review-1");
 
-    const modelText = "修改动作：补充听觉\n改后全段：我终于，走上台。";
+    const modelText = "补充听觉\n改后全段：我终于，走上台。";
     expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', modelText);
     expect(fontLoad).toHaveBeenCalledWith('700 16px "LXGW WenKai"', modelText);
     expect(renderEvents.slice(0, 3)).toEqual(["font", "font", "canvas"]);
