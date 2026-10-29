@@ -199,7 +199,9 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("修改示例");
     expect(documentXml).not.toContain("示例：");
     expect(documentXml).not.toContain("<w:numPr>");
-    expect(documentXml).toContain("修改动作：1. 补充登台前的具体动作。");
+    expect(documentXml).toContain("1. 补充登台前的具体动作。");
+    expect(documentXml).not.toContain("修改动作：");
+    expect(documentXml).not.toContain("对应原文第");
     expect(documentXml).toContain("保留。");
     expect(documentXml).not.toContain("开头略显概括。");
     expect(documentXml).not.toContain("手心的汗把稿纸浸出了一道浅痕。");
@@ -275,7 +277,8 @@ describe("Word 逐段批改文档", () => {
       return documentXml.slice(start, documentXml.indexOf("</w:r>", at));
     };
 
-    expect(documentXml).toContain("修改动作：写清迈步的感觉");
+    expect(documentXml).toContain("写清迈步的感觉");
+    expect(documentXml).not.toContain("修改动作：");
     expect(documentXml).toContain("改后全段：");
     expect(documentXml).not.toContain("动作略快");
     expect(documentXml).not.toContain("问题描述");
@@ -314,7 +317,7 @@ describe("Word 逐段批改文档", () => {
     const { zip, documentXml } = await unpack(review);
     const theme = await zip.file("word/theme/theme1.xml")?.async("string");
     const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
-    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+    const boxes = cells.filter((cell) => cell.includes("改后全段："));
     const photoTables = [...documentXml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/gu)]
       .filter((grid) => (grid[0].match(/<w:gridCol\b/gu) ?? []).length === 2);
 
@@ -376,13 +379,13 @@ describe("Word 逐段批改文档", () => {
     };
     const { documentXml } = await unpack(review);
     const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
-    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+    const boxes = cells.filter((cell) => cell.includes("改后全段："));
 
     expect(documentXml).toMatch(/w:orient="landscape"/u);
     expect(boxes).toHaveLength(ranges.length);
-    expect(boxes[0]).toContain("对应原文第 1–2 段");
-    expect(boxes[2]).toContain("对应原文第 4–5 段");
-    expect(boxes[4]).toContain("对应原文第 7 段");
+    expect(boxes[0]).not.toContain("对应原文第 1–2 段");
+    expect(boxes[2]).not.toContain("对应原文第 4–5 段");
+    expect(boxes[4]).not.toContain("对应原文第 7 段");
     expect(documentXml).not.toContain("改好第 6 组");
   });
 
@@ -419,7 +422,7 @@ describe("Word 逐段批改文档", () => {
     };
     const { documentXml } = await unpack(review);
     const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
-    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+    const boxes = cells.filter((cell) => cell.includes("改后全段："));
 
     expect(boxes).toHaveLength(paragraphs.length);
     expect(boxes[0]).toContain("1. 补听觉");
@@ -427,7 +430,8 @@ describe("Word 逐段批改文档", () => {
     expect(boxes[0]).toContain("3. 收束主题");
     expect(boxes[0].match(/改后全段：/gu)).toHaveLength(1);
     expect(boxes[0]).toContain("开篇改后。");
-    expect(boxes[1]).toContain("修改动作：本段无需修改");
+    expect(boxes[1]).toContain("本段无需修改");
+    expect(boxes[1]).not.toContain("修改动作：");
     expect(boxes[1]).toContain("改后全段：");
     expect(boxes[1]).toContain("经过。");
   });

@@ -14,7 +14,6 @@ import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
 
 export const EXPORT_KAITI_FACE = '"LXGW WenKai"';
 export const EXPORT_KAITI_FONT = `${EXPORT_KAITI_FACE}, "KaiTi", "STKaiti", "Kaiti SC", serif`;
-export const ACTION_LABEL = "修改动作：";
 export const REVISED_PARAGRAPH_LABEL = "改后全段：";
 export const REWRITTEN_ESSAY_TITLE = "按要求重写的完整范文";
 export const REWRITTEN_ESSAY_INDENT = "　　";
@@ -121,10 +120,7 @@ function suggestionText(suggestions: ParagraphSuggestion[]) {
 
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {
   return [
-    ...(paragraph.sourceLabel
-      ? [{ text: `${paragraph.sourceLabel}\n`, style: "demonstration" as const }]
-      : []),
-    { text: `${ACTION_LABEL}${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
+    { text: `${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
     { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" as const },
     ...paragraph.revisionRuns.map((run) => ({
       text: run.text,
