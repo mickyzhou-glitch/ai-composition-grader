@@ -8,8 +8,8 @@ describe("教师明确的段落字数要求", () => {
   it("为模型提供明确计数口径和余量，减少刚好擦边的失败", () => {
     const rule = teacherRewriteLengthRule("第一、二段合计不超过120字，第三段不少于180字");
     expect(rule).toContain("第1、2段合计必须不超过120个汉字");
-    expect(rule).toContain("控制在96个汉字以内");
-    expect(rule).toContain("至少写到324个汉字以上");
+    expect(rule).toContain("控制在114个汉字以内");
+    expect(rule).toContain("至少写到198个汉字以上");
   });
 
   it.each(["前两段合计不超过120字", "第一、二段合计不超过120字", "第1、2段总计最多120字"])("校验合计上限：%s", (guidance) => {

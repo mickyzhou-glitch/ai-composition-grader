@@ -4,6 +4,7 @@ import { paragraphEvaluationReportSchema, type ParagraphEvaluationReport } from 
 import { paragraphReviewCoverageMessage } from "./paragraph-review-groups";
 import {
   applyEssayToParagraphReviews,
+  migrateEssayDraft,
   essayDiffersFromParagraphReviews,
   splitEssayIntoReviewParagraphs,
   syncEssayBeforeApproval,
@@ -117,16 +118,20 @@ describe("完整范文切到逐段改后全段", () => {
     });
   });
 
-  it("审核通过前的同步与「同步到逐段」一致，一致时返回原对象", () => {
-    const essay = ["一。", "二。", "三。"];
-    const ocr = { paragraphs: [{ id: "paragraph-2", paragraphIndex: 1 }, { id: "paragraph-1", paragraphIndex: 0 }] };
-    const source = report(essay, ["旧一", "旧二"]);
-    const synced = syncEssayBeforeApproval(source, ocr);
-    expect(synced).toEqual(applyEssayToParagraphReviews(source, ["paragraph-1", "paragraph-2"]));
-    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
-    expect(syncEssayBeforeApproval(synced, ocr)).toBe(synced);
-    const same = report(essay, essay);
-    expect(syncEssayBeforeApproval(same, ocr)).toBe(same);
-    expect(syncEssayBeforeApproval(report(essay, ["甲", "乙", "丙"]), null).paragraphReviews.map((item) => item.revisedText)).toEqual(essay);
+  it.each([
+    [["旧一", "旧二", "旧三", "旧四", "旧五"], ["逐段一", "逐段二"]],
+    [["旧一", "旧二"], ["逐段一", "逐段二"]],
+  ])("旧双轨保存必须先确认，两份原文完整保留", (essay, revised) => {
+    const source = report(essay, revised);
+    expect(() => syncEssayBeforeApproval(source)).toThrow("请选择");
+    for (const choice of ["essay", "paragraphs"] as const) {
+      const migrated = migrateEssayDraft(source, choice, ["paragraph-1", "paragraph-2"]);
+      expect(migrated.draftMigration?.originalEssay).toEqual(essay);
+      expect(migrated.draftMigration?.originalParagraphReviews.map((item) => item.revisedText)).toEqual(revised);
+      expect(migrated.rewrittenEssay).toEqual(choice === "essay" ? essay : revised);
+      expect(syncEssayBeforeApproval(migrated).rewrittenEssay).toEqual(migrated.rewrittenEssay);
+      expect(paragraphEvaluationReportSchema.parse(JSON.parse(JSON.stringify(migrated))).draftMigration).toEqual(migrated.draftMigration);
+    }
+    expect(source.rewrittenEssay).toEqual(essay);
   });
 });

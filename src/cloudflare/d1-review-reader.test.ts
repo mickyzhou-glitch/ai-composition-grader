@@ -1,3 +1,4 @@
+import { composeReviewGuidance } from "../grading-opinions/review-guidance";
 import { describe, expect, it, vi } from "vitest";
 
 import { D1ReviewReader } from "./d1-review-reader";
@@ -133,13 +134,19 @@ describe("D1ReviewReader", () => {
     expect(prepare).toHaveBeenCalledWith(expect.stringContaining("ORDER BY created_at ASC"));
   });
 
-  it("hydrates structured v2 reports with a safe paragraph OCR view", async () => {
+  it.each([
+    { jobGuidance: null, draft: undefined, expected: "" },
+    { jobGuidance: composeReviewGuidance(null, [], [{ text: "旧五段式", createdAt: 1 }]), draft: undefined, expected: "" },
+    { jobGuidance: "旧要求", draft: "", expected: "" },
+    { jobGuidance: "生成时指导", draft: "尚未生成的指导草稿", expected: "尚未生成的指导草稿" },
+  ])("hydrates current draft independently of job/history $expected", async ({ jobGuidance, draft, expected }) => {
     const review = {
       id: "r1",
       status: "ready_for_review",
       student_name: "小明",
       config,
-      report: paragraphReport,
+      report: JSON.stringify({ ...JSON.parse(paragraphReport), ...(draft !== undefined ? { teacherGuidanceDraft: draft } : {}) }),
+      teacher_guidance: jobGuidance,
       revision: 2,
       image_revision: 3,
       ocr_checkpoint: checkpointV2,
@@ -175,6 +182,7 @@ describe("D1ReviewReader", () => {
     const hydrated = await new D1ReviewReader(database).get("teacher-1", "r1");
 
     expect(hydrated).toMatchObject({
+      teacherGuidance: expected,
       report: { version: 2, paragraphReviews: [{ paragraphId: "paragraph-1" }] },
       ocr: {
         version: 2,

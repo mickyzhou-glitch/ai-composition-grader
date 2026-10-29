@@ -4,7 +4,8 @@ import { useState } from "react";
 
 import type { ParagraphEvaluationReport, ParagraphReview } from "@/src/domain/contracts";
 import {
-  applyEssayToParagraphReviews,
+  migrateEssayDraft,
+  deriveEssayFromParagraphReviews,
   essayDiffersFromParagraphReviews,
 } from "@/src/domain/essay-paragraph-sync";
 import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
@@ -37,7 +38,7 @@ export function ParagraphReviewEditor({
   report,
   ocr,
   images,
-  disabled,
+  disabled: externallyDisabled,
   onChange,
   onRewriteParagraph,
   rewritingParagraphId = null,
@@ -53,24 +54,27 @@ export function ParagraphReviewEditor({
   const grouped = paragraphReviewUsesGroups(report.paragraphReviews);
   const groups = resolveReviewGroups(report.paragraphReviews, paragraphs);
   const essayOutOfSync = essayDiffersFromParagraphReviews(report);
-  const totalCharacters = report.rewrittenEssay
-    ? report.rewrittenEssay.reduce((total, text) => total + countTextCharactersIncludingPunctuation(text), 0)
-    : paragraphs.reduce((total, paragraph) => {
-    const paragraphReview = report.paragraphReviews.find(
-      ({ paragraphId }) => paragraphId === paragraph.id,
-    );
-    return total + countTextCharactersIncludingPunctuation(paragraphReview?.revisedText ?? "");
-  }, 0);
+  const migrationDisabled = externallyDisabled;
+  const disabled = externallyDisabled || essayOutOfSync;
+  const totalCharacters = report.paragraphReviews.reduce(
+    (total, review) => total + countTextCharactersIncludingPunctuation(review.revisedText),
+    0,
+  );
 
   function updateParagraph(
     paragraphId: string,
     update: (review: ParagraphReview) => ParagraphReview,
+    syncEssay = false,
   ) {
+    const nextParagraphReviews = report.paragraphReviews.map((review) => (
+      review.paragraphId === paragraphId ? update(review) : review
+    ));
     onChange({
       ...report,
-      paragraphReviews: report.paragraphReviews.map((review) => (
-        review.paragraphId === paragraphId ? update(review) : review
-      )),
+      paragraphReviews: nextParagraphReviews,
+      ...(syncEssay && report.rewrittenEssay
+        ? { rewrittenEssay: deriveEssayFromParagraphReviews(nextParagraphReviews) }
+        : {}),
     });
   }
 
@@ -83,8 +87,15 @@ export function ParagraphReviewEditor({
         <div className="paragraph-review-heading">
           <div className="essay-sync">
             <h3>按要求重写的完整范文</h3>
-            <button type="button" disabled={disabled} onClick={() => onChange(applyEssayToParagraphReviews(report, paragraphs.map(({ id }) => id)))}>同步到逐段</button>
-            {essayOutOfSync ? <span className="essay-sync-hint">与逐段不一致</span> : null}
+            {essayOutOfSync ? <div role="alert">
+              <p>旧报告有两份不同的草稿。请先选择后续编辑版本；两份原文都会随保存备份。</p>
+              <button type="button" disabled={migrationDisabled} onClick={() => onChange(migrateEssayDraft(report, "essay", paragraphs.map(({ id }) => id)))}>保留完整范文（{report.rewrittenEssay.length} 段）</button>
+              <button type="button" disabled={migrationDisabled} onClick={() => onChange(migrateEssayDraft(report, "paragraphs", paragraphs.map(({ id }) => id)))}>保留逐段稿（{report.paragraphReviews.length} 段）</button>
+            </div> : null}
+            {report.draftMigration ? <details><summary>查看迁移前的两份草稿</summary>
+              <h4>原完整范文</h4>{report.draftMigration.originalEssay.map((text, index) => <p key={index}>{text}</p>)}
+              <h4>原逐段稿</h4>{report.draftMigration.originalParagraphReviews.map((item, index) => <p key={index}>{item.revisedText}</p>)}
+            </details> : null}
           </div>
           <span>共 {report.rewrittenEssay.length} 段 · {totalCharacters} 字（含标点）</span>
         </div>
@@ -96,9 +107,17 @@ export function ParagraphReviewEditor({
             disabled={disabled}
             onChange={(event) => {
             const nextText = event.target.value;
+            const nextEssay = report.rewrittenEssay!.map((current, i) => i === index ? nextText : current);
             onChange({
               ...report,
-              rewrittenEssay: report.rewrittenEssay!.map((current, i) => i === index ? nextText : current),
+              rewrittenEssay: nextEssay,
+              ...(nextEssay.length === report.paragraphReviews.length
+                ? {
+                    paragraphReviews: report.paragraphReviews.map((review, i) => (
+                      i === index ? { ...review, revisedText: nextText } : review
+                    )),
+                  }
+                : {}),
             });
           }}
           />
@@ -178,7 +197,7 @@ export function ParagraphReviewEditor({
                   onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
                     ...current,
                     revisedText: event.target.value,
-                  }))}
+                  }), true)}
                 />
               </label>
               <RevisionPreview

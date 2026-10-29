@@ -24,7 +24,7 @@ const REGRADE_POLL_DEADLINE_MS = 12 * 60_000;
 async function pollRegradeJob(
   reviewId: string,
   jobId: string,
-): Promise<{ status: string; message: string | null }> {
+): Promise<{ status: "succeeded" | "failed" | "running"; message: string | null }> {
   const deadline = Date.now() + REGRADE_POLL_DEADLINE_MS;
   while (Date.now() <= deadline) {
     const payload = await apiFetch<{ job: PublicAnalysisJobView | null }>(
@@ -35,7 +35,7 @@ async function pollRegradeJob(
       job?.id === jobId
       && (job.status === "failed" || job.status === "succeeded" || job.status === "canceled")
     ) {
-      return { status: job.status, message: job.message };
+      return { status: job.status === "canceled" ? "failed" : job.status, message: job.message };
     }
     if (Date.now() + REGRADE_POLL_INTERVAL_MS > deadline) break;
     await new Promise((resolve) => setTimeout(resolve, REGRADE_POLL_INTERVAL_MS));
@@ -325,16 +325,29 @@ export default function Home() {
           error: "",
         });
       }
-      for (const item of submittedJobs) {
-        const outcome = await pollRegradeJob(item.reviewId, item.jobId);
-        if (outcome.status === "failed" || outcome.status === "running") {
+      const pollConcurrency = Math.min(4, Math.max(1, submittedJobs.length));
+      const pollOutcomes = new Array<{ status: "succeeded" | "failed" | "running"; message?: string | null }>(submittedJobs.length);
+      let nextPollIndex = 0;
+      await Promise.all(
+        Array.from({ length: pollConcurrency }, async () => {
+          while (nextPollIndex < submittedJobs.length) {
+            const index = nextPollIndex;
+            nextPollIndex += 1;
+            const item = submittedJobs[index]!;
+            pollOutcomes[index] = await pollRegradeJob(item.reviewId, item.jobId);
+          }
+        }),
+      );
+      submittedJobs.forEach((item, index) => {
+        const outcome = pollOutcomes[index];
+        if (outcome && (outcome.status === "failed" || outcome.status === "running")) {
           failures.push({
             reviewId: item.reviewId,
             studentName: names.get(item.reviewId) ?? "未填写",
             summary: outcome.message ?? "分析失败，请重新分析",
           });
         }
-      }
+      });
       await load();
       setFailedRegrade({
         running: false,

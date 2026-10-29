@@ -25,16 +25,21 @@ function constraints(guidance: string) {
 
 export function teacherRewriteLengthRule(guidance = ""): string {
   return constraints(guidance).map(({ indices, limit, minimum }) =>
-    `完整范文第${indices.join("、")}段${indices.length > 1 ? "合计" : ""}必须${minimum ? "不少于" : "不超过"}${limit}个汉字（不含标点）；建议${minimum ? "至少写到" : "控制在"}${minimum ? Math.ceil(limit * 1.8) : Math.floor(limit * 0.8)}个汉字${minimum ? "以上" : "以内"}，预留计数余量，不要压在边界上。`,
+    `完整范文第${indices.join("、")}段${indices.length > 1 ? "合计" : ""}必须${minimum ? "不少于" : "不超过"}${limit}个汉字（不含标点）；建议${minimum ? "至少写到" : "控制在"}${minimum ? Math.ceil((limit * 11) / 10) : Math.floor((limit * 95) / 100)}个汉字${minimum ? "以上" : "以内"}，预留计数余量，不要压在边界上。`,
   ).join("\n");
 }
 
-export function validateTeacherRewriteLengths(essay: string[], guidance = ""): void {
-  for (const { indices, limit, minimum } of constraints(guidance)) {
-    if (indices.some((index) => !essay[index - 1])) continue;
+export function teacherRewriteLengthFailures(essay: string[], guidance = "") {
+  return constraints(guidance).flatMap(({ indices, limit, minimum }) => {
+    if (indices.some((index) => !essay[index - 1])) return [];
     const actual = indices.reduce((sum, index) => sum + countHanCharacters(essay[index - 1]), 0);
-    if (minimum ? actual < limit : actual > limit) {
-      throw new Error(`rewritten_essay_chars_${indices.join("_")}_${minimum ? "min" : "max"}_${limit}_actual_${actual}`);
-    }
-  }
+    return (minimum ? actual < limit : actual > limit)
+      ? [{ indices, limit, minimum, actual, code: `rewritten_essay_chars_${indices.join("_")}_${minimum ? "min" : "max"}_${limit}_actual_${actual}` }]
+      : [];
+  });
+}
+
+export function validateTeacherRewriteLengths(essay: string[], guidance = ""): void {
+  const failure = teacherRewriteLengthFailures(essay, guidance)[0];
+  if (failure) throw new Error(failure.code);
 }

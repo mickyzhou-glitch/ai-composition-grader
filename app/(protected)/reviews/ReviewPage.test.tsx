@@ -127,6 +127,57 @@ describe("复核页", () => {
     }
   });
 
+  it("后台失败任务刷新回包不会覆盖正在输入的教师指导", async () => {
+    const late = deferred<Response>();
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: { id: "failed-job", reviewId: "review-1", status: "failed", progressStage: "saving_result", message: "失败", createdAt: new Date().toISOString(), finishedAt: new Date().toISOString() } }))
+      .mockImplementationOnce(() => late.promise);
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    await user.type(screen.getByLabelText("老师补充观点"), "刚输入的新要求");
+    await act(async () => { late.resolve(await json({ ...paragraphReview, teacherGuidance: "旧要求" })); });
+    expect(screen.getByLabelText("老师补充观点")).toHaveValue("刚输入的新要求");
+    expect(screen.getByRole("button", { name: "保存复核" })).toBeEnabled();
+  });
+
+  it("清空已有生成指导后保存空草稿，刷新不得复活旧指导", async () => {
+    const loaded = { ...paragraphReview, teacherGuidance: "旧五段式" };
+    const saved = { ...paragraphReview, revision: 2, teacherGuidance: "", report: { ...paragraphReview.report, teacherGuidanceDraft: "" } };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(loaded))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(saved));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+    const guidance = await screen.findByLabelText("老师补充观点");
+    await user.clear(guidance);
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).report.teacherGuidanceDraft).toBe("");
+    expect(guidance).toHaveValue("");
+  });
+
+  it("教师指导保存到报告，刷新后恢复且仍可继续编辑", async () => {
+    const saved = { ...paragraphReview, revision: 2, report: { ...paragraphReview.report, teacherGuidanceDraft: "本轮严格三段" } };
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json(saved))
+      .mockImplementationOnce(() => json(saved))
+      .mockImplementationOnce(() => json({ job: null }));
+    const user = userEvent.setup();
+    const view = render(<ReviewPage />);
+    await user.type(await screen.findByLabelText("老师补充观点"), "本轮严格三段");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body)).report.teacherGuidanceDraft).toBe("本轮严格三段");
+    view.unmount();
+    render(<ReviewPage />);
+    expect(await screen.findByLabelText("老师补充观点")).toHaveValue("本轮严格三段");
+  });
+
   it("逐段报告可编辑、保存并且不受旧示范段落数量限制", async () => {
     const saved = { ...paragraphReview, revision: 2 };
     const fetchMock = vi.spyOn(globalThis, "fetch")
@@ -178,11 +229,12 @@ describe("复核页", () => {
     expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toEqual({
       paragraphReviews: paragraphReview.report.paragraphReviews,
       instruction: "补充听觉细节",
+      teacherGuidance: "",
     });
     expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
   });
 
-  it("结构段归组后编辑不自动同步，单段重写只改这一段的改后全段", async () => {
+  it("结构段归组后编辑与单段重写均实时同步完整范文与改后全段", async () => {
     const essay = ["我为自己鼓掌。天很蓝。", "我明白了。"];
     const grouped = {
       ...paragraphReview,
@@ -245,18 +297,18 @@ describe("复核页", () => {
     expect(screen.getByTestId("page-crop-2")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("完整范文第 2 段"), { target: { value: "结尾改了。" } });
     expect(screen.getByLabelText("完整范文第 2 段")).toHaveValue("结尾改了。");
-    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue(essay[1]);
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改了。");
     expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue(essay[0]);
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
+    expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
     expect(screen.queryByText(/不能审核通过|不一致，不能/u)).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "重新生成第 1 段" }));
 
     expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue(rewritten.revisedText);
-    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue(essay[0]);
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue(rewritten.revisedText);
     expect(screen.getByLabelText("完整范文第 2 段")).toHaveValue("结尾改了。");
-    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue(essay[1]);
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改了。");
+    expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
     expect(screen.getByText("对应原文第 1–2 段")).toBeInTheDocument();
   });
 

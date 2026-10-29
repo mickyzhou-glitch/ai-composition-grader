@@ -171,20 +171,66 @@ function graphemes(value: string): string[] {
 }
 
 /**
- * 审核通过前执行与「同步到逐段」相同的同步：以完整范文为准，按范文段数覆盖改后全段。
- * 已一致时原样返回同一对象。旧版报告或没有完整范文时不改。
+ * 以逐段 `paragraphReviews[].revisedText` 为唯一编辑源，派生完整范文数组。
+ */
+export function deriveEssayFromParagraphReviews(
+  paragraphReviews: readonly Pick<ParagraphReview, "revisedText">[],
+): string[] {
+  return paragraphReviews.map((review) => review.revisedText);
+}
+
+/**
+ * 以 `paragraphReviews[].revisedText` 刷新 `rewrittenEssay`。
+ * 已一致时原样返回同一对象。
+ */
+export function syncEssayFromParagraphReviews<T extends ParagraphEvaluationReport>(
+  report: T,
+): T {
+  const derived = deriveEssayFromParagraphReviews(report.paragraphReviews);
+  const existing = report.rewrittenEssay;
+  if (
+    existing
+    && existing.length === derived.length
+    && existing.every((paragraph, index) => paragraph === derived[index])
+  ) {
+    return report;
+  }
+  return {
+    ...report,
+    rewrittenEssay: derived,
+  };
+}
+
+/**
+ * 审核通过、保存或导出前以 `paragraphReviews[].revisedText` 为唯一权威来源刷新 `rewrittenEssay`，
+ * 严禁再用旧的 `rewrittenEssay` 反向覆盖老师修改过的逐段文本。
  */
 export function syncEssayBeforeApproval<T extends EvaluationReport>(
   report: T,
-  ocr?: object | null,
+  _ocr?: object | null,
 ): T {
   if (!isParagraphEvaluationReport(report) || !report.rewrittenEssay?.length) return report;
-  // 只有 version 2 的 OCR 带自然段；version 1 没有 paragraphs，此时只在段数相同时覆盖文字。
-  const paragraphs = ocr && "paragraphs" in ocr && Array.isArray(ocr.paragraphs)
-    ? ocr.paragraphs as ReadonlyArray<{ id: string; paragraphIndex: number }>
-    : undefined;
-  const ids = paragraphs?.length
-    ? [...paragraphs].sort((left, right) => left.paragraphIndex - right.paragraphIndex).map(({ id }) => id)
-    : undefined;
-  return applyEssayToParagraphReviews(report, ids) as T;
+  assertEssayDraftResolved(report);
+  return syncEssayFromParagraphReviews(report) as T;
+}
+
+/** Old dual-track data must be resolved explicitly before any write or export. */
+export function assertEssayDraftResolved(report: ParagraphEvaluationReport): void {
+  if (essayDiffersFromParagraphReviews(report)) {
+    throw new Error("旧报告的完整范文与逐段稿不一致，请选择保留版本后保存、审核或导出。");
+  }
+}
+
+export function migrateEssayDraft(
+  report: ParagraphEvaluationReport,
+  choice: "essay" | "paragraphs",
+  ocrParagraphIds: readonly string[],
+): ParagraphEvaluationReport {
+  const originalEssay = [...(report.rewrittenEssay ?? [])];
+  const originalParagraphReviews = structuredClone(report.paragraphReviews);
+  const resolved = choice === "essay"
+    ? applyEssayToParagraphReviews(report, ocrParagraphIds)
+    : syncEssayFromParagraphReviews(report);
+  assertEssayDraftResolved(resolved);
+  return { ...resolved, draftMigration: report.draftMigration ?? { choice, originalEssay, originalParagraphReviews } };
 }

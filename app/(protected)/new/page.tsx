@@ -21,7 +21,7 @@ const presetConfig: AssignmentConfig = {
   grade: "上海五四学制六年级",
   writingRequirements: "写一件让自己获得成长或勇气的亲身经历，叙事具体，感情真实。",
   targetCharacters: 600,
-  structureRequirements: "围绕一件事展开，过程有波折，结尾写出成长感受。",
+  structureRequirements: "第1段：交代事情背景。\n第2段：写遇到的困难。\n第3段：详写面对困难的行动与转折。\n第4段：写事情的结果。\n第5段：结合经历写出成长感受。",
   scoringFocus: "审题立意、事件完整、细节描写与真情实感。",
   templateType: "preset_self_applause",
   sampleParagraphCount: 5,

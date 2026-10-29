@@ -133,7 +133,7 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
       { text: "新的经过。", changed: true },
     ]);
     expect(exportParagraphRuns(content.pages[0]!.paragraphs[0]!).map((run) => run.text).join(""))
-      .not.toContain("对应原文第 1–2 段");
+      .toContain("对应原文第 1–2 段");
   });
 
   it("同段多条建议合并后框数仍等于段数", () => {
@@ -273,11 +273,6 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
       )),
     };
 
-    const content = buildExportReportContent(source);
-    const paragraphs = content.pages[0]?.paragraphs ?? [];
-    expect(paragraphs).toHaveLength(2);
-    expect(exportParagraphRuns(paragraphs[0]!).map((run) => run.text).join("")).toContain("新甲。");
-    expect(exportParagraphRuns(paragraphs[1]!).map((run) => run.text).join("")).toContain("旧乙。");
-    expect(paragraphs[1]?.revisionRuns.map((run) => run.text).join("")).toBe("旧乙。");
+    expect(() => buildExportReportContent(source)).toThrow("请选择");
   });
 });

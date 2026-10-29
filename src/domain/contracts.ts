@@ -257,12 +257,25 @@ export const paragraphReviewSchema = z.object({
 });
 export type ParagraphReview = z.infer<typeof paragraphReviewSchema>;
 
-export const paragraphEvaluationReportSchema = reportContentBaseSchema.extend({
+export const paragraphEvaluationReportSchema = z.object({
   version: z.literal(2),
+  themeFit: z.enum(["fits", "partial", "off_topic"]),
+  themeReason: z.string().trim().min(1).optional(),
+  personalizedComment: z.string().trim().min(1).optional(),
+  painPoints: z.array(z.string()).default([]),
+  commonIssues: z.array(z.string()).default([]),
+  revisionSuggestions: z.array(z.string()).default([]),
+  parentFeedbacks: parentFeedbacksSchema,
   grade: compositionGradeSchema,
-  diagnostics: diagnosticsSchema,
+  diagnostics: diagnosticsSchema.optional(),
   paragraphReviews: z.array(paragraphReviewSchema).min(1),
-  // Optional only for persisted reports created before whole-essay rewriting.
+  teacherGuidanceDraft: z.string().max(4_000).optional(),
+  draftMigration: z.object({
+    choice: z.enum(["essay", "paragraphs"]),
+    originalEssay: z.array(z.string()),
+    originalParagraphReviews: z.array(paragraphReviewSchema),
+  }).optional(),
+  // Optional: derived from paragraphReviews[].revisedText when omitted.
   rewrittenEssay: z.array(z.string().trim().min(1).regex(/^[^\r\n]+$/u)).min(1).max(10).optional(),
 }).strict();
 export type ParagraphEvaluationReport = z.infer<typeof paragraphEvaluationReportSchema>;

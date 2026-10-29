@@ -1,6 +1,7 @@
 "use client";
+import { isParagraphEvaluationReport } from "@/src/domain/contracts";
 
-import { syncEssayBeforeApproval } from "@/src/domain/essay-paragraph-sync";
+import { deriveEssayFromParagraphReviews, syncEssayBeforeApproval } from "@/src/domain/essay-paragraph-sync";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -163,6 +164,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setClassName(loaded.className ?? "");
     setReport(loaded.report);
     setAnnotations(loaded.annotations ?? []);
+    setTeacherGuidance(loaded.teacherGuidance ?? (
+      loaded.report && isParagraphEvaluationReport(loaded.report) ? loaded.report.teacherGuidanceDraft ?? "" : ""
+    ));
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
   }, []);
 
@@ -493,6 +497,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           body: JSON.stringify({
             paragraphReviews: report.paragraphReviews,
             ...(instruction?.trim() ? { instruction: instruction.trim() } : {}),
+            teacherGuidance: teacherGuidance.trim(),
           }),
         },
       );
@@ -507,7 +512,11 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           }
           : paragraph
       ));
-      changeReport({ ...report, paragraphReviews });
+      changeReport({
+        ...report,
+        paragraphReviews,
+        ...(report.rewrittenEssay ? { rewrittenEssay: deriveEssayFromParagraphReviews(paragraphReviews) } : {}),
+      });
       const paragraphNumber = review.ocr.paragraphs.find(
         ({ id }) => id === paragraphId,
       )?.paragraphIndex;
@@ -566,6 +575,8 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setBusy("save");
     setError("");
     try {
+      const synced = syncEssayBeforeApproval(isParagraphEvaluationReport(report) ? { ...report, ...(teacherGuidance || review.teacherGuidance || report.teacherGuidanceDraft !== undefined ? { teacherGuidanceDraft: teacherGuidance } : {}) } : report, review.ocr?.version === 2 ? review.ocr : null);
+      if (synced !== report) setReport(synced);
       const saved = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -573,7 +584,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
           expectedRevision: review.revision,
           studentName,
           ...(className !== (review.className ?? "") ? { className } : {}),
-          report,
+          report: synced,
           annotations,
         }),
       });
@@ -589,7 +600,8 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
 
   async function analyze(mode?: "full" | "content_only") {
     if (busy) return;
-    if (dirty && !window.confirm("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？")) {
+    const reportEdits = JSON.stringify(report) !== JSON.stringify(review?.report) || JSON.stringify(annotations) !== JSON.stringify(review?.annotations ?? []) || studentName !== review?.studentName || className !== (review?.className ?? "");
+    if (dirty && reportEdits && !window.confirm("当前复核内容尚未保存，重新分析会覆盖这些修改。确定继续吗？")) {
       return;
     }
     invalidateLoad();
@@ -679,9 +691,9 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
     setError("");
     setNotice("");
     try {
-      // 审核确认前执行「同步到逐段」：以完整范文为准，一致时不改。
-      const synced = syncEssayBeforeApproval(report, review.ocr?.version === 2 ? review.ocr : null);
-      const needsSync = synced !== report;
+      // 冲突旧稿必须先显式迁移；一致草稿才可审核导出。
+      const synced = syncEssayBeforeApproval(isParagraphEvaluationReport(report) ? { ...report, ...(teacherGuidance || review.teacherGuidance || report.teacherGuidanceDraft !== undefined ? { teacherGuidanceDraft: teacherGuidance } : {}) } : report, review.ocr?.version === 2 ? review.ocr : null);
+      const needsSync = JSON.stringify(synced) !== JSON.stringify(report);
       if (needsSync) setReport(synced);
       if (dirty || needsSync || !review.teacherReviewedAt) {
         const reviewed = await apiFetch<ReviewView>(
@@ -775,7 +787,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
           </div>
           <div className="review-actions">
-            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive} onChange={(event) => setTeacherGuidance(event.target.value)} /></label>
+            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive} onChange={(event) => { invalidateLoad(); setTeacherGuidance(event.target.value); setDirty(true); }} /></label>
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>{editableLegacyReport ? "完整重新分析" : "重新分析"}</AsyncButton>
             {editableParagraphReport ? <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成整篇批改</AsyncButton> : null}
             {review.status !== "needs_better_images" ? replacementControl() : null}

@@ -1,3 +1,5 @@
+import { migrateEssayDraft } from "@/src/domain/essay-paragraph-sync";
+import type { ParagraphEvaluationReport } from "@/src/domain/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const pdfMock = vi.hoisted(() => ({
@@ -143,7 +145,7 @@ describe("PDF 文件下载", () => {
 
     await downloadReviewPdf("review-1");
 
-    const modelText = "补充听觉\n改后全段：我终于，走上台。";
+    const modelText = "第 1 段\n补充听觉\n改后全段：我终于，走上台。";
     expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', modelText);
     expect(fontLoad).toHaveBeenCalledWith('700 16px "LXGW WenKai"', modelText);
     expect(renderEvents.slice(0, 3)).toEqual(["font", "font", "canvas"]);
@@ -169,7 +171,7 @@ describe("PDF 文件下载", () => {
 
     paintedText.length = 0;
     const rewrittenEssay = ["清晨的街角。", "起初的误解。", "扫地时弯腰的身影。", "我终于明白她的辛劳。", "这件事一直打动着我。"];
-    await createReviewPdf({ ...review, report: { ...review.report, rewrittenEssay } } as never);
+    await createReviewPdf({ ...review, report: migrateEssayDraft({ ...(review.report as unknown as ParagraphEvaluationReport), rewrittenEssay }, "essay", ["paragraph-1"]) } as never);
     const essayText = paintedText.map(({ text }) => text).join("");
     expect(essayText).toContain("按要求重写的完整范文");
     rewrittenEssay.forEach((text) => expect(essayText).toContain(text));

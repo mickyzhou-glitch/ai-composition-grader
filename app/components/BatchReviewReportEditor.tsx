@@ -48,7 +48,7 @@ export function BatchReviewReportEditor({
           onChange={onChange}
           showSourceCrops={false}
           showCharacterCounts
-          showSuggestions={false}
+          showSuggestions
         />
       </div>
     );

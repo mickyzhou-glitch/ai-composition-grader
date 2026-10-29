@@ -14,18 +14,21 @@ export function appendRuleText(text: string, rule: string): string {
 export interface RevisionRequestDialogProps {
   /** 当前题目下已审批通过的长期规则。 */
   standingRules?: string[];
+  /** 当前作文曾提交过的本篇退回建议（scope = 'essay'）。 */
+  essayOpinions?: string[];
   standingRulesLoading?: boolean;
   standingRulesError?: string;
   open: boolean;
   submitting: boolean;
   error: string;
   onClose(): void;
-  onSubmit(input: { commonIssue: string; contentSuggestion: string }): void;
-  onReject(input: { commonIssue: string; contentSuggestion: string }): void;
+  onSubmit(input: { commonIssue: string; contentSuggestion: string; commonIssueScope?: "essay" | "standing" }): void;
+  onReject(input: { commonIssue: string; contentSuggestion: string; commonIssueScope?: "essay" | "standing" }): void;
 }
 
 export function RevisionRequestDialog({
   standingRules = [],
+  essayOpinions = [],
   standingRulesLoading = false,
   standingRulesError = "",
   open,
@@ -38,6 +41,8 @@ export function RevisionRequestDialog({
   const backdropRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const commonIssueRef = useRef<HTMLTextAreaElement>(null);
+  const contentSuggestionRef = useRef<HTMLTextAreaElement>(null);
+  const [commonIssueScope, setCommonIssueScope] = useState<"essay" | "standing">("essay");
   const [commonIssue, setCommonIssue] = useState("");
   const [contentSuggestion, setContentSuggestion] = useState("");
   const [appendError, setAppendError] = useState("");
@@ -51,6 +56,17 @@ export function RevisionRequestDialog({
     setCommonIssue(next);
     setAppendError("");
     commonIssueRef.current?.focus();
+  }
+
+  function appendEssayOpinion(opinion: string) {
+    const next = appendRuleText(contentSuggestion, opinion);
+    if (next.length > MAX_FIELD_CHARS) {
+      setAppendError(`追加后超过 ${MAX_FIELD_CHARS} 字，未追加此建议。请先精简框内内容或手动输入需要的部分。`);
+      return;
+    }
+    setContentSuggestion(next);
+    setAppendError("");
+    contentSuggestionRef.current?.focus();
   }
 
   useEffect(() => {
@@ -102,7 +118,7 @@ export function RevisionRequestDialog({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!valid || submitting) return;
-    onSubmit({ commonIssue, contentSuggestion });
+    onSubmit({ commonIssue, contentSuggestion, ...(commonIssueScope === "standing" ? { commonIssueScope } : {}) });
   }
 
   return createPortal(
@@ -126,6 +142,11 @@ export function RevisionRequestDialog({
           <div className="revision-dialog-body">
             <div className="revision-dialog-field">
               <label htmlFor="revision-common-issue">结构问题 / 共性问题（仅同名作文）</label>
+              <label>共性意见生效范围
+                <select aria-label="共性意见生效范围" value={commonIssueScope} disabled={submitting} onChange={(event) => setCommonIssueScope(event.target.value as "essay" | "standing")}>
+                  <option value="essay">仅本篇</option><option value="standing">本题长期（提交后对同名作文生效）</option>
+                </select>
+              </label>
               {standingRulesLoading ? <p className="revision-dialog-scope" role="status">正在读取同题规则，可先手写。</p> : null}
               {standingRulesError ? <p className="revision-dialog-scope" role="status">{standingRulesError}</p> : null}
               {standingRules.length > 0 ? <div className="revision-rule-options" role="group" aria-label="已通过的长期规则">
@@ -156,13 +177,29 @@ export function RevisionRequestDialog({
             </div>
             <div className="revision-dialog-field">
               <label htmlFor="revision-content-suggestion">内容建议（仅当前文章）</label>
+              {essayOpinions.length > 0 ? <div className="revision-rule-options" role="group" aria-label="本篇历史退回意见">
+                {[...new Set(essayOpinions)].map((opinion) => <button
+                    key={opinion}
+                    type="button"
+                    className="revision-rule-option"
+                    aria-label={`追加本篇意见：${opinion}`}
+                    disabled={submitting}
+                    onClick={() => appendEssayOpinion(opinion)}
+                  >
+                  <span>{opinion}</span>
+                  <span className="revision-rule-add" aria-hidden="true">＋ 追加</span>
+                </button>)}
+              </div> : null}
               <textarea
                 id="revision-content-suggestion"
+                ref={contentSuggestionRef}
                 aria-describedby="revision-content-scope revision-content-count"
                 maxLength={MAX_FIELD_CHARS}
                 value={contentSuggestion}
                 disabled={submitting}
-                onChange={(event) => setContentSuggestion(event.target.value)}
+                onChange={(event) => {
+                  setContentSuggestion(event.target.value);
+                }}
               />
               <p id="revision-content-scope" className="revision-dialog-scope">只用于本篇重新分析，不进入长期规则；仍记在这篇作文下，供统计。</p>
               <small id="revision-content-count">{contentSuggestion.length} / {MAX_FIELD_CHARS}</small>

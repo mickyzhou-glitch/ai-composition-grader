@@ -12,6 +12,27 @@ import type { ReviewView } from "./types";
 export type ExportFormat = "pdf" | "docx";
 
 const MEMORY_ERROR_MESSAGE = "生成文件时内存不足，请减少单次批量数量后重试";
+const EXPORT_CONCURRENCY = 4;
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (nextIndex < items.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        results[currentIndex] = await worker(items[currentIndex]!, currentIndex);
+      }
+    }),
+  );
+  return results;
+}
 
 function safeFilenamePart(value: string, fallback: string): string {
   return value
@@ -107,8 +128,11 @@ export async function downloadReviewArchive(
   if (reviewIds.length === 1) return downloadReview(reviewIds[0], format);
 
   return withMemoryErrorMessage(async () => {
-    const reviews: ReviewView[] = [];
-    for (const reviewId of reviewIds) reviews.push(await fetchReview(reviewId));
+    const reviews = await mapWithConcurrency(
+      reviewIds,
+      EXPORT_CONCURRENCY,
+      (reviewId) => fetchReview(reviewId),
+    );
     await assertReviewsExportable(reviews);
 
     const { default: JSZip } = await import("jszip");
@@ -123,7 +147,11 @@ export async function downloadReviewArchive(
     const filename = archiveFilename(format);
     const blob = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
     triggerFileDownload(blob, filename);
-    for (const reviewId of reviewIds) await markReviewExported(reviewId);
+    await mapWithConcurrency(
+      reviewIds,
+      EXPORT_CONCURRENCY,
+      (reviewId) => markReviewExported(reviewId),
+    );
     return filename;
   });
 }
@@ -154,6 +182,8 @@ export async function downloadLegacyCachedPdf(review: ReviewView): Promise<strin
   const response = await fetch(`/api/reviews/${encodeURIComponent(review.id)}/pdf`);
   if (!response.ok) throw new Error(`旧版 PDF 下载失败（${response.status}）`);
   const filename = responseFilename(response, review.pdfFilename);
-  triggerFileDownload(await response.blob(), filename);
+  const rawBlob = await response.blob();
+  const blob = new Blob([await rawBlob.arrayBuffer()], { type: rawBlob.type });
+  triggerFileDownload(blob, filename);
   return filename;
 }

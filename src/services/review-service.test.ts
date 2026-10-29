@@ -728,8 +728,52 @@ describe("ReviewService analysis CAS", () => {
       current: draft[0],
       paragraphId: "paragraph-1",
       instruction: "补充听觉细节",
+      paragraphReviews: draft,
     });
     expect(repository.getById(OWNER_ID, "review-1")?.report).toEqual(before.report);
+  });
+
+  it("单段 AI 重写支持 noSourceParagraph 新增段落而不返回 404", async () => {
+    makeParagraphDeliveryExportable();
+    const draft = [
+      {
+        ...paragraphReport.paragraphReviews[0],
+        sourceParagraphStart: 1,
+        sourceParagraphEnd: 1,
+      },
+      {
+        paragraphId: "paragraph-2",
+        noSourceParagraph: true as const,
+        suggestions: [{ advice: "新增结尾升华段。" }],
+        revisedText: "这次经历让我成长。",
+      },
+    ];
+    const rewritten = {
+      ...draft[1],
+      revisedText: "这次经历让我真正读懂了坚持。",
+    };
+    const rewriteParagraph = vi.fn(async () => rewritten);
+    const service = new ReviewService(repository, fileStore, {
+      analyze: async () => readyEnvelope,
+      rewriteParagraph,
+    });
+
+    await expect(service.rewriteParagraph(
+      OWNER_ID,
+      "review-1",
+      "paragraph-2",
+      { paragraphReviews: draft, instruction: "写得更有感染力", teacherGuidance: "严格两段式" },
+    )).resolves.toEqual(rewritten);
+
+    expect(rewriteParagraph).toHaveBeenCalledWith({
+      config,
+      paragraphs: [{ id: "paragraph-1", text: "我为自己喝彩。" }],
+      current: draft[1],
+      paragraphId: "paragraph-2",
+      instruction: "写得更有感染力",
+      paragraphReviews: draft,
+      teacherGuidance: "严格两段式",
+    });
   });
 
   it("单段 AI 重写拒绝旧报告", async () => {

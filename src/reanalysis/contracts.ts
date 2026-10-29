@@ -11,6 +11,7 @@ const revisionFieldSchema = z.string().max(MAX_REVISION_FIELD_CHARS).optional().
 export const revisionRequestInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   commonIssue: revisionFieldSchema,
+  commonIssueScope: z.enum(["essay", "standing"]).optional(),
   contentSuggestion: revisionFieldSchema,
 }).strict().refine(
   (value) => value.commonIssue.trim().length > 0 || value.contentSuggestion.trim().length > 0,

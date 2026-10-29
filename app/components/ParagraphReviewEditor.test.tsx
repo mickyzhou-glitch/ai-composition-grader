@@ -227,7 +227,7 @@ describe("ParagraphReviewEditor", () => {
     expect(paragraph.querySelector(".revision-preview")?.textContent).toBe("我非常高兴！天很蓝。");
   });
 
-  it("结构段归组后每组一个框，编辑一边不会改另一边，下划线对照合并后的原文", () => {
+  it("结构段归组后每组一个框，编辑任一边实时同步另一边，下划线对照合并后的原文", () => {
     const onChange = vi.fn();
     const essay = ["我很高兴。天很蓝。", "结尾保留。"];
     render(<ParagraphReviewEditor
@@ -285,7 +285,7 @@ describe("ParagraphReviewEditor", () => {
       target: { value: "我非常高兴。天很蓝。" },
     });
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({
-      rewrittenEssay: essay,
+      rewrittenEssay: ["我非常高兴。天很蓝。", "结尾保留。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: "我非常高兴。天很蓝。" }),
         expect.objectContaining({ revisedText: "结尾保留。" }),
@@ -299,12 +299,12 @@ describe("ParagraphReviewEditor", () => {
       rewrittenEssay: [essay[0], "结尾改过。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: essay[0] }),
-        expect.objectContaining({ revisedText: essay[1] }),
+        expect.objectContaining({ revisedText: "结尾改过。" }),
       ],
     }));
   });
 
-  it("结构归组的旧差异不会在打开或编辑时自动改写", () => {
+  it("编辑改后全段时以 revisedText 为权威实时刷新完整范文", () => {
     const onChange = vi.fn();
     render(<ParagraphReviewEditor
       reviewId="review-1"
@@ -348,7 +348,7 @@ describe("ParagraphReviewEditor", () => {
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue("范文甲。");
     expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("旧甲。");
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "同步到逐段" })).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("第 1 段修改动作"), {
       target: { value: "补一个动作" },
@@ -365,13 +365,12 @@ describe("ParagraphReviewEditor", () => {
       target: { value: "新乙。" },
     });
     expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      rewrittenEssay: ["范文甲。", "范文乙。"],
+      rewrittenEssay: ["旧甲。", "新乙。"],
       paragraphReviews: [
         expect.objectContaining({ revisedText: "旧甲。" }),
         expect.objectContaining({ revisedText: "新乙。" }),
       ],
     }));
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
   });
 
   it("同步到逐段以完整范文覆盖五段改后全段，并重算下划线和字数", () => {
@@ -404,18 +403,11 @@ describe("ParagraphReviewEditor", () => {
       showCharacterCounts
     />);
 
-    expect(screen.getByRole("button", { name: "同步到逐段" })).toBeEnabled();
-    expect(screen.getByText("与逐段不一致")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保留完整范文（5 段）" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "同步到逐段" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(5);
-    fireEvent.change(screen.getByLabelText("完整范文第 3 段"), { target: { value: "扬的事件补充细节。" } });
-    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
-      rewrittenEssay: [essay[0], essay[1], "扬的事件补充细节。", essay[3], essay[4]],
-      paragraphReviews: expect.arrayContaining([
-        expect.objectContaining({ revisedText: "开篇。" }),
-      ]),
-    }));
-
-    fireEvent.click(screen.getByRole("button", { name: "同步到逐段" }));
+    expect(screen.getByLabelText("完整范文第 3 段")).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "保留完整范文（5 段）" }));
     const synced = onChange.mock.calls.at(-1)?.[0];
     expect(synced.paragraphReviews.map((item: { revisedText: string }) => item.revisedText)).toEqual(essay);
     rerender(<ParagraphReviewEditor

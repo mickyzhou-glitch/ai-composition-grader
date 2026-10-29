@@ -1183,7 +1183,7 @@ describe("reanalysis route handlers", () => {
     expect(rejectReview).toHaveBeenCalledWith(OWNER_ID, "review-from-path", {
       expectedRevision: 3,
       reason: "",
-      changeRequest: "保留原句",
+      changeRequest: "  保留原句  ",
     });
   });
 

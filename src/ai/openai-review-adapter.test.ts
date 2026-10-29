@@ -437,6 +437,89 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
     expect(serialized).toContain("只返回 1 条");
     expect(serialized).toContain("本段无需修改");
+    expect(serialized).not.toContain("没有改动的句子与该段原文逐字相同");
+    expect(serialized).toContain("静默修通原句的语病、错别字、标点错误、指代不明与主语断层");
+  });
+
+  it("归组段重写传入 sourceParagraphStart..End 全部原文及全文草稿上下文，并保留归组标记", async () => {
+    const groupedCurrent: ParagraphReview = {
+      paragraphId: "paragraph-1",
+      sourceParagraphStart: 1,
+      sourceParagraphEnd: 2,
+      suggestions: [{ advice: "把前两段合写成一个开篇结构段。" }],
+      revisedText: "我站在台下很紧张，轮到我时终于走上台。",
+    };
+    const modelReply = {
+      paragraphId: "paragraph-1",
+      suggestions: [{ advice: "合并前两段并补充呼吸与动作细节。" }],
+      revisedText: "我站在台下屏住呼吸，轮到我时攥紧衣角走上台。",
+    };
+    const harness = setup([JSON.stringify(modelReply)]);
+
+    const result = await harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [
+        { id: "paragraph-1", text: "我站在台下，心里很紧张。" },
+        { id: "paragraph-2", text: "轮到我时，我终于走上台。" },
+        { id: "paragraph-3", text: "台下响起了掌声。" },
+      ],
+      current: groupedCurrent,
+      paragraphId: "paragraph-1",
+      paragraphReviews: [
+        groupedCurrent,
+        {
+          paragraphId: "paragraph-3",
+          sourceParagraphStart: 3,
+          sourceParagraphEnd: 3,
+          suggestions: [{ advice: "保留结尾。" }],
+          revisedText: "台下响起了掌声。",
+        },
+      ],
+      teacherGuidance: "严格按两段式改写，第一段略写铺垫",
+    });
+
+    expect(result).toEqual({
+      ...modelReply,
+      sourceParagraphStart: 1,
+      sourceParagraphEnd: 2,
+    });
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("归组覆盖原文第 1–2 段，共 2 个自然段");
+    expect(serialized).toContain("全文当前逐段批改与改后草稿上下文");
+    expect(serialized).toContain("严格按两段式改写，第一段略写铺垫");
+  });
+
+  it("noSourceParagraph 新增结构段单段重写不会因缺少原文自然段抛错，并保留 noSourceParagraph", async () => {
+    const addedCurrent: ParagraphReview = {
+      paragraphId: "paragraph-3",
+      noSourceParagraph: true,
+      suggestions: [{ advice: "本段为新增结尾升华段。" }],
+      revisedText: "这次上台让我学会了勇敢。",
+    };
+    const modelReply = {
+      paragraphId: "paragraph-3",
+      suggestions: [{ advice: "本段为新增结尾段，点明勇气带来的成长。" }],
+      revisedText: "这次上台让我明白，只要勇敢迈出第一步就能战胜紧张。",
+    };
+    const harness = setup([JSON.stringify(modelReply)]);
+
+    const result = await harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [
+        { id: "paragraph-1", text: "我站在台下，心里很紧张。" },
+        { id: "paragraph-2", text: "轮到我时，我终于走上台。" },
+      ],
+      current: addedCurrent,
+      paragraphId: "paragraph-3",
+      instruction: "升华得更自然一些",
+    });
+
+    expect(result).toEqual({
+      ...modelReply,
+      noSourceParagraph: true,
+    });
+    const serialized = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(serialized).toContain("原文无对应自然段，本段为按结构要求新增的段落");
   });
 
   it("单段重写把多条建议合并成一个编号修改动作", async () => {
@@ -1392,7 +1475,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(factory).toHaveBeenCalledWith({
       apiKey: "secret-key",
       baseURL: "https://api.x.ai/v1",
-      timeout: 900_000,
+      timeout: 240_000,
       maxRetries: 1,
     });
   });

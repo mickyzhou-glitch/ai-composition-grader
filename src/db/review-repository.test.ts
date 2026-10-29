@@ -1,3 +1,5 @@
+import { migrateEssayDraft } from "../domain/essay-paragraph-sync";
+import type { ParagraphEvaluationReport } from "../domain/contracts";
 // @vitest-environment node
 
 import Database from "better-sqlite3";
@@ -285,14 +287,15 @@ describe("ReviewRepository", () => {
     ]);
   });
 
-  it("审核通过时以完整范文为准同步改后全段，一致时不改", () => {
+  it("审核通过拒绝冲突旧稿；显式迁移后保留完整范文与备份", () => {
     repository.create(OWNER_ID, { id: "review-1", config });
     const ready = makeParagraphDeliveryExportable("review-1");
     const essay = ["我站在领奖台上，为自己喝彩。"];
+    expect(() => repository.completeTeacherReview(OWNER_ID, "review-1", { expectedRevision: ready.revision, studentName: "张小明", report: { ...paragraphReport, rewrittenEssay: essay } as EvaluationReport, annotations: [] })).toThrow("选择保留版本");
     const saved = repository.completeTeacherReview(OWNER_ID, "review-1", {
       expectedRevision: ready.revision,
       studentName: "张小明",
-      report: { ...paragraphReport, rewrittenEssay: essay } as EvaluationReport,
+      report: migrateEssayDraft({ ...paragraphReport, rewrittenEssay: essay } as ParagraphEvaluationReport, "essay", ["paragraph-1"]),
       annotations: [],
     });
     const stored = saved.report as { rewrittenEssay: string[]; paragraphReviews: Array<{ revisedText: string; suggestions: unknown }> };

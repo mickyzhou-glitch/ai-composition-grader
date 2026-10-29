@@ -84,14 +84,9 @@ function dependencies(failPage?: number) {
 }
 
 describe("buildDeliveryDocument", () => {
-  it("导出包含独立五段完整范文且不伪造原文裁图", async () => {
+  it("导出拒绝尚未迁移的旧双轨范文", async () => {
     const rewrittenEssay = ["一。", "二。", "三。", "四。", "五。"];
-    const document = await buildDeliveryDocument({ ...review, report: { ...report, rewrittenEssay } }, dependencies());
-    expect(document.paragraphs).toHaveLength(7);
-    expect(document.paragraphs.slice(2)).toEqual(rewrittenEssay.map((text, index) => ({
-      paragraphNumber: index + 3, essayParagraphNumber: index + 1,
-      crops: [], suggestions: [], revisionRuns: [{ kind: "unchanged", text }],
-    })));
+    await expect(buildDeliveryDocument({ ...review, report: { ...report, rewrittenEssay } }, dependencies())).rejects.toThrow("选择保留版本");
   });
 
   it("shares the fixed A4 delivery style", () => {

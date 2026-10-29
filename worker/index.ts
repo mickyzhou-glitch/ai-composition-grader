@@ -1,3 +1,5 @@
+import { composeReviewGuidance } from "../src/grading-opinions/review-guidance";
+import { listD1EssayOpinions, listD1StandingOpinions } from "../src/cloudflare/d1-grading-opinions";
 import type { WorkerEnv } from "../src/cloudflare/env";
 import { D1LoginChallengeRepository } from "../src/cloudflare/d1-login-challenge-repository";
 import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-repository";
@@ -71,6 +73,7 @@ const gradingOpinionUpdateSchema = z.object({
 const paragraphRewriteSchema = z.object({
   paragraphReviews: z.array(paragraphReviewSchema).min(1),
   instruction: z.string().trim().max(1_000).optional(),
+  teacherGuidance: z.string().trim().max(4_000).optional(),
 }).strict();
 
 function apiError(code: string, message: string, status: number, details?: unknown): Response {
@@ -746,8 +749,9 @@ export default {
         if (review.reportStale) {
           return apiError("REPORT_STALE", "批改报告基于旧版识别原文，请重新生成批改", 409);
         }
+        const current = body.paragraphReviews.find(({ paragraphId: id }) => id === paragraphId);
         const paragraph = review.ocr.paragraphs.find(({ id }) => id === paragraphId);
-        if (!paragraph) return apiError("PARAGRAPH_NOT_FOUND", "自然段不存在", 404);
+        if (!paragraph && !current?.noSourceParagraph) return apiError("PARAGRAPH_NOT_FOUND", "自然段不存在", 404);
         try {
           validateParagraphReportForIds(
             { ...review.report, paragraphReviews: body.paragraphReviews },
@@ -760,7 +764,6 @@ export default {
             400,
           );
         }
-        const current = body.paragraphReviews.find(({ paragraphId: id }) => id === paragraphId);
         if (!current) return apiError("PARAGRAPH_NOT_FOUND", "自然段批改不存在", 404);
         const rewritten = await new OpenAIReviewAdapter(
           workerAiSettings(env),
@@ -771,6 +774,12 @@ export default {
           current,
           paragraphId,
           instruction: body.instruction,
+          paragraphReviews: body.paragraphReviews,
+          teacherGuidance: composeReviewGuidance(
+            body.teacherGuidance ?? review.teacherGuidance,
+            await listD1StandingOpinions(env.DB, user.id, review.config.title),
+            await listD1EssayOpinions(env.DB, user.id, review.id),
+          ) ?? undefined,
         });
         return Response.json(
           { ok: true, data: rewritten },
@@ -838,7 +847,7 @@ export default {
         SELECT analysis_jobs.id, analysis_jobs.review_id, analysis_jobs.owner_id,
           analysis_jobs.mode, analysis_jobs.teacher_guidance, analysis_jobs.status,
           analysis_jobs.created_at, analysis_jobs.started_at, reviews.config,
-          reviews.student_name, reviews.image_revision
+          reviews.student_name, reviews.image_revision, reviews.report
         FROM analysis_jobs INNER JOIN reviews ON reviews.id = analysis_jobs.review_id
         WHERE analysis_jobs.id = ? AND analysis_jobs.status IN ('queued', 'running')
       `).bind(message.body.jobId).first<{
@@ -853,6 +862,7 @@ export default {
         config: string;
         student_name: string;
         image_revision: number;
+        report?: string | null;
       }>();
       if (!job) { message.ack(); continue; }
       if (job.status === "running") {
@@ -878,6 +888,17 @@ export default {
         const vision = new VisionOcrAdapter(settings, { clientFactory: createWorkerOpenAIClient });
         const content = new CompositionReviewAdapter(settings, { clientFactory: createWorkerOpenAIClient });
         const ocr = new D1OcrCheckpointRepository(env.DB);
+        let previousReport = null;
+        if (job.report) {
+          try {
+            const parsed = JSON.parse(job.report);
+            if (isParagraphEvaluationReport(parsed)) {
+              previousReport = parsed;
+            }
+          } catch {
+            // Ignore malformed previous report
+          }
+        }
         const pipelineJob: CloudAnalysisPipelineJob = {
           id: job.id,
           reviewId: job.review_id,
@@ -887,6 +908,7 @@ export default {
           config: assignmentConfigSchema.parse(JSON.parse(job.config)),
           teacherGuidance: job.teacher_guidance ?? undefined,
           studentName: job.student_name || undefined,
+          ...(previousReport ? { previousReport } : {}),
         };
         const logStep = async <T>(step: string, action: () => Promise<T>): Promise<T> => {
           const stepStarted = Date.now();

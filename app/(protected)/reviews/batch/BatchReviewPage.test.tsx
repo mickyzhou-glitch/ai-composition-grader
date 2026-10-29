@@ -256,7 +256,7 @@ describe("BatchReviewPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("逐段报告可编辑并完成批量审核，不受示范段数门禁影响", async () => {
+  it("逐段报告可编辑修改动作与改后全段并完成批量审核，不受示范段数门禁影响", async () => {
     const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1)], {
       currentReport: paragraphReport,
     });
@@ -265,8 +265,8 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "修改动作与改后全段" })).toBeVisible();
     expect(screen.queryByTestId("page-crop-1")).not.toBeInTheDocument();
-    expect(screen.queryByText("【修改动作】")).not.toBeInTheDocument();
-    expect(screen.queryByText("【修改建议】")).not.toBeInTheDocument();
+    expect(screen.getByText("【修改动作】")).toBeInTheDocument();
+    expect(screen.getByLabelText("第 1 段修改动作")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /删除第 \d+ 段第 \d+ 条建议/u })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /新增第 \d+ 段建议/u })).not.toBeInTheDocument();
     const revised = screen.getByLabelText("第 1 段改后全段");
@@ -289,16 +289,20 @@ describe("BatchReviewPage", () => {
     });
   });
 
-  it("审核通过前先按完整范文同步改后全段，再提交", async () => {
+  it("冲突旧稿必须先明确选择保留版本再审核", async () => {
     const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1)], {
-      currentReport: { ...paragraphReport, rewrittenEssay: ["范文里的第一段。"] } as typeof paragraphReport,
+      currentReport: { ...paragraphReport, rewrittenEssay: ["旧范文里的第一段。"] } as typeof paragraphReport,
     });
     const user = userEvent.setup();
     render(<BatchReviewPage />);
     expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue("我走上台。");
+    expect(screen.getByLabelText("第 1 段改后全段")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "保留逐段稿（1 段）" }));
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
     const teacherCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/review-1/teacher-review");
-    expect(JSON.parse(String(teacherCall?.[1]?.body)).report.paragraphReviews[0].revisedText).toBe("范文里的第一段。");
+    const submittedReport = JSON.parse(String(teacherCall?.[1]?.body)).report;
+    expect(submittedReport.paragraphReviews[0].revisedText).toBe("我走上台。");
+    expect(submittedReport.rewrittenEssay).toEqual(["我走上台。"]);
   });
 
   it("同段多条建议时批量审核仍是一段一个框", async () => {
@@ -396,18 +400,17 @@ describe("BatchReviewPage", () => {
     expect(screen.getByText("对应原文第 3 段")).toBeVisible();
     expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(2);
     expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /修改动作/u })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("textbox", { name: /修改动作/u })).toHaveLength(2);
     const essayParagraph = screen.getByLabelText("完整范文第 2 段");
     await user.clear(essayParagraph);
     await user.type(essayParagraph, "结尾改过。");
-    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("我终于明白了。");
-    expect(screen.getByText("与逐段不一致")).toBeVisible();
+    expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改过。");
+    expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
     const revised = screen.getByLabelText("第 1 段改后全段");
     await user.clear(revised);
     await user.type(revised, "我听见呼吸声，走上了台。天很蓝。");
-    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue("我走上台。天很蓝。");
-    await user.click(screen.getByRole("button", { name: "同步到逐段" }));
-    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("我走上台。天很蓝。");
+    expect(screen.getByLabelText("完整范文第 1 段")).toHaveValue("我听见呼吸声，走上了台。天很蓝。");
+    expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("我听见呼吸声，走上了台。天很蓝。");
     expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改过。");
     expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
@@ -417,13 +420,13 @@ describe("BatchReviewPage", () => {
     ));
     expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
     expect(JSON.parse(String(teacherCall?.[1]?.body)).report).toMatchObject({
-      rewrittenEssay: ["我走上台。天很蓝。", "结尾改过。"],
+      rewrittenEssay: ["我听见呼吸声，走上了台。天很蓝。", "结尾改过。"],
       paragraphReviews: [
         {
           paragraphId: "paragraph-1",
           sourceParagraphStart: 1,
           sourceParagraphEnd: 2,
-          revisedText: "我走上台。天很蓝。",
+          revisedText: "我听见呼吸声，走上了台。天很蓝。",
         },
         {
           paragraphId: "paragraph-3",
