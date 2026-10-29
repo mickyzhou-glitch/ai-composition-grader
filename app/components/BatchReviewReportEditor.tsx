@@ -38,6 +38,7 @@ export function BatchReviewReportEditor({
         <header className="report-version-heading batch-report-heading">
           <p className="eyebrow">逐段审核</p>
           <h2>修改动作与改后全段</h2>
+          <p className="muted">请逐段核对修改动作，只保留结构、内容和衔接建议；错别字、病句、标点等基础问题不向学生出示。</p>
         </header>
         <ParagraphReviewEditor
           reviewId={reviewId}
@@ -48,7 +49,6 @@ export function BatchReviewReportEditor({
           onChange={onChange}
           showSourceCrops={false}
           showCharacterCounts
-          showSuggestions={false}
         />
       </div>
     );

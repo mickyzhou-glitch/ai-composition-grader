@@ -86,6 +86,10 @@ export default function NewReviewPage() {
   const [savedAssignments, setSavedAssignments] = useState<SavedAssignment[]>([]);
   const [savedAssignmentsLoaded, setSavedAssignmentsLoaded] = useState(false);
   const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
+  const [savedConfigSnapshot, setSavedConfigSnapshot] = useState<AssignmentConfig | null>(null);
+  const [savingAssignment, setSavingAssignment] = useState(false);
+  const [saveFeedback, setSaveFeedback] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -123,6 +127,34 @@ export default function NewReviewPage() {
 
   function updateConfig<K extends keyof AssignmentConfig>(key: K, value: AssignmentConfig[K]) {
     setConfig((current) => ({ ...current, [key]: value }));
+    setSaveFeedback("");
+  }
+
+  async function saveAssignment() {
+    if (savingAssignment) return;
+    const message = validateConfig(config);
+    setError(message);
+    if (message) return;
+    const toSave = { ...config, templateType: "custom" as const };
+    setSavingAssignment(true);
+    setSaveFeedback("");
+    try {
+      const saved = await apiFetch<SavedAssignment>(selectedAssignmentId
+        ? `/api/saved-assignments/${encodeURIComponent(selectedAssignmentId)}`
+        : "/api/saved-assignments", {
+        method: selectedAssignmentId ? "PUT" : "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ config: toSave }),
+      });
+      setSelectedAssignmentId(saved.id);
+      setSavedConfigSnapshot(toSave);
+      setSavedAssignments((current) => [saved, ...current.filter((assignment) => assignment.id !== saved.id)]);
+      setSaveFeedback("题目要求已保存");
+    } catch (caught) {
+      setError(`${errorMessage(caught)}。题目要求未保存，请重试。`);
+    } finally {
+      setSavingAssignment(false);
+    }
   }
 
   async function deleteSavedAssignment(id: string) {
@@ -131,6 +163,11 @@ export default function NewReviewPage() {
     try {
       await apiFetch(`/api/saved-assignments/${encodeURIComponent(id)}`, { method: "DELETE" });
       setSavedAssignments((current) => current.filter((assignment) => assignment.id !== id));
+      if (selectedAssignmentId === id) {
+        setSelectedAssignmentId(null);
+        setSavedConfigSnapshot(null);
+        setSaveFeedback("");
+      }
     } catch (caught) {
       setError(`${errorMessage(caught)}。暂时无法删除该题目。`);
     } finally {
@@ -291,10 +328,10 @@ export default function NewReviewPage() {
           <section className="paper-card flow-card" aria-labelledby="assignment-heading">
             <div className="section-heading"><div><p className="eyebrow">第一步</p><h2 id="assignment-heading">选择作文题目</h2></div></div>
             <div className="template-grid">
-              <button type="button" aria-label="使用内置题目《为自己鼓掌》" aria-pressed={config.templateType === "preset_self_applause"} className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setError(""); }}>
+              <button type="button" aria-label="使用内置题目《为自己鼓掌》" aria-pressed={config.templateType === "preset_self_applause"} className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setSelectedAssignmentId(null); setSavedConfigSnapshot(null); setSaveFeedback(""); setError(""); }}>
                 <span className="template-mark" aria-hidden="true">荐</span><strong>《为自己鼓掌》</strong><small>六年级 · 600 字 · 记叙文</small>
               </button>
-              <button type="button" aria-label="自定义题目" aria-pressed={config.templateType === "custom"} className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setError(""); }}>
+              <button type="button" aria-label="自定义题目" aria-pressed={config.templateType === "custom"} className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setSelectedAssignmentId(null); setSavedConfigSnapshot(null); setSaveFeedback(""); setError(""); }}>
                 <span className="template-mark" aria-hidden="true">+</span><strong>自定义题目</strong><small>自行设置年级、结构与评分重点</small>
               </button>
             </div>
@@ -304,7 +341,7 @@ export default function NewReviewPage() {
                 <div className="saved-assignment-list">
                   {savedAssignments.map((assignment) => (
                     <article className="saved-assignment-card" key={assignment.id}>
-                      <button type="button" className="saved-assignment-select" aria-label={`使用已保存题目${assignment.config.title}`} onClick={() => { setConfig({ ...assignment.config, templateType: "custom" }); setError(""); }}>
+                      <button type="button" className="saved-assignment-select" aria-label={`使用已保存题目${assignment.config.title}`} onClick={() => { const selected = { ...assignment.config, templateType: "custom" as const }; setConfig(selected); setSelectedAssignmentId(assignment.id); setSavedConfigSnapshot(selected); setSaveFeedback(""); setError(""); }}>
                         <strong>{assignment.config.title}</strong><small>{assignment.config.grade} · {assignment.config.targetCharacters} 字</small>
                         <span>{assignment.config.writingRequirements}</span>
                       </button>
@@ -313,19 +350,25 @@ export default function NewReviewPage() {
                   ))}
                 </div>
               </section>
-            ) : savedAssignmentsLoaded ? <p className="saved-assignment-empty">完成一次自定义题目批改后，题目要求会自动保存在这里。</p> : null}
+            ) : savedAssignmentsLoaded ? <p className="saved-assignment-empty">填写自定义题目后点击“保存题目要求”，下次可直接选择使用。</p> : null}
             {config.templateType === "custom" ? (
               <div className="form-grid">
                 <label>作文题目<input value={config.title} onChange={(event) => updateConfig("title", event.target.value)} /></label>
                 <label>适用年级<input value={config.grade} onChange={(event) => updateConfig("grade", event.target.value)} /></label>
                 <label>目标字数<input aria-label="目标字数" type="number" min={1} value={config.targetCharacters} onChange={(event) => updateConfig("targetCharacters", Number(event.target.value))} /></label>
-                <AssignmentGuidancePanel config={config} onGenerated={(guidance) => setConfig((current) => ({ ...current, ...guidance }))} onError={setError} />
+                <AssignmentGuidancePanel config={config} onGenerated={(guidance) => { setConfig((current) => ({ ...current, ...guidance })); setSaveFeedback(""); }} onError={setError} />
                 <label className="wide">写作要求<textarea value={config.writingRequirements} onChange={(event) => updateConfig("writingRequirements", event.target.value)} /></label>
                 <label className="wide">结构要求<textarea value={config.structureRequirements} onChange={(event) => updateConfig("structureRequirements", event.target.value)} /></label>
                 <label className="wide">评分侧重<textarea value={config.scoringFocus} onChange={(event) => updateConfig("scoringFocus", event.target.value)} /></label>
               </div>
             ) : <div className="assignment-preview"><p><b>写作要求：</b>{config.writingRequirements}</p><p><b>重点：</b>{config.scoringFocus}</p></div>}
-            <div className="form-actions"><button className="button button--primary" type="button" onClick={nextFromConfig}>下一步：上传作文</button></div>
+            <div className="form-actions">
+              {config.templateType === "custom" ? <>
+                <span className="assignment-save-status" role="status" aria-live="polite">{savingAssignment ? "正在保存…" : savedConfigSnapshot && JSON.stringify(config) === JSON.stringify(savedConfigSnapshot) ? (saveFeedback || "题目要求已保存") : "修改后请点击保存题目要求"}</span>
+                <button className="button" type="button" disabled={savingAssignment} onClick={() => void saveAssignment()}>{savingAssignment ? "保存中…" : selectedAssignmentId ? "保存修改" : "保存题目要求"}</button>
+              </> : null}
+              <button className="button button--primary" type="button" onClick={nextFromConfig}>下一步：上传作文</button>
+            </div>
           </section>
         ) : null}
 

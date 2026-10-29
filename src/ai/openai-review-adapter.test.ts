@@ -437,6 +437,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
     expect(serialized).toContain("只返回 1 条");
     expect(serialized).toContain("本段无需修改");
+    expect(serialized).toContain("不要出示改错别字、改病句");
   });
 
   it("单段重写把多条建议合并成一个编号修改动作", async () => {

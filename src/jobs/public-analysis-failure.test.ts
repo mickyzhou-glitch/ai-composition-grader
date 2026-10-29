@@ -4,6 +4,10 @@ import { ANALYSIS_JOB_METADATA_PREFIX } from "./analysis-job-metadata";
 import { describePublicAnalysisFailure, sanitizeAnalysisDetail } from "./public-analysis-failure";
 
 describe("公开的分析失败说明", () => {
+  it("429 明确说明服务繁忙及重试方法", () => {
+    expect(describePublicAnalysisFailure({ errorCode: "AI_UPSTREAM_HTTP_429", progressStage: "generating_review" }).summary)
+      .toBe("AI 服务繁忙或触发限流（429），停在「生成批改」，请稍后重新分析");
+  });
   it("按错误码和步骤写出中文原因，并折叠已脱敏的原始信息", () => {
     expect(describePublicAnalysisFailure({
       errorCode: "ANALYSIS_TIMEOUT",
@@ -51,5 +55,16 @@ describe("公开的分析失败说明", () => {
     ["AI_INVALID_RESPONSE_schema_annotationAnchors_invalid_type", "批改结果结构不符：「annotationAnchors」缺少字段或类型不对，请重新分析"],
   ])("写明具体失败原因：%s", (errorCode, summary) => {
     expect(describePublicAnalysisFailure({ errorCode, progressStage: "generating_review" }).summary).toBe(summary);
+  });
+
+  it("内容生成阶段的 403 不误报为视觉输入权限", () => {
+    expect(describePublicAnalysisFailure({
+      errorCode: "AI_UPSTREAM_HTTP_403",
+      progressStage: "generating_review",
+    }).summary).toBe("AI 内容批改服务拒绝了请求（403），请检查内容模型的访问权限或服务地址");
+    expect(describePublicAnalysisFailure({
+      errorCode: "AI_UPSTREAM_HTTP_403",
+      progressStage: "reading_images",
+    }).summary).toBe("AI 服务拒绝了图片批改请求，请确认当前模型已开通视觉输入权限");
   });
 });

@@ -158,7 +158,9 @@ export function ParagraphReviewEditor({
                 <label>修改动作
                   <textarea
                     aria-label={`第 ${paragraphNumber} 段修改动作`}
-                    value={mergedParagraphAction(paragraphReview.suggestions)}
+                    value={paragraphReview.suggestions.length === 1
+                      ? paragraphReview.suggestions[0].advice
+                      : mergedParagraphAction(paragraphReview.suggestions)}
                     disabled={disabled || rewriting}
                     onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
                       ...current,

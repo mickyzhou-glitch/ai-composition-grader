@@ -265,14 +265,23 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "修改动作与改后全段" })).toBeVisible();
     expect(screen.queryByTestId("page-crop-1")).not.toBeInTheDocument();
-    expect(screen.queryByText("【修改动作】")).not.toBeInTheDocument();
+    expect(screen.getByText("【修改动作】")).toBeVisible();
+    expect(screen.getByText(/错别字、病句、标点等基础问题不向学生出示/u)).toBeVisible();
+    const approve = screen.getByRole("button", { name: "审核通过并进入下一篇" });
+    expect(approve).toBeDisabled();
     expect(screen.queryByText("【修改建议】")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /删除第 \d+ 段第 \d+ 条建议/u })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /新增第 \d+ 段建议/u })).not.toBeInTheDocument();
+    const action = screen.getByRole("textbox", { name: "第 1 段修改动作" });
+    expect(action).toHaveValue("补充听觉");
+    await user.clear(action);
+    await user.type(action, "写清上台前听到的声音");
     const revised = screen.getByLabelText("第 1 段改后全段");
     await user.clear(revised);
     await user.type(revised, "我听见急促的呼吸声，终于走上台。");
-    await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
+    await user.click(screen.getByRole("checkbox", { name: "已核对修改动作" }));
+    expect(approve).toBeEnabled();
+    await user.click(approve);
 
     const teacherCall = fetchMock.mock.calls.find(([input]) => (
       String(input) === "/api/reviews/review-1/teacher-review"
@@ -282,7 +291,7 @@ describe("BatchReviewPage", () => {
       report: {
         version: 2,
         paragraphReviews: [{
-          suggestions: paragraphReport.paragraphReviews[0].suggestions,
+          suggestions: [{ advice: "写清上台前听到的声音" }],
           revisedText: "我听见急促的呼吸声，终于走上台。",
         }],
       },
@@ -296,9 +305,24 @@ describe("BatchReviewPage", () => {
     const user = userEvent.setup();
     render(<BatchReviewPage />);
     expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue("我走上台。");
+    await user.click(screen.getByRole("checkbox", { name: "已核对修改动作" }));
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
     const teacherCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/review-1/teacher-review");
     expect(JSON.parse(String(teacherCall?.[1]?.body)).report.paragraphReviews[0].revisedText).toBe("范文里的第一段。");
+  });
+
+  it("核对修改动作后再次编辑须重新确认", async () => {
+    mockReviewApi([queueItem("review-1", "张小明", 1)], { currentReport: paragraphReport });
+    const user = userEvent.setup();
+    render(<BatchReviewPage />);
+    const action = await screen.findByRole("textbox", { name: "第 1 段修改动作" });
+    const checked = screen.getByRole("checkbox", { name: "已核对修改动作" });
+    const approve = screen.getByRole("button", { name: "审核通过并进入下一篇" });
+    await user.click(checked);
+    expect(approve).toBeEnabled();
+    await user.type(action, "，再补一处动作");
+    expect(checked).not.toBeChecked();
+    expect(approve).toBeDisabled();
   });
 
   it("同段多条建议时批量审核仍是一段一个框", async () => {
@@ -318,6 +342,7 @@ describe("BatchReviewPage", () => {
 
     expect(await screen.findByRole("heading", { name: "第 1 段" })).toBeVisible();
     expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "第 1 段修改动作" })).toHaveValue("1. 补听觉\n2. 补动作\n3. 收束主题");
     expect(screen.queryByRole("heading", { name: "第 2 段" })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /第 \d+ 段第 \d+ 条修改动作/u })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /新增第 \d+ 段建议/u })).not.toBeInTheDocument();
@@ -396,7 +421,7 @@ describe("BatchReviewPage", () => {
     expect(screen.getByText("对应原文第 3 段")).toBeVisible();
     expect(screen.getAllByRole("textbox", { name: /第 \d+ 段改后全段/u })).toHaveLength(2);
     expect(screen.queryByLabelText("第 3 段改后全段")).not.toBeInTheDocument();
-    expect(screen.queryByRole("textbox", { name: /修改动作/u })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("textbox", { name: /修改动作/u })).toHaveLength(2);
     const essayParagraph = screen.getByLabelText("完整范文第 2 段");
     await user.clear(essayParagraph);
     await user.type(essayParagraph, "结尾改过。");
@@ -410,6 +435,7 @@ describe("BatchReviewPage", () => {
     expect(screen.getByLabelText("第 1 段改后全段")).toHaveValue("我走上台。天很蓝。");
     expect(screen.getByLabelText("第 2 段改后全段")).toHaveValue("结尾改过。");
     expect(screen.queryByText("与逐段不一致")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "已核对修改动作" }));
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
 
     const teacherCall = fetchMock.mock.calls.find(([input]) => (

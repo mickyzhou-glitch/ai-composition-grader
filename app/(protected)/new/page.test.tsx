@@ -68,6 +68,52 @@ describe("新建作文批改", () => {
     expect(globalThis.fetch).toHaveBeenCalledWith("/api/assignment-guidance", expect.objectContaining({ method: "POST" }));
   });
 
+  it("可先保存自定义题目，再修改并覆盖同一条常用题目", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => {
+      if (url === "/api/saved-assignments" && !options) return json([]);
+      const config = JSON.parse(options?.body as string).config;
+      return json({ id: "saved-1", config }, options?.method === "POST" ? 201 : 200);
+    });
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+    await user.click(screen.getByRole("button", { name: "自定义题目" }));
+    await user.type(screen.getByLabelText("作文题目"), "我的成长");
+    await user.type(screen.getByLabelText("写作要求"), "写一件真实的事");
+    await user.type(screen.getByLabelText("结构要求"), "按事情经过展开");
+    await user.type(screen.getByLabelText("评分侧重"), "真实细节");
+    expect(screen.getByRole("status")).toHaveTextContent("修改后请点击保存题目要求");
+
+    await user.click(screen.getByRole("button", { name: "保存题目要求" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("题目要求已保存"));
+    expect(screen.getByRole("button", { name: "使用已保存题目我的成长" })).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("写作要求"));
+    await user.type(screen.getByLabelText("写作要求"), "写出具体动作和感受");
+    expect(screen.getByRole("status")).toHaveTextContent("修改后请点击保存题目要求");
+    await user.click(screen.getByRole("button", { name: "保存修改" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("题目要求已保存"));
+    const saveRequests = fetchMock.mock.calls.filter(([, options]) => options?.method === "POST" || options?.method === "PUT");
+    expect(saveRequests.map(([url, options]) => [url, options?.method])).toEqual([
+      ["/api/saved-assignments", "POST"],
+      ["/api/saved-assignments/saved-1", "PUT"],
+    ]);
+    expect(JSON.parse(saveRequests[1][1]?.body as string).config.writingRequirements).toBe("写出具体动作和感受");
+  });
+
+  it("保存失败时保留编辑内容并提示重试", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((url, options) => options?.method === "POST"
+      ? json({ code: "UNAVAILABLE", message: "暂时无法保存" }, 503) : json([]));
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+    await user.click(screen.getByRole("button", { name: "自定义题目" }));
+    await user.type(screen.getByLabelText("作文题目"), "我的成长");
+    await user.type(screen.getByLabelText("写作要求"), "保留这些要求");
+    await user.type(screen.getByLabelText("结构要求"), "开头结尾照应");
+    await user.type(screen.getByLabelText("评分侧重"), "真实细节");
+    await user.click(screen.getByRole("button", { name: "保存题目要求" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("题目要求未保存，请重试");
+    expect(screen.getByLabelText("写作要求")).toHaveValue("保留这些要求");
+  });
+
   it("上传课本后可不填题目直接导入，图片不混入作文上传", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation((url) => url === "/api/assignment-guidance" ? json({
       title: "我的拿手好戏", targetCharacters: 500,

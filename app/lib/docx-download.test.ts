@@ -3,12 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ACCENT3_BASE_HEX,
-  ACCENT3_LIGHTER_60_TINT,
-  BOX_FILL_HEX,
-  chooseBoxHalfPoints,
   createReviewDocx,
 } from "./docx-download";
-import type { ExportParagraph } from "./export-report-content";
 import type { ExportReviewSource } from "./export-report-content";
 
 const PNG_BYTES = Uint8Array.from(
@@ -149,6 +145,8 @@ describe("Word 逐段批改文档", () => {
     essay.forEach((text) => {
       expect(documentXml).toContain(text);
     });
+    expect(documentXml.match(/<w:pageBreakBefore\/>/gu)).toHaveLength(2);
+    expect(documentXml).not.toContain('<w:br w:type="page"/>');
   });
 
   it("完整范文每段只有一个 w:p，段内没有 w:br，首行缩进两字", async () => {
@@ -199,7 +197,8 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("修改示例");
     expect(documentXml).not.toContain("示例：");
     expect(documentXml).not.toContain("<w:numPr>");
-    expect(documentXml).toContain("修改动作：1. 补充登台前的具体动作。");
+    expect(documentXml).toContain("1. 补充登台前的具体动作。");
+    expect(documentXml).not.toContain("修改动作：");
     expect(documentXml).toContain("保留。");
     expect(documentXml).not.toContain("开头略显概括。");
     expect(documentXml).not.toContain("手心的汗把稿纸浸出了一道浅痕。");
@@ -213,11 +212,7 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("原来勇气不是不害怕，而是害怕时仍愿意向前。");
     expect(documentXml).toContain("我明白了勇气。");
     expect(documentXml.indexOf("我攥紧稿纸走，登上舞台。")).toBeLessThan(documentXml.indexOf("我明白了勇气。"));
-    expect(documentXml).toContain('w:fill="E7D4A8"');
-    expect(documentXml).toContain('w:themeColor="accent3"');
-    expect(documentXml).toContain('w:themeTint="66"');
-    expect(documentXml).toContain('w:themeFill="accent3"');
-    expect(documentXml).toContain('w:themeFillTint="66"');
+    expect(documentXml).toContain('<a:schemeClr val="accent3"><a:tint val="60000"/></a:schemeClr>');
     expect(documentXml).toContain('w:color w:val="C00000"');
     expect(documentXml).toContain('w:color w:val="1F4E78"');
     expect(documentXml).toContain('<w:u w:val="single"');
@@ -225,7 +220,8 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("慢慢走");
     expect(documentXml).not.toContain("成功");
     expect(documentXml).toMatch(/w:eastAsia="(?:楷体|KaiTi)"/u);
-    expect(documentXml.match(/<w:br w:type="page"\/>/gu)).toHaveLength(1);
+    expect(documentXml.match(/<w:pageBreakBefore\/>/gu)).toHaveLength(1);
+    expect(documentXml).not.toContain('<w:br w:type="page"/>');
   });
 
   it("嵌入每一页原图，文档标题与 PDF 一致且不写入内部信息", async () => {
@@ -275,7 +271,9 @@ describe("Word 逐段批改文档", () => {
       return documentXml.slice(start, documentXml.indexOf("</w:r>", at));
     };
 
-    expect(documentXml).toContain("修改动作：写清迈步的感觉");
+    expect(documentXml).toContain("写清迈步的感觉");
+    expect(documentXml).not.toContain("修改动作：");
+    expect(runXml("写清迈步的感觉")).not.toContain("<w:b/>");
     expect(documentXml).toContain("改后全段：");
     expect(documentXml).not.toContain("动作略快");
     expect(documentXml).not.toContain("问题描述");
@@ -313,25 +311,32 @@ describe("Word 逐段批改文档", () => {
     };
     const { zip, documentXml } = await unpack(review);
     const theme = await zip.file("word/theme/theme1.xml")?.async("string");
-    const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
-    const boxes = cells.filter((cell) => cell.includes("修改动作："));
-    const photoTables = [...documentXml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/gu)]
-      .filter((grid) => (grid[0].match(/<w:gridCol\b/gu) ?? []).length === 2);
-
+    const boxes = [...documentXml.matchAll(/<wps:wsp>[\s\S]*?<\/wps:wsp>/gu)].map((match) => match[0]);
     expect(documentXml).toMatch(/w:orient="landscape"/u);
-    expect(photoTables).toHaveLength(1);
+    expect(documentXml).not.toMatch(/<w:tbl[\s>]/u);
+    expect(documentXml).not.toMatch(/<w:tc[\s>]/u);
     expect(boxes).toHaveLength(paragraphs.length);
-    expect(documentXml.match(/<w:drawing\b/gu)).toHaveLength(1);
-    expect(cells[0]).toContain("第 1 页作文原图");
-    expect(cells[0]).not.toContain("修改动作：");
+    expect(documentXml.match(/<w:drawing\b/gu)).toHaveLength(paragraphs.length + 1);
+    expect(documentXml.match(/<wp:anchor\b/gu)).toHaveLength(paragraphs.length + 1);
+    expect(documentXml).toContain('locked="0"');
+    expect(documentXml).toContain('relativeFrom="margin"');
+    const ids = [...documentXml.matchAll(/<wp:docPr id="(\d+)"/gu)].map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(documentXml).not.toContain('<a:noFill/>');
+    for (const shape of [...documentXml.matchAll(/<wps:spPr[^>]*>([\s\S]*?)<\/wps:spPr>/gu)]) {
+      expect(shape[1].indexOf('<a:solidFill>')).toBeLessThan(shape[1].indexOf('<a:ln'));
+    }
+    expect(documentXml).toContain('descr="第 1 页作文原图"');
     for (const [index, box] of boxes.entries()) {
       expect(box).toContain(`改好第 ${index + 1} 段。`);
       expect(box).toContain("改后全段：");
-      expect(box).toContain(`w:fill="${BOX_FILL_HEX}"`);
-      expect(box).toContain('w:themeColor="accent3"');
-      expect(box).toContain(`w:themeTint="${ACCENT3_LIGHTER_60_TINT}"`);
-      expect(box).toContain('w:themeFill="accent3"');
-      expect(box).toContain(`w:themeFillTint="${ACCENT3_LIGHTER_60_TINT}"`);
+      expect(box).toContain('<a:schemeClr val="accent3"><a:tint val="60000"/></a:schemeClr>');
+      expect(box).toContain('<wps:cNvSpPr txBox="1"/>');
+      expect(box).toContain('<w:txbxContent>');
+      const textBoxContent = box.match(/<w:txbxContent>([\s\S]*?)<\/w:txbxContent>/u)?.[1] ?? "";
+      const paragraphs = [...textBoxContent.matchAll(/<w:p>[\s\S]*?<\/w:p>/gu)].map((match) => match[0]);
+      expect(paragraphs.length).toBeGreaterThan(0);
+      paragraphs.forEach((paragraph) => expect(paragraph).toContain('<w:jc w:val="left"/>'));
       expect(box).not.toContain("问题描述");
       expect(box).not.toContain("修改示例");
     }
@@ -375,8 +380,7 @@ describe("Word 逐段批改文档", () => {
       })),
     };
     const { documentXml } = await unpack(review);
-    const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
-    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+    const boxes = [...documentXml.matchAll(/<wps:wsp>[\s\S]*?<\/wps:wsp>/gu)].map((match) => match[0]);
 
     expect(documentXml).toMatch(/w:orient="landscape"/u);
     expect(boxes).toHaveLength(ranges.length);
@@ -418,8 +422,7 @@ describe("Word 逐段批改文档", () => {
       })),
     };
     const { documentXml } = await unpack(review);
-    const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
-    const boxes = cells.filter((cell) => cell.includes("修改动作："));
+    const boxes = [...documentXml.matchAll(/<wps:wsp>[\s\S]*?<\/wps:wsp>/gu)].map((match) => match[0]);
 
     expect(boxes).toHaveLength(paragraphs.length);
     expect(boxes[0]).toContain("1. 补听觉");
@@ -427,15 +430,16 @@ describe("Word 逐段批改文档", () => {
     expect(boxes[0]).toContain("3. 收束主题");
     expect(boxes[0].match(/改后全段：/gu)).toHaveLength(1);
     expect(boxes[0]).toContain("开篇改后。");
-    expect(boxes[1]).toContain("修改动作：本段无需修改");
+    expect(boxes[1]).toContain("本段无需修改");
+    expect(boxes[1]).not.toContain("修改动作：");
     expect(boxes[1]).toContain("改后全段：");
     expect(boxes[1]).toContain("经过。");
   });
 
-  it("框内容过长时缩小字号并保留全文", async () => {
+  it("框内容过长时保持小四字、分页并保留全文", async () => {
     installBrowserExport();
     const review = fixture();
-    const revised = `我终于走上台。${"灯光一直很亮，我还是迈了出去。".repeat(80)}`;
+    const revised = `我终于走上台。${"灯光一直很亮，我还是迈了出去。".repeat(180)}`;
     review.images = [review.images[0]];
     review.ocr = {
       version: 2,
@@ -457,16 +461,63 @@ describe("Word 逐段批改文档", () => {
         revisedText: revised,
       }],
     };
-    const paragraph: ExportParagraph = {
-      suggestions: [{ advice: "写清迈步。" }],
-      revisionRuns: [{ text: revised, changed: true }],
-    };
-    const halfPoints = chooseBoxHalfPoints([paragraph]);
     const { documentXml } = await unpack(review);
 
-    expect(halfPoints).toBeLessThan(21);
-    expect(documentXml).toContain(revised);
-    expect(documentXml).toContain(`<w:sz w:val="${halfPoints}"`);
-    expect(documentXml).not.toContain('<w:sz w:val="21"');
+    const boxes = [...documentXml.matchAll(/<w:txbxContent>[\s\S]*?<\/w:txbxContent>/gu)].map((match) => match[0]);
+    const text = [...documentXml.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/gu)].map((match) => match[1]).join("");
+    expect(text).toContain(revised);
+    expect(boxes.length).toBeGreaterThan(1);
+    expect(documentXml).not.toMatch(/<w:tbl[\s>]/u);
+    expect(documentXml).toContain("（续）");
+    expect(boxes.every((box) => [...box.matchAll(/<w:sz w:val="(\d+)"/gu)].every((match) => match[1] === "24"))).toBe(true);
+    expect(boxes.every((box) => box.includes('<w:sz w:val="24"'))).toBe(true);
+  });
+
+  it.each([150, 550, 1400])("多条建议与 %i 字正文的文本框容纳全部行，且相邻框不遮挡", async (length) => {
+    installBrowserExport();
+    const review = fixture();
+    const report = review.report as { paragraphReviews: Array<{ suggestions: Array<{ advice: string }>; revisedText: string }> };
+    report.paragraphReviews[0].suggestions = [
+      { advice: "通过老奶奶的话揭示志愿者长期义务守护站台的真相，解释他为什么每天喊话、随身带纸巾。" },
+      { advice: "补写“我”听后惭愧的心理，使真相揭示更有余味。" },
+    ];
+    report.paragraphReviews[0].revisedText = "灯光一直很亮，我还是迈了出去。".repeat(Math.ceil(length / 16)).slice(0, length);
+    review.report = { ...(review.report as object), rewrittenEssay: ["范文正文也使用小四。"] };
+    const { documentXml } = await unpack(review);
+    const xml = new DOMParser().parseFromString(documentXml, "application/xml");
+    expect(xml.getElementsByTagName("parsererror")).toHaveLength(0);
+    const attr = (node: Element, name: string) => Number(node.getAttribute(name));
+    let previousBottom = 0;
+    for (const anchor of Array.from(xml.getElementsByTagName("wp:anchor"))) {
+      if (anchor.getElementsByTagName("pic:pic").length > 0) { previousBottom = 0; continue; }
+      const extent = anchor.getElementsByTagName("wp:extent")[0];
+      const body = anchor.getElementsByTagName("wps:bodyPr")[0];
+      const y = Number(anchor.getElementsByTagName("wp:positionV")[0].textContent) / 635;
+      const width = (attr(extent, "cx") - attr(body, "lIns") - attr(body, "rIns")) / 635;
+      const height = attr(extent, "cy") / 635;
+      let needed = (attr(body, "tIns") + attr(body, "bIns")) / 635;
+      for (const paragraph of Array.from(anchor.getElementsByTagName("w:p"))) {
+        const spacing = paragraph.getElementsByTagName("w:spacing")[0];
+        expect(spacing.getAttribute("w:lineRule")).toBe("exact");
+        expect(paragraph.getElementsByTagName("w:snapToGrid")[0]?.getAttribute("w:val")).toBe("false");
+        const text = Array.from(paragraph.getElementsByTagName("w:r")).flatMap((run) => (
+          Array.from(run.childNodes).map((node) => node.nodeName === "w:br" ? "\n" : node.nodeName === "w:t" ? node.textContent : "")
+        )).join("");
+        const sizes = Array.from(paragraph.getElementsByTagName("w:sz"));
+        expect(sizes.every((size) => attr(size, "w:val") === 24)).toBe(true);
+        const charsPerLine = Math.floor(width / 240);
+        const rows = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(Array.from(line).length / charsPerLine)), 0);
+        needed += rows * attr(spacing, "w:line") + attr(spacing, "w:before") + attr(spacing, "w:after");
+      }
+      expect(height).toBeGreaterThanOrEqual(needed);
+      // WPS 会裁切贴近文本框底边的字形，必须保留独立的底部安全区。
+      expect(height - needed).toBeGreaterThanOrEqual(360);
+      expect(y).toBeGreaterThanOrEqual(previousBottom);
+      expect(y + height).toBeLessThanOrEqual(10546);
+      previousBottom = y + height;
+    }
+    const essayRun = Array.from(xml.getElementsByTagName("w:r")).find((run) => run.textContent?.includes("范文正文也使用小四。"));
+    expect(essayRun?.getElementsByTagName("w:sz")[0].getAttribute("w:val")).toBe("24");
   });
 });
+

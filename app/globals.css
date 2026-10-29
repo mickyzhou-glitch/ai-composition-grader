@@ -176,6 +176,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .batch-review-actionbar { grid-column: 2 / 4; grid-row: 1; position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); box-shadow: 0 3px 10px rgb(40 34 28 / 7%); }
 .batch-review-actionbar span { color: var(--muted); font-size: .85rem; }
 .batch-review-actionbar-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.batch-review-actions-check { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: .85rem; font-weight: 700; }
 .revision-job-notice { width: min(1100px, calc(100% - 32px)); margin: 12px auto 0; padding: 10px 12px; border: 1px solid #e7c7a6; background: #fff8ef; color: #7a481e; }
 .revision-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; isolation: isolate; display: grid; grid-template-rows: minmax(0, 1fr); padding: 20px; place-items: center; overflow: hidden; overscroll-behavior: contain; background: rgb(22 27 25 / 48%); }
 .revision-dialog { position: relative; display: flex; width: min(640px, 100%); min-width: 0; max-height: min(760px, calc(100vh - 40px)); overflow: hidden; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 20px 55px rgb(22 27 25 / 22%); }
@@ -282,6 +283,7 @@ input, textarea, select {
 textarea { min-height: 100px; resize: vertical; }
 .field-help { margin: -10px 0 0; font-size: .8rem; font-weight: 400; }
 .form-actions { justify-content: flex-end; margin-top: 8px; }
+.assignment-save-status { margin-right: auto; color: var(--muted); font-size: .86rem; }
 .error-banner, .success-banner { display: flex; margin-bottom: 18px; padding: 12px 14px; align-items: center; justify-content: space-between; gap: 16px; border-radius: 10px; }
 .error-banner { border: 1px solid #e4c5c0; background: var(--danger-soft); color: var(--danger-dark); }
 .success-banner { border: 1px solid #bcd5cb; background: var(--green-soft); color: var(--green); }
@@ -536,7 +538,8 @@ textarea { min-height: 100px; resize: vertical; }
   .batch-essay-pane, .batch-report-pane { overflow: visible; border-right: 0; border-bottom: 1px solid var(--line); }
   .batch-review-actionbar { flex-wrap: wrap; }
   .batch-review-actionbar .button { flex: 1 1 260px; }
-  .batch-review-actionbar-actions { width: 100%; }
+  .batch-review-actionbar-actions { width: 100%; flex-wrap: wrap; }
+  .batch-review-actions-check { width: 100%; }
   .batch-review-actionbar-actions .button { flex: 1 1 220px; }
   .review-export-comments { grid-template-columns: 1fr; }
   .batch-export-actions { align-items: flex-start; flex-direction: column; }

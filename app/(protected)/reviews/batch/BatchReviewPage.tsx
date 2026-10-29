@@ -64,6 +64,7 @@ export function BatchReviewPage() {
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [checkedActionVersion, setCheckedActionVersion] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [revisionDialogOpen, setRevisionDialogOpen] = useState(false);
   const [standingRules, setStandingRules] = useState<string[]>([]);
@@ -99,6 +100,8 @@ export function BatchReviewPage() {
       teacherReviewedAt: review.teacherReviewedAt ?? "pending-teacher-review",
     });
   }, [review]);
+
+  const actionsChecked = Boolean(review && checkedActionVersion === cacheKey(review.id, review.revision));
 
   const loadDetail = useCallback((item: ReviewQueueItemView): Promise<ReviewView> => {
     const key = cacheKey(item.id, item.revision);
@@ -234,6 +237,7 @@ export function BatchReviewPage() {
   function choose(id: string) {
     if (id === activeId) return;
     if (dirty && !window.confirm("当前修改尚未审核保存，确认切换作文？")) return;
+    setCheckedActionVersion(null);
     setActiveId(id);
   }
 
@@ -241,6 +245,7 @@ export function BatchReviewPage() {
     const nextVisible = filterReviewsByStudentName(filterReviewsByClass(queue, nextClass), value);
     if (activeId && !nextVisible.some(({ id }) => id === activeId)) {
       if (dirty && !window.confirm("当前修改尚未审核保存，确认切换作文？")) return;
+      setCheckedActionVersion(null);
       const next = nextVisible[0] ?? null;
       setActiveId(next?.id ?? null);
       setReview(next ? cacheRef.current.get(cacheKey(next.id, next.revision)) ?? null : null);
@@ -257,6 +262,7 @@ export function BatchReviewPage() {
       ? visibleQueue[currentIndex + 1] ?? visibleQueue[currentIndex - 1] ?? null
       : null;
     setQueue((current) => current.filter(({ id }) => id !== reviewId));
+    setCheckedActionVersion(null);
     setActiveId(next?.id ?? null);
     setReview(next ? cacheRef.current.get(cacheKey(next.id, next.revision)) ?? null : null);
     setDirty(false);
@@ -264,6 +270,10 @@ export function BatchReviewPage() {
 
   async function completeReview() {
     if (!review?.report || saving) return;
+    if (isParagraphReportDraft(review.report) && !actionsChecked) {
+      setError("请先核对每段修改动作，确认不向学生展示错别字、病句等基础问题。");
+      return;
+    }
     if (paragraphReadiness && !paragraphReadiness.ready) {
       setError(paragraphReadiness.message);
       return;
@@ -410,9 +420,9 @@ export function BatchReviewPage() {
       {view === "export" ? <section className="batch-export-view">
         <ClassFilter items={[...queue, ...reviewed]} value={classFilter} onChange={(value) => updateSearch(search, value)} />
         <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><div className="batch-export-action-buttons"><div className="batch-export-command"><span>导出所选作文</span><ExportMenu ariaLabel="导出所选作文" disabled={selectedExportable.length === 0 || exporting} disabledReason={selectedExportIds.size > 0 && selectedExportable.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={exporting} onExport={exportSelected} /></div><div className="batch-export-command"><span>一键导出已复核（{exportableReviewed.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={exportableReviewed.length === 0 || exporting} busy={exporting} onExport={exportAllReviewed} /></div></div></div>
-        <ReviewExportList reviews={filterReviewsByClass(reviewed, classFilter)} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setReview(target); setActiveId(id); setView("review"); } }} />
+        <ReviewExportList reviews={filterReviewsByClass(reviewed, classFilter)} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setCheckedActionVersion(null); setReview(target); setActiveId(id); setView("review"); } }} />
       </section> : <div className="batch-review-layout">
-        <div className="batch-review-actionbar" role="toolbar" aria-label="审核操作"><span>{paragraphReadiness && !paragraphReadiness.ready ? paragraphReadiness.message : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-actionbar-actions"><button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || saving || revisionSubmitting || sampleParagraphCountMismatch || Boolean(paragraphReadiness && !paragraphReadiness.ready)} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></div>
+        <div className="batch-review-actionbar" role="toolbar" aria-label="审核操作"><span>{paragraphReadiness && !paragraphReadiness.ready ? paragraphReadiness.message : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-actionbar-actions">{review?.report && isParagraphReportDraft(review.report) ? <label className="batch-review-actions-check"><input type="checkbox" checked={actionsChecked} disabled={saving || revisionSubmitting} onChange={(event) => { setCheckedActionVersion(event.target.checked ? cacheKey(review.id, review.revision) : null); setError(""); }} />已核对修改动作</label> : null}<button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || saving || revisionSubmitting || sampleParagraphCountMismatch || Boolean(paragraphReadiness && !paragraphReadiness.ready) || Boolean(review?.report && isParagraphReportDraft(review.report) && !actionsChecked)} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></div>
         <aside className="batch-queue" aria-label="待审核作文队列">
           <ClassFilter items={[...queue, ...reviewed]} value={classFilter} onChange={(value) => updateSearch(search, value)} />
           <label>搜索学生姓名<input type="search" aria-label="搜索待审核学生姓名" value={search} onChange={(event) => updateSearch(event.target.value)} /></label>
@@ -432,7 +442,7 @@ export function BatchReviewPage() {
             ocr={review.ocr}
             images={review.images}
             disabled={saving || revisionSubmitting || review.reportStale || (isParagraphReportDraft(review.report) && review.ocr?.version !== 2)}
-            onChange={(report) => { setReview({ ...review, report }); setDirty(true); }}
+            onChange={(report) => { setReview({ ...review, report }); setDirty(true); setCheckedActionVersion(null); }}
           /> : <p className="muted">选择一篇作文开始审核</p>}
         </section>
       </div>}
