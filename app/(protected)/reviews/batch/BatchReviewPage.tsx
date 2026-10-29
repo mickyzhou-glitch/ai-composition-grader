@@ -314,7 +314,7 @@ export function BatchReviewPage() {
     setRevisionDialogOpen(true);
   }
 
-  async function rejectReview(input: { commonIssue: string; contentSuggestion: string }) {
+  async function rejectReview(input: { commonIssue: string; contentSuggestion: string; commonIssueScope?: "essay" | "standing" }) {
     if (!review || revisionSubmitting) return;
     const currentReview = review;
     setRevisionSubmitting(true);
@@ -342,7 +342,7 @@ export function BatchReviewPage() {
     }
   }
 
-  async function requestRevision(input: { commonIssue: string; contentSuggestion: string }) {
+  async function requestRevision(input: { commonIssue: string; contentSuggestion: string; commonIssueScope?: "essay" | "standing" }) {
     if (!review || revisionSubmitting) return;
     const currentReview = review;
     setRevisionSubmitting(true);
@@ -355,6 +355,7 @@ export function BatchReviewPage() {
         body: JSON.stringify({
           expectedRevision: currentReview.revision,
           commonIssue: input.commonIssue,
+          ...(input.commonIssueScope ? { commonIssueScope: input.commonIssueScope } : {}),
           contentSuggestion: input.contentSuggestion,
         }),
       });

@@ -142,10 +142,10 @@ describe("RevisionRequestDialog", () => {
     expect(screen.queryByRole("group", { name: "已通过的长期规则" })).not.toBeInTheDocument();
   });
 
-  it("传入本篇历史退回意见时自动回显到内容建议框并提供追加按钮", () => {
+  it("本篇历史仅作上下文，不自动升级为本轮要求", () => {
     renderDialog({ essayOpinions: ["第二段心理描写太简略", "结尾扣回主题"] });
     expect(screen.getByRole("group", { name: "本篇历史退回意见" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("第二段心理描写太简略\n结尾扣回主题");
+    expect(screen.getByRole("textbox", { name: "内容建议（仅当前文章）" })).toHaveValue("");
   });
 
   it("追加保留手写空白与规则换行，仅去重完全相同的整条规则", () => {

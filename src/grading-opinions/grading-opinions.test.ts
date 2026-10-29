@@ -212,7 +212,7 @@ describe("批改意见存档", () => {
       "SELECT teacher_guidance AS teacherGuidance FROM analysis_jobs WHERE review_id = 'review-2' AND status = 'queued'",
     ).get() as { teacherGuidance: string | null };
     jobs.createOrGet(OWNER, "review-2");
-    expect(queued().teacherGuidance.match(/扣住题目/gu)).toHaveLength(1);
+    expect(queued().teacherGuidance?.match(/扣住题目/gu)).toHaveLength(1);
     expect(queued().teacherGuidance).not.toContain("只改这篇的心理");
 
     opened.sqlite.prepare("UPDATE analysis_jobs SET status = 'succeeded' WHERE review_id = 'review-2'").run();

@@ -1,6 +1,6 @@
+import { composeReviewGuidance } from "../grading-opinions/review-guidance";
 import { opinionSourceTitle } from "../grading-opinions/grading-opinion-repository";
 import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
-import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
 import { MAX_ANALYSIS_TEACHER_GUIDANCE_CHARS } from "../reanalysis/contracts";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
@@ -137,10 +137,7 @@ export class D1AnalysisJobs {
       listD1StandingOpinions(this.database, ownerId, titleFromStoredConfig(review.config)),
       listD1EssayOpinions(this.database, ownerId, reviewId),
     ]);
-    const storedGuidance = guidanceWithStandingOpinions(
-      guidance,
-      [...standingOpinions, ...essayOpinions],
-    );
+    const storedGuidance = composeReviewGuidance(guidance, standingOpinions, essayOpinions);
     const id = crypto.randomUUID();
     const now = Date.now();
     let outcomes: D1Result<unknown>[];

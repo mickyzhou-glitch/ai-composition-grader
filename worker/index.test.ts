@@ -1,3 +1,5 @@
+import * as opinionQueries from "../src/cloudflare/d1-grading-opinions";
+import { readReviewGuidance } from "../src/grading-opinions/review-guidance";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import worker, { savePipelineResult, saveUnreadableResult } from "./index";
@@ -194,11 +196,31 @@ describe("Cloudflare Worker", () => {
       config: reviewConfig,
       paragraphs: [{ id: "paragraph-1", text: "我走上台。" }],
       current: paragraphReport.paragraphReviews[0],
+      paragraphReviews: paragraphReport.paragraphReviews,
+      teacherGuidance: undefined,
       paragraphId: "paragraph-1",
       instruction: "补充听觉细节",
     });
     get.mockRestore();
     rewriteParagraph.mockRestore();
+  });
+
+  it.each([undefined, "", "本轮三段式"])("单段重写使用当前或已保存指导 %s，服务端主动加载本篇历史和同题规则", async (draft) => {
+    vi.spyOn(D1ReviewReader.prototype, "get").mockResolvedValue({ ...paragraphReviewView, teacherGuidance: "保存的指导" } as never);
+    vi.spyOn(opinionQueries, "listD1StandingOpinions").mockResolvedValue([{ text: "同题长期规则", createdAt: 1 }]);
+    vi.spyOn(opinionQueries, "listD1EssayOpinions").mockResolvedValue([{ text: "本篇最近历史", createdAt: 2 }]);
+    const rewrite = vi.spyOn(OpenAIReviewAdapter.prototype, "rewriteParagraph").mockResolvedValue(paragraphReport.paragraphReviews[0]);
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/paragraph-reviews/paragraph-1", {
+      method: "POST", headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({ paragraphReviews: paragraphReport.paragraphReviews, ...(draft !== undefined ? { teacherGuidance: draft } : {}) }),
+    }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+    expect(response.status).toBe(200);
+    const layers = readReviewGuidance(rewrite.mock.calls[0][0].teacherGuidance);
+    expect(layers.current).toBe(draft ?? "保存的指导");
+    expect(layers.history).toBe("本篇最近历史");
+    expect(layers.standing).toContain("同题长期规则");
+    expect(opinionQueries.listD1EssayOpinions).toHaveBeenCalledWith(expect.anything(), "teacher-1", "review-1");
+    expect(opinionQueries.listD1StandingOpinions).toHaveBeenCalledWith(expect.anything(), "teacher-1", reviewConfig.title);
   });
 
   it.each([

@@ -3,7 +3,7 @@ import {
   paragraphEvaluationReportSchema,
   type ParagraphSuggestion,
 } from "@/src/domain/contracts";
-import { deriveEssayFromParagraphReviews } from "@/src/domain/essay-paragraph-sync";
+import { assertEssayDraftResolved, deriveEssayFromParagraphReviews } from "@/src/domain/essay-paragraph-sync";
 import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import {
@@ -44,9 +44,10 @@ export type ExportParagraph = {
   suggestions: ParagraphSuggestion[];
   revisionRuns: ExportRevisionRun[];
   sourceLabel?: string;
+  paragraphNumber?: number;
 };
 
-export type ExportRunStyle = "suggestion" | "demonstration" | "changed" | "plain";
+export type ExportRunStyle = "heading" | "suggestion" | "demonstration" | "changed" | "plain";
 
 export type ExportTextRun = {
   text: string;
@@ -121,6 +122,10 @@ function suggestionText(suggestions: ParagraphSuggestion[]) {
 
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {
   return [
+    ...(paragraph.paragraphNumber ? [{
+      text: `第 ${paragraph.paragraphNumber} 段${paragraph.sourceLabel ? `／${paragraph.sourceLabel}` : ""}\n`,
+      style: "heading" as const,
+    }] : []),
     { text: `${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
     { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" as const },
     ...paragraph.revisionRuns.map((run) => ({
@@ -160,6 +165,8 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     );
   }
 
+  const report = paragraphEvaluationReportSchema.parse(review.report);
+  assertEssayDraftResolved(report);
   const readiness = deliveryReadiness(review);
   if (!readiness.ready) {
     throw new ExportContentError(
@@ -171,7 +178,6 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "需要自然段识别结果");
   }
 
-  const report = paragraphEvaluationReportSchema.parse(review.report);
   const groups = resolveReviewGroups(report.paragraphReviews, review.ocr.paragraphs);
   const expectedGroups = paragraphReviewUsesGroups(report.paragraphReviews)
     ? report.paragraphReviews.length
@@ -191,6 +197,7 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     }
     const pageParagraphs = paragraphsByPage.get(pageIndex) ?? [];
     pageParagraphs.push({
+      paragraphNumber: group.reviewIndex + 1,
       ...(group.sourceLabel ? { sourceLabel: group.sourceLabel } : {}),
       suggestions: group.review.suggestions,
       revisionRuns: buildExportRevisionRuns(group.sourceText, group.review.revisedText),
@@ -206,11 +213,7 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
         image,
         paragraphs: paragraphsByPage.get(image.position) ?? [],
       })),
-    rewrittenEssay: report.rewrittenEssay?.length
-      ? (report.rewrittenEssay.length === report.paragraphReviews.length
-        ? deriveEssayFromParagraphReviews(report.paragraphReviews)
-        : report.rewrittenEssay)
-      : [],
+    rewrittenEssay: report.rewrittenEssay?.length ? deriveEssayFromParagraphReviews(report.paragraphReviews) : [],
   };
 }
 

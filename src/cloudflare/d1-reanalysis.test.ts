@@ -1,6 +1,6 @@
+import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 
-import { guidanceWithStandingOpinions } from "../grading-opinions/standing-guidance";
 import {
   D1Reanalysis,
   D1ReanalysisBatchError,
@@ -178,7 +178,25 @@ describe("D1Reanalysis", () => {
     expect(calls.every((sql) => !/^\s*(UPDATE|INSERT|DELETE)/iu.test(sql))).toBe(true);
   });
 
-  it("旧报告的单篇退回在原子 batch 中排 full 升级任务", async () => {
+  it("并发保存导致建单失败时，本篇及长期规则都不得生效", async () => {
+    const sqlite = new Database(":memory:");
+    sqlite.exec(`CREATE TABLE analysis_jobs (id TEXT, owner_id TEXT, review_id TEXT);
+      CREATE TABLE grading_opinions (id TEXT, owner_id TEXT, body TEXT, reason TEXT, change_request TEXT, paragraph_label TEXT, category TEXT, scope TEXT, source_review_id TEXT, source_job_id TEXT, source_student_name TEXT, source_class_name TEXT, source_title TEXT, created_at INTEGER, updated_at INTEGER);`);
+    const database = {
+      prepare: (sql: string) => statement(sql, { first: async () => reviewRow() }),
+      batch: async (items: Array<{ sql: string; bindings: unknown[] }>) => items.map((item) => ({ meta: {
+        changes: item.sql.includes("INSERT INTO grading_opinions") ? sqlite.prepare(item.sql).run(...item.bindings).changes : 0,
+      } })),
+    } as unknown as D1Database;
+    try {
+      await expect(new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
+        expectedRevision: 3, commonIssue: "结尾留白", contentSuggestion: "补动作", commonIssueScope: "standing",
+      })).rejects.toMatchObject({ code: "REVISION_CONFLICT" });
+      expect(sqlite.prepare("SELECT COUNT(*) AS count FROM grading_opinions").get()).toEqual({ count: 0 });
+    } finally { sqlite.close(); }
+  });
+
+  it.each(["essay", "standing"] as const)("旧报告退回排 full 任务并按明确范围 %s 归档", async (scope) => {
     const statements: Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }> = [];
     const database = {
       prepare: vi.fn((sql: string) => {
@@ -196,6 +214,7 @@ describe("D1Reanalysis", () => {
     const result = await new D1Reanalysis(database).requestRevision(OWNER, REVIEW, {
       expectedRevision: 3,
       commonIssue: "重新关注结尾",
+      commonIssueScope: scope,
       contentSuggestion: "补一件事",
     });
 
@@ -215,12 +234,11 @@ describe("D1Reanalysis", () => {
     });
     expect(update.sql).not.toContain("sourceRevision");
     expect(insert.bindings).toContain("full");
-    expect(insert.bindings).toContain(guidanceWithStandingOpinions(
-      "[结构问题 / 共性问题]\n重新关注结尾\n[内容建议]\n补一件事",
-      [{ text: "重新关注结尾", category: "结构", createdAt: 1 }],
-    ));
+    expect(insert.bindings).toContainEqual(expect.stringContaining("重新关注结尾"));
+    expect(insert.bindings).toContainEqual(expect.stringContaining("补一件事"));
     const archived = statements.filter(({ sql }) => /INSERT INTO grading_opinions/u.test(sql));
-    expect(archived).toHaveLength(2);
+    expect(archived).toHaveLength(scope === "standing" ? 3 : 2);
+    if (scope === "standing") expect(archived.shift()?.bindings).toContain("standing");
     expect(archived[0]?.bindings).toEqual(expect.arrayContaining(["重新关注结尾", "结构", "essay", "小明", "春天", "job-1"]));
     expect(archived[1]?.bindings).toEqual(expect.arrayContaining(["补一件事", "内容", "essay", "job-1"]));
   });

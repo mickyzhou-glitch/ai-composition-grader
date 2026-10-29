@@ -37,7 +37,7 @@ function report(essay: string[], revised: string[]): ParagraphEvaluationReport {
   };
 }
 
-function reviewed(source: Parameters<typeof planModelEssaySync>[0]) {
+function reviewed(source: Omit<Parameters<typeof planModelEssaySync>[0], "teacherReviewedAt">) {
   return planModelEssaySync({
     teacherReviewedAt: "2026-08-22T06:00:00.000Z",
     ...source,

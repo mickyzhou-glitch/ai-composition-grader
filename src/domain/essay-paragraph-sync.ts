@@ -210,5 +210,27 @@ export function syncEssayBeforeApproval<T extends EvaluationReport>(
   _ocr?: object | null,
 ): T {
   if (!isParagraphEvaluationReport(report) || !report.rewrittenEssay?.length) return report;
+  assertEssayDraftResolved(report);
   return syncEssayFromParagraphReviews(report) as T;
+}
+
+/** Old dual-track data must be resolved explicitly before any write or export. */
+export function assertEssayDraftResolved(report: ParagraphEvaluationReport): void {
+  if (essayDiffersFromParagraphReviews(report)) {
+    throw new Error("旧报告的完整范文与逐段稿不一致，请选择保留版本后保存、审核或导出。");
+  }
+}
+
+export function migrateEssayDraft(
+  report: ParagraphEvaluationReport,
+  choice: "essay" | "paragraphs",
+  ocrParagraphIds: readonly string[],
+): ParagraphEvaluationReport {
+  const originalEssay = [...(report.rewrittenEssay ?? [])];
+  const originalParagraphReviews = structuredClone(report.paragraphReviews);
+  const resolved = choice === "essay"
+    ? applyEssayToParagraphReviews(report, ocrParagraphIds)
+    : syncEssayFromParagraphReviews(report);
+  assertEssayDraftResolved(resolved);
+  return { ...resolved, draftMigration: report.draftMigration ?? { choice, originalEssay, originalParagraphReviews } };
 }

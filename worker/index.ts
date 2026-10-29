@@ -1,3 +1,5 @@
+import { composeReviewGuidance } from "../src/grading-opinions/review-guidance";
+import { listD1EssayOpinions, listD1StandingOpinions } from "../src/cloudflare/d1-grading-opinions";
 import type { WorkerEnv } from "../src/cloudflare/env";
 import { D1LoginChallengeRepository } from "../src/cloudflare/d1-login-challenge-repository";
 import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-repository";
@@ -773,7 +775,11 @@ export default {
           paragraphId,
           instruction: body.instruction,
           paragraphReviews: body.paragraphReviews,
-          teacherGuidance: body.teacherGuidance,
+          teacherGuidance: composeReviewGuidance(
+            body.teacherGuidance ?? review.teacherGuidance,
+            await listD1StandingOpinions(env.DB, user.id, review.config.title),
+            await listD1EssayOpinions(env.DB, user.id, review.id),
+          ) ?? undefined,
         });
         return Response.json(
           { ok: true, data: rewritten },

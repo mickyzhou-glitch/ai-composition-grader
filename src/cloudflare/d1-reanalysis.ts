@@ -1,5 +1,6 @@
+import { composeReviewGuidance } from "../grading-opinions/review-guidance";
 import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
-import { describeScopedOpinion, guidanceWithStandingOpinions, type OpinionScope } from "../grading-opinions/standing-guidance";
+import { describeScopedOpinion, type OpinionScope } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -332,16 +333,7 @@ export class D1Reanalysis {
       listD1StandingOpinions(this.database, ownerId, configTitle(row!.config)),
       listD1EssayOpinions(this.database, ownerId, reviewId),
     ]);
-    const combinedOpinions = [...standing, ...essayOpinions];
-    if (standingIssue) {
-      combinedOpinions.unshift({
-        text: standingIssue.text,
-        paragraphLabel: standingIssue.paragraphLabel,
-        category: standingIssue.category,
-        createdAt: now,
-      });
-    }
-    const teacherGuidance = guidanceWithStandingOpinions(formattedGuidance, combinedOpinions) ?? formattedGuidance;
+    const teacherGuidance = composeReviewGuidance(formattedGuidance, standing, essayOpinions) ?? formattedGuidance;
     const mode = reanalysisMode(row!);
     const statements = this.requestStatements(
       ownerId,
@@ -353,7 +345,10 @@ export class D1Reanalysis {
       mode,
     );
     if (standingIssue) {
-      // 共性意见不再直接生效为长期规则：先存档为本篇意见，AI 归纳成候选规则后由老师审批。
+      // 本篇历史始终保留；教师在退回入口明确选择后才同时确认为同题长期规则。
+      if (input.commonIssueScope === "standing") {
+        statements.push(this.opinionStatement(ownerId, reviewId, row!, standingIssue, "standing", jobId, now));
+      }
       statements.push(this.opinionStatement(ownerId, reviewId, row!, standingIssue, "essay", jobId, now));
     }
     if (essaySuggestion) {
@@ -437,10 +432,7 @@ export class D1Reanalysis {
       listD1StandingOpinions(this.database, ownerId, review.title),
       listD1EssayOpinions(this.database, ownerId, item.reviewId),
     ]);
-    const teacherGuidance = guidanceWithStandingOpinions(
-      null,
-      [...standingOpinions, ...essayOpinions],
-    );
+    const teacherGuidance = composeReviewGuidance(null, standingOpinions, essayOpinions);
     const statements = this.commitStatements(
       ownerId,
       item,
@@ -626,7 +618,10 @@ export class D1Reanalysis {
         id, owner_id, body, reason, change_request, paragraph_label, category, scope,
         source_review_id, source_job_id, source_student_name, source_class_name, source_title,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM analysis_jobs WHERE id = ? AND owner_id = ? AND review_id = ?
+      )
     `).bind(
       crypto.randomUUID(),
       ownerId,
@@ -643,6 +638,9 @@ export class D1Reanalysis {
       safeTitle(row.config),
       now,
       now,
+      jobId,
+      ownerId,
+      reviewId,
     );
   }
 

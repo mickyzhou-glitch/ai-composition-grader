@@ -29,12 +29,17 @@ export function teacherRewriteLengthRule(guidance = ""): string {
   ).join("\n");
 }
 
-export function validateTeacherRewriteLengths(essay: string[], guidance = ""): void {
-  for (const { indices, limit, minimum } of constraints(guidance)) {
-    if (indices.some((index) => !essay[index - 1])) continue;
+export function teacherRewriteLengthFailures(essay: string[], guidance = "") {
+  return constraints(guidance).flatMap(({ indices, limit, minimum }) => {
+    if (indices.some((index) => !essay[index - 1])) return [];
     const actual = indices.reduce((sum, index) => sum + countHanCharacters(essay[index - 1]), 0);
-    if (minimum ? actual < limit : actual > limit) {
-      throw new Error(`rewritten_essay_chars_${indices.join("_")}_${minimum ? "min" : "max"}_${limit}_actual_${actual}`);
-    }
-  }
+    return (minimum ? actual < limit : actual > limit)
+      ? [{ indices, limit, minimum, actual, code: `rewritten_essay_chars_${indices.join("_")}_${minimum ? "min" : "max"}_${limit}_actual_${actual}` }]
+      : [];
+  });
+}
+
+export function validateTeacherRewriteLengths(essay: string[], guidance = ""): void {
+  const failure = teacherRewriteLengthFailures(essay, guidance)[0];
+  if (failure) throw new Error(failure.code);
 }

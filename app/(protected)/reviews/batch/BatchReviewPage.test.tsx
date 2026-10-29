@@ -289,13 +289,15 @@ describe("BatchReviewPage", () => {
     });
   });
 
-  it("审核通过前以逐段改后全段为唯一权威派生完整范文，绝不反向覆盖", async () => {
+  it("冲突旧稿必须先明确选择保留版本再审核", async () => {
     const fetchMock = mockReviewApi([queueItem("review-1", "张小明", 1)], {
       currentReport: { ...paragraphReport, rewrittenEssay: ["旧范文里的第一段。"] } as typeof paragraphReport,
     });
     const user = userEvent.setup();
     render(<BatchReviewPage />);
     expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue("我走上台。");
+    expect(screen.getByLabelText("第 1 段改后全段")).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "保留逐段稿（1 段）" }));
     await user.click(screen.getByRole("button", { name: "审核通过并进入下一篇" }));
     const teacherCall = fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/review-1/teacher-review");
     const submittedReport = JSON.parse(String(teacherCall?.[1]?.body)).report;

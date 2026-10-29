@@ -4,11 +4,10 @@ import { paragraphEvaluationReportSchema, type ParagraphEvaluationReport } from 
 import { paragraphReviewCoverageMessage } from "./paragraph-review-groups";
 import {
   applyEssayToParagraphReviews,
-  deriveEssayFromParagraphReviews,
+  migrateEssayDraft,
   essayDiffersFromParagraphReviews,
   splitEssayIntoReviewParagraphs,
   syncEssayBeforeApproval,
-  syncEssayFromParagraphReviews,
 } from "./essay-paragraph-sync";
 
 const diagnostics = {
@@ -119,26 +118,20 @@ describe("完整范文切到逐段改后全段", () => {
     });
   });
 
-  it("审核通过前以 paragraphReviews[].revisedText 为唯一编辑源刷新 rewrittenEssay，绝不反向覆盖", () => {
-    const oldEssay = ["旧范文一。", "旧范文二。", "旧范文三。"];
-    const teacherRevised = ["老师改后一。", "老师改后二。"];
-    const ocr = { paragraphs: [{ id: "paragraph-2", paragraphIndex: 1 }, { id: "paragraph-1", paragraphIndex: 0 }] };
-    const source = report(oldEssay, teacherRevised);
-    expect(deriveEssayFromParagraphReviews(source.paragraphReviews)).toEqual(teacherRevised);
-    const synced = syncEssayBeforeApproval(source, ocr);
-    expect(synced).toEqual(syncEssayFromParagraphReviews(source));
-    expect(synced.paragraphReviews.map((item) => item.revisedText)).toEqual(teacherRevised);
-    expect(synced.rewrittenEssay).toEqual(teacherRevised);
-    expect(syncEssayBeforeApproval(synced, ocr)).toBe(synced);
-    const same = report(teacherRevised, teacherRevised);
-    expect(syncEssayBeforeApproval(same, ocr)).toBe(same);
-    expect(syncEssayBeforeApproval(report(oldEssay, ["甲", "乙", "丙"]), null)).toMatchObject({
-      rewrittenEssay: ["甲", "乙", "丙"],
-      paragraphReviews: [
-        expect.objectContaining({ revisedText: "甲" }),
-        expect.objectContaining({ revisedText: "乙" }),
-        expect.objectContaining({ revisedText: "丙" }),
-      ],
-    });
+  it.each([
+    [["旧一", "旧二", "旧三", "旧四", "旧五"], ["逐段一", "逐段二"]],
+    [["旧一", "旧二"], ["逐段一", "逐段二"]],
+  ])("旧双轨保存必须先确认，两份原文完整保留", (essay, revised) => {
+    const source = report(essay, revised);
+    expect(() => syncEssayBeforeApproval(source)).toThrow("请选择");
+    for (const choice of ["essay", "paragraphs"] as const) {
+      const migrated = migrateEssayDraft(source, choice, ["paragraph-1", "paragraph-2"]);
+      expect(migrated.draftMigration?.originalEssay).toEqual(essay);
+      expect(migrated.draftMigration?.originalParagraphReviews.map((item) => item.revisedText)).toEqual(revised);
+      expect(migrated.rewrittenEssay).toEqual(choice === "essay" ? essay : revised);
+      expect(syncEssayBeforeApproval(migrated).rewrittenEssay).toEqual(migrated.rewrittenEssay);
+      expect(paragraphEvaluationReportSchema.parse(JSON.parse(JSON.stringify(migrated))).draftMigration).toEqual(migrated.draftMigration);
+    }
+    expect(source.rewrittenEssay).toEqual(essay);
   });
 });

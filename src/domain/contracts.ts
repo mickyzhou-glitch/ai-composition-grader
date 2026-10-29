@@ -269,6 +269,12 @@ export const paragraphEvaluationReportSchema = z.object({
   grade: compositionGradeSchema,
   diagnostics: diagnosticsSchema.optional(),
   paragraphReviews: z.array(paragraphReviewSchema).min(1),
+  teacherGuidanceDraft: z.string().max(4_000).optional(),
+  draftMigration: z.object({
+    choice: z.enum(["essay", "paragraphs"]),
+    originalEssay: z.array(z.string()),
+    originalParagraphReviews: z.array(paragraphReviewSchema),
+  }).optional(),
   // Optional: derived from paragraphReviews[].revisedText when omitted.
   rewrittenEssay: z.array(z.string().trim().min(1).regex(/^[^\r\n]+$/u)).min(1).max(10).optional(),
 }).strict();

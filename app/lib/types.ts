@@ -46,6 +46,8 @@ export interface ReviewView {
   hasPdf: boolean;
   pdfFilename: string | null;
   teacherGuidance?: string | null;
+  effectiveTeacherGuidance?: string | null;
+  essayHistory?: Array<{ text: string; createdAt: number }>;
   analysisFailure?: {
     summary: string;
     detail: string | null;

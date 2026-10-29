@@ -1,3 +1,4 @@
+import { guidanceForPrompt } from "../grading-opinions/review-guidance";
 import OpenAI from "openai";
 import { z } from "zod";
 
@@ -310,7 +311,7 @@ function rewriteParagraphPrompt(input: RewriteParagraphInput): string {
       ? [`全文当前逐段批改与改后草稿上下文（供把握前后衔接与详略）：${JSON.stringify(input.paragraphReviews)}`]
       : []),
     ...(input.teacherGuidance?.trim()
-      ? [`本篇批改历史要求与教师指导：${JSON.stringify(input.teacherGuidance.trim())}`]
+      ? [`本篇批改历史要求与教师指导：${JSON.stringify(guidanceForPrompt(input.teacherGuidance))}`]
       : []),
     targetLine,
     `目标段当前未保存批改草稿：${JSON.stringify(input.current)}`,

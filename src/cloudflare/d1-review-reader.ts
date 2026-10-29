@@ -1,3 +1,6 @@
+import { isParagraphEvaluationReport } from "../domain/contracts";
+import { composeReviewGuidance, readReviewGuidance } from "../grading-opinions/review-guidance";
+import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
 import {
   annotationSchema,
   assignmentConfigSchema,
@@ -7,7 +10,6 @@ import {
 } from "../domain/contracts";
 import { deliveryReadiness } from "../delivery/readiness";
 import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
-import { STANDING_GUIDANCE_HEADER } from "../grading-opinions/standing-guidance";
 import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 
@@ -174,14 +176,12 @@ export class D1ReviewReader {
           SELECT teacher_guidance FROM analysis_jobs
           WHERE analysis_jobs.review_id = reviews.id
             AND analysis_jobs.owner_id = reviews.owner_id
-            AND analysis_jobs.teacher_guidance IS NOT NULL
-            AND TRIM(analysis_jobs.teacher_guidance) <> ''
           ORDER BY analysis_jobs.created_at DESC, analysis_jobs.id DESC
           LIMIT 1
         ) AS teacher_guidance
       FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
     `).bind(reviewId, ownerId).first<ReviewRow>();
-    return row ? this.hydrate(ownerId, row) : null;
+    return row ? this.hydrate(ownerId, row, true) : null;
   }
 
   async imageObjectKey(ownerId: string, reviewId: string, imageId: number, variant: "original" | "annotation" | "ai"): Promise<{ key: string; contentType: string } | null> {
@@ -220,7 +220,7 @@ export class D1ReviewReader {
     }));
   }
 
-  private async hydrate(ownerId: string, review: ReviewRow): Promise<unknown> {
+  private async hydrate(ownerId: string, review: ReviewRow, includeGuidance = false): Promise<unknown> {
     const [imagesResult, annotationsResult] = await Promise.all([
       this.database.prepare(`SELECT id, review_id, position, original_name, mime_type, original_path, annotation_path, ai_path, width, height, rotation, crop FROM review_images WHERE review_id = ? ORDER BY position, id`).bind(review.id).all<ImageRow>(),
       this.database.prepare(`SELECT position, page_index, x, y, category, anchor_text, comment, is_highlight FROM annotations WHERE review_id = ? ORDER BY position`).bind(review.id).all<AnnotationRow>(),
@@ -243,14 +243,23 @@ export class D1ReviewReader {
     );
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
     const analysisFailure = review.status === "failed" ? await this.latestFailure(ownerId, review.id) : null;
-    const teacherGuidance = stripStandingGuidanceBlock(review.teacher_guidance);
+    const layers = readReviewGuidance(review.teacher_guidance);
+    const teacherGuidance = report && isParagraphEvaluationReport(report) && report.teacherGuidanceDraft !== undefined
+      ? report.teacherGuidanceDraft : layers.current;
+    const [essayHistory, standingRules] = includeGuidance ? await Promise.all([
+      listD1EssayOpinions(this.database, ownerId, review.id),
+      listD1StandingOpinions(this.database, ownerId, config.title),
+    ]) : [[], []];
+    const effectiveTeacherGuidance = composeReviewGuidance(teacherGuidance, standingRules, essayHistory);
     return {
       id: review.id, status: reviewStatusSchema.parse(review.status), studentName: review.student_name, className: review.class_name ?? "", config, report,
       revision: review.revision, createdAt: date(review.created_at), updatedAt: date(review.updated_at),
       teacherReviewedAt: date(review.teacher_reviewed_at),
       rejectionReason: review.rejection_reason,
       rejectionChangeRequest: review.rejection_change_request,
-      ...(teacherGuidance ? { teacherGuidance } : {}),
+      teacherGuidance,
+      essayHistory,
+      effectiveTeacherGuidance,
       expiresAt: date(review.expires_at),
       images, annotations, ocr, reportStale, hasPdf, pdfFilename: hasPdf ? review.pdf_filename : null,
       ...(analysisFailure ? { analysisFailure } : {}),
@@ -281,11 +290,4 @@ export class D1ReviewReader {
 function normalizedRotation(value: number): 0 | 90 | 180 | 270 {
   if (value === 0 || value === 90 || value === 180 || value === 270) return value;
   throw new TypeError("Invalid image rotation");
-}
-
-function stripStandingGuidanceBlock(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const headerIndex = raw.indexOf(STANDING_GUIDANCE_HEADER);
-  const directPart = (headerIndex >= 0 ? raw.slice(0, headerIndex) : raw).trim();
-  return directPart || null;
 }

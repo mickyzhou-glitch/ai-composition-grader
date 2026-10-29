@@ -1,3 +1,5 @@
+import { migrateEssayDraft } from "@/src/domain/essay-paragraph-sync";
+import type { ParagraphEvaluationReport } from "@/src/domain/contracts";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -142,6 +144,7 @@ describe("Word 逐段批改文档", () => {
       ...(review.report as object),
       rewrittenEssay: essay,
     };
+    review.report = migrateEssayDraft(review.report as ParagraphEvaluationReport, "essay", ["paragraph-1", "paragraph-2"]);
     const { documentXml } = await unpack(review);
 
     expect(documentXml).toContain("按要求重写的完整范文");
@@ -156,7 +159,7 @@ describe("Word 逐段批改文档", () => {
     const review = fixture();
     const long = "“学而时习之，不亦说乎？”这句话出自我国古代著名的思想家、教育家、儒学家、文学家——孔子。这句话我从小就会背，却从未真正理解过它的含义。".repeat(3);
     const essay = [long, `${long}第二段。`, "短段。"];
-    review.report = { ...(review.report as object), rewrittenEssay: essay } as ExportReviewSource["report"];
+    review.report = migrateEssayDraft({ ...(review.report as ParagraphEvaluationReport), rewrittenEssay: essay }, "essay", ["paragraph-1", "paragraph-2"]);
     const { documentXml } = await unpack(review);
 
     const body = documentXml.slice(documentXml.lastIndexOf("按要求重写的完整范文"));
@@ -201,7 +204,7 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("<w:numPr>");
     expect(documentXml).toContain("1. 补充登台前的具体动作。");
     expect(documentXml).not.toContain("修改动作：");
-    expect(documentXml).not.toContain("对应原文第");
+    expect(documentXml).toContain("第 1 段");
     expect(documentXml).toContain("保留。");
     expect(documentXml).not.toContain("开头略显概括。");
     expect(documentXml).not.toContain("手心的汗把稿纸浸出了一道浅痕。");
@@ -383,9 +386,9 @@ describe("Word 逐段批改文档", () => {
 
     expect(documentXml).toMatch(/w:orient="landscape"/u);
     expect(boxes).toHaveLength(ranges.length);
-    expect(boxes[0]).not.toContain("对应原文第 1–2 段");
-    expect(boxes[2]).not.toContain("对应原文第 4–5 段");
-    expect(boxes[4]).not.toContain("对应原文第 7 段");
+    expect(boxes[0]).toContain("对应原文第 1–2 段");
+    expect(boxes[2]).toContain("对应原文第 4–5 段");
+    expect(boxes[4]).toContain("对应原文第 7 段");
     expect(documentXml).not.toContain("改好第 6 组");
   });
 

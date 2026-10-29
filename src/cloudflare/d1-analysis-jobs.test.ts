@@ -425,7 +425,7 @@ describe("D1AnalysisJobs", () => {
       teacherGuidance: maximumGuidance,
     })).resolves.toMatchObject({ newlyQueued: true });
     expect(statements.find(({ query }) => query.includes("INSERT INTO analysis_jobs"))?.bindings)
-      .toContain(maximumGuidance);
+      .toContainEqual(expect.stringContaining(maximumGuidance));
     await expect(jobs.enqueue("teacher-1", "review-1", {
       teacherGuidance: `${maximumGuidance}见`,
     })).rejects.toThrow("teacherGuidance must be at most 1100 characters");

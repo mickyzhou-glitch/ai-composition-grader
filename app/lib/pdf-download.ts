@@ -148,7 +148,7 @@ function styledRun(run: ExportTextRun): RichTextRun {
   if (run.style === "suggestion") {
     return { text: run.text, color: SUGGESTION_COLOR, weight: 700, underline: false };
   }
-  if (run.style === "demonstration") {
+  if (run.style === "demonstration" || run.style === "heading") {
     return { text: run.text, color: TEXT_COLOR, weight: 700, underline: false };
   }
   if (run.style === "changed") {

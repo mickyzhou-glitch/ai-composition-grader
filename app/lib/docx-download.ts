@@ -133,7 +133,7 @@ function runOptions(style: ExportRunStyle): {
   underline?: { type: (typeof UnderlineType)["SINGLE"]; color: string };
 } {
   if (style === "suggestion") return { bold: true, color: "C00000" };
-  if (style === "demonstration") return { bold: true, color: "000000" };
+  if (style === "demonstration" || style === "heading") return { bold: true, color: "000000" };
   if (style === "changed") {
     return {
       bold: false,
@@ -189,10 +189,16 @@ export function chooseBoxHalfPoints(
 
 function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: number) {
   const runs = exportParagraphRuns(paragraph);
-  const [suggestion, ...remainder] = runs;
+  const headings = runs.filter((run) => run.style === "heading");
+  const suggestion = runs.find((run) => run.style === "suggestion");
+  const remainder = runs.filter((run) => run.style !== "heading" && run.style !== "suggestion");
   const line = Math.round(halfPoints * 13.5);
   const children = suggestion
     ? [
+      ...headings.map((heading) => new Paragraph({
+        spacing: { before: 40, after: 40, line },
+        children: textRuns(heading.text, heading.style, halfPoints),
+      })),
       new Paragraph({
         spacing: { before: 40, after: 40, line },
         children: textRuns(suggestion.text, suggestion.style, halfPoints),

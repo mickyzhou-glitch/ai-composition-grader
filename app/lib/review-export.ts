@@ -183,9 +183,7 @@ export async function downloadLegacyCachedPdf(review: ReviewView): Promise<strin
   if (!response.ok) throw new Error(`旧版 PDF 下载失败（${response.status}）`);
   const filename = responseFilename(response, review.pdfFilename);
   const rawBlob = await response.blob();
-  const blob = rawBlob instanceof Blob
-    ? rawBlob
-    : new Blob([await rawBlob.arrayBuffer()], { type: rawBlob.type });
+  const blob = new Blob([await rawBlob.arrayBuffer()], { type: rawBlob.type });
   triggerFileDownload(blob, filename);
   return filename;
 }

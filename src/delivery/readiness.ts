@@ -1,3 +1,5 @@
+import { essayDiffersFromParagraphReviews } from "../domain/essay-paragraph-sync";
+import { isParagraphEvaluationReport } from "../domain/contracts";
 import {
   isLegacyEvaluationReport,
 } from "../domain/contracts";
@@ -140,6 +142,9 @@ export function deliveryReadiness(input: DeliveryReadinessInput): DeliveryReadin
     return failure("REPORT_INVALID", "逐段批改报告字段或语义不符合要求");
   }
 
+  if (isParagraphEvaluationReport(input.report) && essayDiffersFromParagraphReviews(input.report)) {
+    return failure("REPORT_INVALID", "旧报告有两份不一致的草稿，请选择保留版本后保存并重新审核");
+  }
   const imagePages = new Set(input.images.map(({ position }) => position));
   const ocrPages = new Set(
     Array.isArray(input.ocr.pages)

@@ -22,6 +22,11 @@ describe("explicit paragraph structure plan", () => {
     ].join("\n\n"), 5)).toHaveLength(5);
   });
 
+  it("允许总述行与编号前缀，仍只接收完整连续的逐段任务", () => {
+    expect(parseParagraphStructurePlan("总体：叙事具体。\n1. 第1段：交代背景。\n2. 第2段：详写过程。\n3. 结尾段：写出感受。", 3)).toEqual([
+      "第1段：交代背景。", "第2段：详写过程。", "结尾段：写出感受。",
+    ]);
+  });
   it("不把一般编号评分点误当作逐段任务", () => {
     expect(parseParagraphStructurePlan(numberedRequirements, 3)).toBeNull();
     expect(parseParagraphStructurePlan("第一段：开头。\n第三段：结尾。", 2)).toBeNull();

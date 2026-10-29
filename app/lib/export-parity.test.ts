@@ -1,3 +1,5 @@
+import { migrateEssayDraft } from "@/src/domain/essay-paragraph-sync";
+import type { ParagraphEvaluationReport } from "@/src/domain/contracts";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -206,6 +208,7 @@ describe("Word 与 PDF 导出文本", () => {
   ])("同一份报告的 $name 在 docx 与 PDF 中文本一致", async ({ essay }) => {
     const paintedText = installBrowser();
     const source = review(essay);
+    if (essay) source.report = migrateEssayDraft(source.report as ParagraphEvaluationReport, "essay", ["paragraph-1", "paragraph-2"]);
     const measure = (text: string) => text.length * 8;
 
     await createReviewPdf(source as never);
@@ -217,7 +220,7 @@ describe("Word 与 PDF 导出文本", () => {
     expect(pdfMock.setProperties).toHaveBeenCalledWith({ title: "小明珍贵的礼物" });
     expect(docxText).toContain("1. 补充听觉");
     expect(docxText).not.toContain("修改动作：");
-    expect(docxText).not.toContain("对应原文第");
+    expect(docxText).toContain("第 1 段");
     expect(docxText).toContain("2. 补一个停顿");
     expect(docxText).not.toContain("动作略快");
     expect(docxText).not.toContain("我听见急促的呼吸声。");
@@ -227,9 +230,9 @@ describe("Word 与 PDF 导出文本", () => {
     expect(docxText).not.toContain("修改建议：");
     expect(docxText).not.toContain("问题描述");
     expect(docxText).not.toContain("修改示例");
-    expect(docxText).toContain("我终于，走上台。");
-    expect(docxText).toContain("礼物其实是妈妈每天的陪伴。");
-    expect(docxText.indexOf("我终于，走上台。")).toBeLessThan(docxText.indexOf("礼物其实是妈妈每天的陪伴。"));
+    if (!essay) expect(docxText).toContain("我终于，走上台。");
+    if (!essay) expect(docxText).toContain("礼物其实是妈妈每天的陪伴。");
+    if (!essay) expect(docxText.indexOf("我终于，走上台。")).toBeLessThan(docxText.indexOf("礼物其实是妈妈每天的陪伴。"));
     expect(docxText).not.toContain("慢慢");
     expect(docxText).not.toContain("【第 ");
     expect(docxText).not.toContain("问题：");

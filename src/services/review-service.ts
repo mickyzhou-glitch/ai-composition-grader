@@ -343,7 +343,7 @@ export class ReviewService {
       paragraphId,
       instruction: input.instruction,
       paragraphReviews: input.paragraphReviews,
-      ...(input.teacherGuidance ? { teacherGuidance: input.teacherGuidance } : {}),
+      teacherGuidance: input.teacherGuidance ?? (isParagraphEvaluationReport(review.report) ? review.report.teacherGuidanceDraft : undefined),
     });
   }
 

@@ -22,8 +22,8 @@ export interface RevisionRequestDialogProps {
   submitting: boolean;
   error: string;
   onClose(): void;
-  onSubmit(input: { commonIssue: string; contentSuggestion: string }): void;
-  onReject(input: { commonIssue: string; contentSuggestion: string }): void;
+  onSubmit(input: { commonIssue: string; contentSuggestion: string; commonIssueScope?: "essay" | "standing" }): void;
+  onReject(input: { commonIssue: string; contentSuggestion: string; commonIssueScope?: "essay" | "standing" }): void;
 }
 
 export function RevisionRequestDialog({
@@ -42,25 +42,10 @@ export function RevisionRequestDialog({
   const dialogRef = useRef<HTMLDivElement>(null);
   const commonIssueRef = useRef<HTMLTextAreaElement>(null);
   const contentSuggestionRef = useRef<HTMLTextAreaElement>(null);
+  const [commonIssueScope, setCommonIssueScope] = useState<"essay" | "standing">("essay");
   const [commonIssue, setCommonIssue] = useState("");
   const [contentSuggestion, setContentSuggestion] = useState("");
-  const [contentSuggestionTouched, setContentSuggestionTouched] = useState(false);
   const [appendError, setAppendError] = useState("");
-
-  useEffect(() => {
-    if (!open || contentSuggestionTouched || essayOpinions.length === 0) return;
-    const unique = [...new Set(essayOpinions.map((item) => item.trim()).filter(Boolean))];
-    if (unique.length === 0) return;
-    let combined = "";
-    for (const item of unique) {
-      const next = appendRuleText(combined, item);
-      if (next.length > MAX_FIELD_CHARS) break;
-      combined = next;
-    }
-    if (combined) {
-      setContentSuggestion((current) => current || combined);
-    }
-  }, [contentSuggestionTouched, essayOpinions, open]);
 
   function appendRule(rule: string) {
     const next = appendRuleText(commonIssue, rule);
@@ -79,7 +64,6 @@ export function RevisionRequestDialog({
       setAppendError(`追加后超过 ${MAX_FIELD_CHARS} 字，未追加此建议。请先精简框内内容或手动输入需要的部分。`);
       return;
     }
-    setContentSuggestionTouched(true);
     setContentSuggestion(next);
     setAppendError("");
     contentSuggestionRef.current?.focus();
@@ -134,7 +118,7 @@ export function RevisionRequestDialog({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!valid || submitting) return;
-    onSubmit({ commonIssue, contentSuggestion });
+    onSubmit({ commonIssue, contentSuggestion, ...(commonIssueScope === "standing" ? { commonIssueScope } : {}) });
   }
 
   return createPortal(
@@ -158,6 +142,11 @@ export function RevisionRequestDialog({
           <div className="revision-dialog-body">
             <div className="revision-dialog-field">
               <label htmlFor="revision-common-issue">结构问题 / 共性问题（仅同名作文）</label>
+              <label>共性意见生效范围
+                <select aria-label="共性意见生效范围" value={commonIssueScope} disabled={submitting} onChange={(event) => setCommonIssueScope(event.target.value as "essay" | "standing")}>
+                  <option value="essay">仅本篇</option><option value="standing">本题长期（提交后对同名作文生效）</option>
+                </select>
+              </label>
               {standingRulesLoading ? <p className="revision-dialog-scope" role="status">正在读取同题规则，可先手写。</p> : null}
               {standingRulesError ? <p className="revision-dialog-scope" role="status">{standingRulesError}</p> : null}
               {standingRules.length > 0 ? <div className="revision-rule-options" role="group" aria-label="已通过的长期规则">
@@ -209,7 +198,6 @@ export function RevisionRequestDialog({
                 value={contentSuggestion}
                 disabled={submitting}
                 onChange={(event) => {
-                  setContentSuggestionTouched(true);
                   setContentSuggestion(event.target.value);
                 }}
               />

@@ -24,7 +24,7 @@ const REGRADE_POLL_DEADLINE_MS = 12 * 60_000;
 async function pollRegradeJob(
   reviewId: string,
   jobId: string,
-): Promise<{ status: string; message: string | null }> {
+): Promise<{ status: "succeeded" | "failed" | "running"; message: string | null }> {
   const deadline = Date.now() + REGRADE_POLL_DEADLINE_MS;
   while (Date.now() <= deadline) {
     const payload = await apiFetch<{ job: PublicAnalysisJobView | null }>(
@@ -35,7 +35,7 @@ async function pollRegradeJob(
       job?.id === jobId
       && (job.status === "failed" || job.status === "succeeded" || job.status === "canceled")
     ) {
-      return { status: job.status, message: job.message };
+      return { status: job.status === "canceled" ? "failed" : job.status, message: job.message };
     }
     if (Date.now() + REGRADE_POLL_INTERVAL_MS > deadline) break;
     await new Promise((resolve) => setTimeout(resolve, REGRADE_POLL_INTERVAL_MS));
