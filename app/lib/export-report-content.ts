@@ -43,11 +43,9 @@ export type ExportRevisionRun = {
 export type ExportParagraph = {
   suggestions: ParagraphSuggestion[];
   revisionRuns: ExportRevisionRun[];
-  sourceLabel?: string;
-  paragraphNumber?: number;
 };
 
-export type ExportRunStyle = "heading" | "suggestion" | "demonstration" | "changed" | "plain";
+export type ExportRunStyle = "suggestion" | "demonstration" | "changed" | "plain";
 
 export type ExportTextRun = {
   text: string;
@@ -120,12 +118,12 @@ function suggestionText(suggestions: ParagraphSuggestion[]) {
   return mergedParagraphAction(suggestions);
 }
 
+/**
+ * 导出给家长/学生看的段落框：只有建议正文 +「改后全段：」+ 改后正文。
+ * 不得输出「第 N 段」「对应原文第×段」「修改动作：」等标签（2026-10-29、11-05 两次投诉）。
+ */
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {
   return [
-    ...(paragraph.paragraphNumber ? [{
-      text: `第 ${paragraph.paragraphNumber} 段${paragraph.sourceLabel ? `／${paragraph.sourceLabel}` : ""}\n`,
-      style: "heading" as const,
-    }] : []),
     { text: `${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
     { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" as const },
     ...paragraph.revisionRuns.map((run) => ({
@@ -197,8 +195,6 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     }
     const pageParagraphs = paragraphsByPage.get(pageIndex) ?? [];
     pageParagraphs.push({
-      paragraphNumber: group.reviewIndex + 1,
-      ...(group.sourceLabel ? { sourceLabel: group.sourceLabel } : {}),
       suggestions: group.review.suggestions,
       revisionRuns: buildExportRevisionRuns(group.sourceText, group.review.revisedText),
     });

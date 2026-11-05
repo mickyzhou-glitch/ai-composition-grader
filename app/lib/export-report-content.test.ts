@@ -127,13 +127,14 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
 
     const content = buildExportReportContent(source);
     expect(content.pages[0]?.paragraphs).toHaveLength(2);
-    expect(content.pages[0]?.paragraphs[0]?.sourceLabel).toBe("对应原文第 1–2 段");
     expect(content.pages[0]?.paragraphs[0]?.revisionRuns).toEqual([
       { text: "甲句。", changed: false },
       { text: "新的经过。", changed: true },
     ]);
-    expect(exportParagraphRuns(content.pages[0]!.paragraphs[0]!).map((run) => run.text).join(""))
-      .toContain("对应原文第 1–2 段");
+    const groupedText = exportParagraphRuns(content.pages[0]!.paragraphs[0]!).map((run) => run.text).join("");
+    expect(groupedText).not.toContain("对应原文第");
+    expect(groupedText).not.toMatch(/第 \d+ 段/u);
+    expect(groupedText).not.toContain("修改动作");
   });
 
   it("同段多条建议合并后框数仍等于段数", () => {
@@ -225,7 +226,7 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
     const content = buildExportReportContent(source);
     const exported = content.pages.flatMap((page) => page.paragraphs);
     expect(exported).toHaveLength(3);
-    expect(exported[1]?.sourceLabel).toBe("原文无对应段，整段新增");
+    expect(exportParagraphRuns(exported[1]!).map((run) => run.text).join("")).not.toContain("原文无对应段");
     expect(exported[1]?.revisionRuns).toEqual([{ text: "新增句。", changed: true }]);
     expect(exported[0]?.revisionRuns).toEqual([{ text: "甲句。", changed: false }]);
   });

@@ -20,6 +20,7 @@ describe("段落原文预览样式", () => {
     for (const [, rules] of images) {
       expect(rules).toMatch(/(?:^|;)\s*height:\s*auto\s*;/u);
       expect(rules).not.toMatch(/max-height\s*:|object-fit\s*:\s*cover/u);
+      expect(rules).toMatch(/object-fit:\s*contain/u);
     }
   });
 });

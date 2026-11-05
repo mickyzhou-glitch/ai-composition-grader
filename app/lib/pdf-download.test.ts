@@ -145,7 +145,7 @@ describe("PDF 文件下载", () => {
 
     await downloadReviewPdf("review-1");
 
-    const modelText = "第 1 段\n补充听觉\n改后全段：我终于，走上台。";
+    const modelText = "补充听觉\n改后全段：我终于，走上台。";
     expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', modelText);
     expect(fontLoad).toHaveBeenCalledWith('700 16px "LXGW WenKai"', modelText);
     expect(renderEvents.slice(0, 3)).toEqual(["font", "font", "canvas"]);
@@ -257,7 +257,8 @@ describe("PDF 文件下载", () => {
     expect(Math.max(drawnWidth / 841.89, drawnHeight / 595.28)).toBeCloseTo(1, 6);
     expect(paintedText.join("")).toContain("补充听觉");
     expect(paintedText.join("")).not.toContain("对应原文第");
-    expect(paintedText.join("")).not.toContain("修改动作：");
+    expect(paintedText.join("")).not.toContain("修改动作");
+    expect(paintedText.join("")).not.toMatch(/第 \d+ 段/u);
   });
 
   it("旧报告在创建 PDF 对象前返回 LEGACY_REPORT", async () => {
