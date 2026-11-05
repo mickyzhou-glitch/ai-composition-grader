@@ -174,23 +174,18 @@ function maximumImagePlacement(imageWidth: number, imageHeight: number): Rectang
     || !Number.isFinite(imageHeight) || imageHeight <= 0) {
     throw new ReviewPdfError("PDF_CONTENT_INCOMPLETE", "作文照片尺寸无效，无法生成 PDF");
   }
-  const safeWidth = imageWidth;
-  const safeHeight = imageHeight;
-  const maximumScale = Math.min(PDF_WIDTH / safeWidth, PDF_HEIGHT / safeHeight);
-  const maximumArea = safeWidth * safeHeight * maximumScale * maximumScale;
+  // 原图始终按原比例完整放进横向 A4：优先缩放到占半页面积；
+  // 长宽比太极端（如竖长 1:4）时做不到半页，就以「完整显示」为准，缩放到单页能放下的最大尺寸，
+  // 不再报错，也不裁切、不变形。
+  const maximumScale = Math.min(PDF_WIDTH / imageWidth, PDF_HEIGHT / imageHeight);
   const targetArea = PDF_WIDTH * PDF_HEIGHT * IMAGE_AREA_RATIO;
-  if (maximumArea + 0.01 < targetArea) {
-    throw new ReviewPdfError(
-      "PDF_CONTENT_INCOMPLETE",
-      "作文照片长宽比过于极端，无法在横向 A4 单页内完整显示且占满至少半页",
-    );
-  }
-  const targetScale = Math.sqrt(targetArea / (safeWidth * safeHeight));
+  const targetScale = Math.sqrt(targetArea / (imageWidth * imageHeight));
+  const scale = Math.min(targetScale, maximumScale);
   return {
     x: 0,
     y: 0,
-    width: safeWidth * targetScale,
-    height: safeHeight * targetScale,
+    width: imageWidth * scale,
+    height: imageHeight * scale,
   };
 }
 

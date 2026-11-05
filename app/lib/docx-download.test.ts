@@ -187,6 +187,41 @@ describe("Word 逐段批改文档", () => {
     expect(revisedParagraph).not.toContain("<w:br");
   });
 
+  it("建议正文逐条成段、显式左对齐、行距带 lineRule，不会被 Word/WPS 拉开字距", async () => {
+    installBrowserExport();
+    const { documentXml } = await unpack(fixture());
+    const paragraphs = [...documentXml.matchAll(/<w:p>[\s\S]*?<\/w:p>|<w:p [\s\S]*?<\/w:p>/gu)].map((match) => match[0]);
+    const suggestionParagraphs = paragraphs.filter((xml) => xml.includes('w:color w:val="C00000"'));
+    // 第 1 段两条建议各占一个 w:p，第 2 段一条。
+    expect(suggestionParagraphs).toHaveLength(3);
+    expect(suggestionParagraphs[0]).toContain("1. 补充登台前的具体动作。");
+    expect(suggestionParagraphs[1]).toContain("2. 保留。");
+    const boxParagraphs = paragraphs.filter((xml) => (
+      xml.includes('w:color w:val="C00000"') || xml.includes("改后全段：") || xml.includes("第 1 段")
+    ));
+    boxParagraphs.forEach((xml) => {
+      expect(xml).toMatch(/<w:jc w:val="left"\/>/u);
+      expect(xml).not.toMatch(/<w:jc w:val="(?:distribute|both|thaiDistribute|lowKashida|mediumKashida|highKashida)"/u);
+      expect(xml).toMatch(/<w:spacing [^>]*w:line="\d+"[^>]*w:lineRule="(?:auto|exact)"|<w:spacing [^>]*w:lineRule="(?:auto|exact)"[^>]*w:line="\d+"/u);
+    });
+    suggestionParagraphs.forEach((xml) => {
+      expect(xml).not.toContain("<w:br");
+    });
+    expect(documentXml).not.toMatch(/<w:jc w:val="(?:distribute|both)"/u);
+    // run 级字符间距 / 字宽缩放 / 字距调整都不该出现。
+    expect(documentXml).not.toMatch(/<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*<w:spacing /u);
+    expect(documentXml).not.toMatch(/<w:w w:val=|<w:kern |<w:fitText /u);
+    // 每个 run 都声明跨平台字体：中文宋体，西文 Times New Roman，hint=eastAsia。
+    const runFonts = [...documentXml.matchAll(/<w:rFonts [^>]*\/>/gu)].map((match) => match[0]);
+    expect(runFonts.length).toBeGreaterThan(0);
+    runFonts.forEach((tag) => {
+      expect(tag).toContain('w:eastAsia="宋体"');
+      expect(tag).toContain('w:ascii="Times New Roman"');
+      expect(tag).toContain('w:hAnsi="Times New Roman"');
+      expect(tag).toContain('w:hint="eastAsia"');
+    });
+  });
+
   it("生成与 PDF 相同的修改动作、改后全段和原图顺序", async () => {
     installBrowserExport();
     const { blob, documentXml } = await unpack(fixture());
@@ -229,7 +264,8 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("<w:strike");
     expect(documentXml).not.toContain("慢慢走");
     expect(documentXml).not.toContain("成功");
-    expect(documentXml).toMatch(/w:eastAsia="(?:楷体|KaiTi)"/u);
+    expect(documentXml).toMatch(/w:eastAsia="宋体"/u);
+    expect(documentXml).not.toMatch(/KaiTi|楷体/u);
     expect(documentXml.match(/<w:br w:type="page"\/>/gu)).toHaveLength(1);
   });
 

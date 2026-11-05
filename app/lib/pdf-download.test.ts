@@ -179,6 +179,87 @@ describe("PDF 文件下载", () => {
 
   });
 
+  it.each([
+    { label: "竖长", width: 800, height: 3200 },
+    { label: "更竖长", width: 600, height: 4800 },
+    { label: "横长", width: 3200, height: 600 },
+  ])("$label作文照（$width×$height）长宽比极端时仍生成 PDF，原图按原比例完整显示", async ({ width, height }) => {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load: vi.fn(async () => []) },
+    });
+    const paintedText: string[] = [];
+    const context = {
+      fillStyle: "", strokeStyle: "", font: "", textAlign: "left", textBaseline: "top", lineWidth: 1,
+      beginPath: vi.fn(), drawImage: vi.fn(), lineTo: vi.fn(), moveTo: vi.fn(), scale: vi.fn(),
+      fillRect: vi.fn(), stroke: vi.fn(),
+      measureText: (text: string) => ({ width: text.length * 8 }),
+      fillText(text: string) { paintedText.push(text); },
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,page");
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:image"), revokeObjectURL: vi.fn() });
+    vi.stubGlobal("Image", class {
+      src = "";
+      naturalWidth = width;
+      naturalHeight = height;
+      async decode() { return undefined; }
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => (
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } })
+    ));
+    const review = {
+      id: "review-tall",
+      revision: 1,
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+      studentName: "小明",
+      config: { title: "长图作文" },
+      images: [{ id: 21, position: 0, width, height }],
+      ocr: {
+        version: 2, ocrRevision: 1, editedAt: null,
+        pages: [{ pageIndex: 0, text: "我慢慢走上台。", readable: true, warnings: [] }],
+        paragraphs: [{
+          id: "paragraph-1", paragraphIndex: 0, text: "我慢慢走上台。",
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+        }],
+      },
+      report: {
+        version: 2,
+        themeFit: "fits", themeReason: "切题", personalizedComment: "真实",
+        painPoints: [], commonIssues: [], revisionSuggestions: [], grade: "A",
+        diagnostics: {
+          authenticityAndRelevance: { finding: "真实", action: "保留" },
+          materialAndDetails: { finding: "细节少", action: "补动作" },
+          structure: { finding: "完整", action: "保留" },
+          language: { finding: "通顺", action: "保留" },
+        },
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          suggestions: [{ problem: "动作略快", advice: "补充听觉", example: "我听见急促的呼吸声。" }],
+          revisedText: "我终于，走上台。",
+        }],
+        parentFeedbacks: [],
+      },
+    };
+
+    // 以前这里会抛「作文照片长宽比过于极端……」。
+    await expect(createReviewPdf(review as never)).resolves.toBeInstanceOf(Blob);
+
+    expect(pdfMock.addImage).toHaveBeenCalledOnce();
+    expect(context.drawImage).toHaveBeenCalledOnce();
+    const [, x, y, drawnWidth, drawnHeight] = context.drawImage.mock.calls[0] as [unknown, number, number, number, number];
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(y).toBeGreaterThanOrEqual(0);
+    expect(x + drawnWidth).toBeLessThanOrEqual(841.89 + 0.01);
+    expect(y + drawnHeight).toBeLessThanOrEqual(595.28 + 0.01);
+    expect(drawnWidth / drawnHeight).toBeCloseTo(width / height, 6);
+    // 无法占满半页时，以完整显示为准：至少有一条边贴满页面。
+    expect(Math.max(drawnWidth / 841.89, drawnHeight / 595.28)).toBeCloseTo(1, 6);
+    expect(paintedText.join("")).toContain("补充听觉");
+    expect(paintedText.join("")).not.toContain("对应原文第");
+    expect(paintedText.join("")).not.toContain("修改动作：");
+  });
+
   it("旧报告在创建 PDF 对象前返回 LEGACY_REPORT", async () => {
     await expect(createReviewPdf({
       id: "review-legacy",
