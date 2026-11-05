@@ -232,6 +232,57 @@ describe("CompositionReviewAdapter", () => {
     expect(requestAt(harness.create, 2).messages[1].content).toContain("首段只写天气");
   });
 
+  /** 线上「这件事打动了我」的结构要求形态：每段标题一行、具体要求在下一行。 */
+  const headingAndDetailConfig = {
+    ...config,
+    grade: "上海五四学制六年级",
+    targetCharacters: 650,
+    writingRequirements: "核心手法：欲扬先抑。要求有鲜明对比的细节（如“脏兮兮的手”与“整整齐齐的鞋线”）。",
+    structureRequirements: [
+      "文章必须严格遵循以下五个段落的逻辑功能：",
+      "第一段：开头引入段（约100字）",
+      "要求： 使用名人名言引入；埋下“抑”的伏笔或设置悬念；点出特定人物。",
+      "第二段：“抑”的铺垫段（约100字）",
+      "要求： 描写人物的“缺点”或“误解”；通过他人态度侧面烘托。",
+      "第三段：“扬”的转折段（约200字）",
+      "要求： 发生意外事件打破固有认知；必须使用正面的环境描写。",
+      "第四段：真相揭示段（约100字）",
+      "要求： 通过第三方或某个物件揭露真相；解释前文的“误解”。",
+      "第五段：结尾升华段（约100字）",
+      "要求： 描述人物现状；呼应开头的环境元素；点题并升华。",
+    ].join("\n"),
+  };
+
+  it("每段要求写在下一行时，生成与复核都带上该段的必需要素", async () => {
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(validResult))
+      .mockResolvedValueOnce(completion({
+        checks: report.rewrittenEssay!.map((_, index) => ({ paragraph: index + 1, follows: true, reason: "符合。" })),
+      }));
+
+    await harness.adapter.analyzeText({ config: headingAndDetailConfig, paragraphs, studentName: "小艾" });
+
+    const generation = requestAt(harness.create).messages[0].content;
+    expect(generation).toContain("第 1 段 revisedText（对应 rewrittenEssay 第 1 段）必须完成这一段的具体任务");
+    expect(generation).toContain("使用名人名言引入");
+    expect(generation).toContain("必须使用正面的环境描写");
+    expect(generation).toContain("第3段是详写段");
+    expect(generation).toContain("是示例不是素材");
+    expect(requestAt(harness.create, 1).messages[0].content).toContain("通过第三方或某个物件揭露真相");
+  });
+
+  /** 线上把原文的「英语老师」改写成「数学金老师」，并在同一篇里混用他／她。 */
+  it("要求范文守住原文的人物身份与称呼", async () => {
+    const harness = setup();
+    await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+
+    const generation = requestAt(harness.create).messages[0].content;
+    expect(generation).toContain("人物身份、称呼、性别代词、学科、姓氏");
+    expect(generation).toContain("不得补写、不得改写");
+    expect(generation).toContain("只能使用同一个称呼和同一个人称代词");
+  });
+
   it("逐段结构复核后仍不符合时拒绝保存范文", async () => {
     const harness = setup();
     const failedCheck = { checks: [
@@ -302,6 +353,47 @@ describe("CompositionReviewAdapter", () => {
     await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
       .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
     expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * 线上「这件事打动了我」停在 AI_INVALID_RESPONSE_json_parse：提示词要求把
+   * 多处修改动作写成「1. 」「2. 」分行，模型就在 advice 里留下了裸换行。
+   */
+  it("逐段建议夹带裸换行和未转义引号时直接容错解析，不再浪费模型调用", async () => {
+    const harness = setup();
+    const broken = JSON.stringify(validResult)
+      .replace("补充动作细节", "1. 补上动作\n2. 把\"独自走进赛场\"写具体");
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: `\`\`\`json\n${broken}\n\`\`\`` } }] });
+
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({
+        annotationAnchors: [{ comment: '可在这里1. 补上动作\n2. 把"独自走进赛场"写具体' }],
+      });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("完全无法解析时自动重试一次模型调用", async () => {
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: "抱歉，我无法完成这个任务。" } }] })
+      .mockResolvedValueOnce(completion(validResult));
+
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    const retry = requestAt(harness.create, 1).messages;
+    expect(retry.at(-1)!.content).toContain("只输出一个完整的 JSON 对象");
+    expect(retry[0]!.content).toBe(requestAt(harness.create).messages[0].content);
+  });
+
+  it("重试后仍不是 JSON 时才报 json_parse", async () => {
+    const harness = setup({ response: undefined });
+    harness.create.mockResolvedValue({ choices: [{ message: { content: "抱歉，我无法完成这个任务。" } }] } as never);
+
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "json_parse" });
+    // 一次解析重试加原有的一次结构修复，修复请求同样允许重试一次。
+    expect(harness.create).toHaveBeenCalledTimes(4);
   });
 
   it("模型漏掉 annotationAnchors 时按无批注处理，不判失败", async () => {

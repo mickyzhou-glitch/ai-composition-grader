@@ -19,6 +19,7 @@ import {
   describeUpstreamAiError,
   timeoutForBaseUrl,
 } from "./ai-client-options";
+import { JSON_RETRY_INSTRUCTION, parseJsonResponse, tryParseJsonResponse } from "./json-response";
 import { validateGeneratedReportSemantics } from "./review-semantics";
 import {
   buildSampleWritingRule,
@@ -254,10 +255,22 @@ function buildRepairPrompt(
   ].join("\n\n");
 }
 
-function parseJsonResponse(content: string): unknown {
-  const trimmed = content.trim();
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return JSON.parse(fenced?.[1] ?? trimmed);
+/**
+ * Re-ask once when the answer cannot be parsed at all. The sample-rewrite
+ * entries have no structure-repair request to fall back on, so a single
+ * unparseable answer used to fail the whole rewrite.
+ */
+async function completionJsonContent(
+  client: OpenAICompatibleClient,
+  request: { messages: unknown[] } & Record<string, unknown>,
+): Promise<string> {
+  const first = await completionContent(client, request);
+  if (tryParseJsonResponse(first).ok) return first;
+  const retry = await completionContent(client, {
+    ...request,
+    messages: [...request.messages, { role: "user", content: JSON_RETRY_INSTRUCTION }],
+  });
+  return tryParseJsonResponse(retry).ok ? retry : first;
 }
 
 function validateRewrittenParagraph(
@@ -733,7 +746,7 @@ export class OpenAIReviewAdapter {
       maxRetries: AI_MAX_RETRIES,
     });
     const current = input.sampleParagraphs[input.index];
-    const content = await completionContent(client, {
+    const content = await completionJsonContent(client, {
       model: settings.model,
       response_format: { type: "json_object" },
       messages: [{
@@ -831,7 +844,7 @@ export class OpenAIReviewAdapter {
       maxRetries: AI_MAX_RETRIES,
     });
     const sectionLabel = input.section === "strengths" ? "优点" : "需要修改";
-    const content = await completionContent(client, {
+    const content = await completionJsonContent(client, {
       model: settings.model,
       response_format: { type: "json_object" },
       messages: [{
@@ -874,7 +887,7 @@ export class OpenAIReviewAdapter {
       maxRetries: AI_MAX_RETRIES,
     });
     const expected = resolveSampleWritingRequirements(input.config);
-    const content = await completionContent(client, {
+    const content = await completionJsonContent(client, {
       model: settings.model,
       response_format: { type: "json_object" },
       messages: [{

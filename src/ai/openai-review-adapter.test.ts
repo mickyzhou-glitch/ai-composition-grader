@@ -361,6 +361,40 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).not.toContain("其余段落正文合计");
   });
 
+  it("单段重写返回无法解析的内容时自动重试一次", async () => {
+    const text = "我".repeat(120);
+    const harness = setup(["抱歉，我无法完成这个任务。", JSON.stringify({ text })]);
+
+    await expect(harness.adapter.rewriteSample({
+      config,
+      sampleParagraphs: report.sampleParagraphs,
+      index: 0,
+    })).resolves.toEqual({ text });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("只输出一个完整的 JSON 对象");
+  });
+
+  it("整篇重写返回夹带围栏与裸换行时无需重试即可解析", async () => {
+    const sampleParagraphs = report.sampleParagraphs.map((paragraph) => ({
+      ...paragraph,
+      suggestion: "1. 补上环境描写\n2. 给人物语言加引号",
+    }));
+    const broken = JSON.stringify({ sampleParagraphs }).replaceAll("\\n", "\n");
+    const harness = setup([`\`\`\`json\n${broken}\n\`\`\``]);
+
+    await expect(harness.adapter.rewriteAllSamples({ config, sampleParagraphs: report.sampleParagraphs }))
+      .resolves.toEqual({ sampleParagraphs });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("整篇重写两次都无法解析时才报示范文无效", async () => {
+    const harness = setup(["抱歉。", "还是抱歉。"]);
+
+    await expect(harness.adapter.rewriteAllSamples({ config, sampleParagraphs: report.sampleParagraphs }))
+      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE" });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
   it("当前段落数不符合配置时不发起单段重写", async () => {
     const harness = setup([JSON.stringify({ text: "我".repeat(120) })]);
 

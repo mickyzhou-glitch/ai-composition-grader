@@ -148,6 +148,36 @@ describe("sample writing requirements", () => {
     expect(rule).toContain("只作生成参考");
   });
 
+  it("分段字数仍只作参考，但必须据此拉开详略", () => {
+    const rule = buildSampleWritingRule(paragraphRangeConfig);
+
+    expect(rule).toContain("建议字数的作用是分配详略");
+    expect(rule).toContain("第3段是详写段，必须明显比第1、2、4、5段写得充分、具体");
+    expect(rule).toContain("不要把各段写成差不多的长度");
+    expect(rule).not.toMatch(/必须为\s*\d+-\d+/u);
+  });
+
+  it("各段参考字数一致时不编造详略要求", () => {
+    const evenConfig = {
+      ...config,
+      structureRequirements: [1, 2, 3, 4, 5]
+        .map((index) => `第${index}段（建议字数：100-150字）：写一层内容。`)
+        .join("\n"),
+    };
+
+    expect(buildSampleWritingRule(evenConfig)).not.toContain("详写段");
+  });
+
+  it("把写作要求里的举例标明为示例，不得照抄进范文", () => {
+    const rule = buildSampleWritingRule({
+      ...config,
+      writingRequirements: "要求有鲜明对比的细节（如“脏兮兮的手”与“整整齐齐的鞋线”）。",
+    });
+
+    expect(rule).toContain("是示例不是素材");
+    expect(rule).toContain("不得把示例词句原样写进范文");
+  });
+
   it("当前珍贵的礼物提示词不退回整篇总量兜底", () => {
     const rule = buildSampleWritingRule(approximateParagraphRangeConfig);
 

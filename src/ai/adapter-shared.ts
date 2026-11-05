@@ -7,26 +7,10 @@ import {
 } from "./ai-client-options";
 import type { AiSettingsSource, OpenAIClientFactory, OpenAICompatibleClient } from "./openai-review-adapter";
 import { AiAdapterError } from "./openai-review-adapter";
+import { JSON_RETRY_INSTRUCTION, tryParseJsonResponse } from "./json-response";
 
 export { AI_MAX_RETRIES, AI_TIMEOUT_MS, describeUpstreamAiError, timeoutForBaseUrl, XAI_AI_TIMEOUT_MS };
-
-/** Strip markdown fences and any prose around the outermost JSON object before parsing. */
-export function cleanJsonResponse(content: string): string {
-  let text = content.replace(/^\uFEFF/u, "").trim();
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/iu);
-  if (fenced?.[1]?.includes("{")) text = fenced[1].trim();
-  else text = text.replace(/^```(?:json)?\s*/iu, "");
-  const start = text.indexOf("{");
-  const end = text.lastIndexOf("}");
-  if (start > 0 || (start >= 0 && end > start && end < text.length - 1)) {
-    text = end > start ? text.slice(start, end + 1) : text.slice(start);
-  }
-  return text;
-}
-
-export function parseJsonResponse(content: string): unknown {
-  return JSON.parse(cleanJsonResponse(content));
-}
+export { cleanJsonResponse, parseJsonResponse, tryParseJsonResponse } from "./json-response";
 
 /** The model stopped at its output limit; the JSON is incomplete. */
 export class TruncatedOutputError extends Error {
@@ -63,6 +47,26 @@ export async function roleClient(
 
 export async function completionContent(client: OpenAICompatibleClient, request: unknown): Promise<string> {
   return (await completionWithFinish(client, request)).content;
+}
+
+/**
+ * Ask the model and, when the answer cannot be parsed as JSON at all, re-ask
+ * once with an explicit format reminder. A truncated answer is left to the
+ * caller, which raises its own output-limit error.
+ */
+export async function completionJsonWithFinish(
+  client: OpenAICompatibleClient,
+  request: { messages: unknown[] } & Record<string, unknown>,
+): Promise<{ content: string; truncated: boolean }> {
+  const first = await completionWithFinish(client, request);
+  if (first.truncated || tryParseJsonResponse(first.content).ok) return first;
+  const retry = await completionWithFinish(client, {
+    ...request,
+    messages: [...request.messages, { role: "user", content: JSON_RETRY_INSTRUCTION }],
+  });
+  // Keep the first answer when the retry is no better, so the repair step still
+  // sees the richer response and the failure keeps its json_parse category.
+  return retry.truncated || tryParseJsonResponse(retry.content).ok ? retry : first;
 }
 
 export async function completionWithFinish(

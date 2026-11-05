@@ -27,6 +27,29 @@ describe("explicit paragraph structure plan", () => {
       "第1段：交代背景。", "第2段：详写过程。", "结尾段：写出感受。",
     ]);
   });
+  /** 线上「这件事打动了我」把每段要求写在标题的下一行；只取标题会丢掉名人名言、伏笔等必需要素。 */
+  it("把标题下方的要求行并入该段任务", () => {
+    const plan = parseParagraphStructurePlan([
+      "文章必须严格遵循以下五个段落的逻辑功能：",
+      "第一段：开头引入段（约100字）",
+      "要求： 使用名人名言引入；埋下“抑”的伏笔或设置悬念；点出特定人物。",
+      "第二段：“抑”的铺垫段（约100字）",
+      "要求： 描写人物的“缺点”或“误解”；通过他人态度侧面烘托。",
+      "第三段：“扬”的转折段（约200字）",
+      "要求： 发生意外事件打破固有认知；必须使用正面的环境描写。",
+      "第四段：真相揭示段（约100字）",
+      "要求： 通过第三方或某个物件揭露真相；解释前文的“误解”。",
+      "第五段：结尾升华段（约100字）",
+      "要求： 描述人物现状；呼应开头的环境元素；点题并升华。",
+    ].join("\n"), 5);
+
+    expect(plan).toHaveLength(5);
+    expect(plan![0]).toContain("使用名人名言引入");
+    expect(plan![2]).toContain("必须使用正面的环境描写");
+    expect(plan![4]).toContain("呼应开头的环境元素");
+    expect(plan!.join("\n")).not.toContain("文章必须严格遵循");
+  });
+
   it("不把一般编号评分点误当作逐段任务", () => {
     expect(parseParagraphStructurePlan(numberedRequirements, 3)).toBeNull();
     expect(parseParagraphStructurePlan("第一段：开头。\n第三段：结尾。", 2)).toBeNull();

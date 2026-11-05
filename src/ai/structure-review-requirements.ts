@@ -6,11 +6,21 @@ const PARAGRAPH_NUMBERS: Record<string, number> = {
   一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
 };
 
-/** Only treat an explicit, complete paragraph outline as one-to-one essay tasks. */
+const PARAGRAPH_HEADING = /^(?:开头段|首段|结尾段|末段|第\s*[一二三四五六七八九十1-9])/u;
+
+/**
+ * Only treat an explicit, complete paragraph outline as one-to-one essay tasks.
+ * Teachers usually write the heading on one line and the requirement itself on
+ * the lines below it, so each heading keeps the detail lines that follow it.
+ */
 export function parseParagraphStructurePlan(value: string, paragraphCount: number): string[] | null {
-  const lines = value.split(/\r?\n/u)
-    .map((line) => line.trim().replace(/^(?:[-*]\s+|\d+[.、．)）]\s*)/u, ""))
-    .filter((line) => /^(?:开头段|首段|结尾段|末段|第\s*[一二三四五六七八九十1-9])/u.test(line));
+  const lines: string[] = [];
+  for (const line of value.split(/\r?\n/u)) {
+    const trimmed = line.trim().replace(/^(?:[-*]\s+|\d+[.、．)）]\s*)/u, "");
+    if (!trimmed) continue;
+    if (PARAGRAPH_HEADING.test(trimmed)) lines.push(trimmed);
+    else if (lines.length > 0) lines[lines.length - 1] += `\n${trimmed}`;
+  }
   if (lines.length !== paragraphCount || paragraphCount < 2) return null;
   const tasks = lines.map((line, index) => {
     const heading = line.match(/^(开头段|首段|结尾段|末段|第\s*([一二三四五六七八九十]|10|[1-9])\s*段)/u);
