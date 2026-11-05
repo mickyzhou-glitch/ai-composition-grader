@@ -43,3 +43,8 @@ export function validateTeacherRewriteLengths(essay: string[], guidance = ""): v
   const failure = teacherRewriteLengthFailures(essay, guidance)[0];
   if (failure) throw new Error(failure.code);
 }
+
+/** 老师在本轮意见里写了硬性字数的段号；这些段以老师要求为准，不再套用配置里的约数。 */
+export function teacherRewriteLengthIndices(guidance = ""): Set<number> {
+  return new Set(constraints(guidance).flatMap(({ indices }) => indices));
+}

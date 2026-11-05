@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AssignmentConfig, ParagraphEvaluationReport } from "../domain/contracts";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "./openai-review-adapter";
 import { CompositionReviewAdapter } from "./composition-review-adapter";
+import { OPENING_NO_SUPPRESSION_ELEMENT, parseStructureTasks } from "./structure-audit";
 
 const config: AssignmentConfig = {
   title: "一次难忘的经历",
@@ -196,6 +197,33 @@ describe("CompositionReviewAdapter", () => {
     await expect(rejection).rejects.not.toThrow(/xai-SecretKey123456/);
   });
 
+  /** 按段长生成范文：每段以「第N段」开头便于区分，余下用汉字补足到指定字数。 */
+  function sizedEssay(lengths: number[], tag = "原"): string[] {
+    return lengths.map((length, index) => `第${index + 1}段${tag}${"字".repeat(Math.max(0, length - 4))}。`);
+  }
+  
+  /**
+   * 构造逐要素复核回复：默认全部 met、证据取该段正文；
+   * unmet 形如 { 1: [1] } 表示第 1 段第 1 个要素 unmet。
+   */
+  function auditReply(
+    structureRequirements: string,
+    essay: string[],
+    unmet: Record<number, Array<number | string>> = {},
+  ) {
+    const tasks = parseStructureTasks(structureRequirements, essay.length)!;
+    return {
+      paragraphs: tasks.map((task, index) => ({
+        paragraph: index + 1,
+        elements: task.elements.map((requirement, elementIndex) => {
+          const bad = (unmet[index + 1] ?? []).some((key) => key === elementIndex + 1 || key === requirement);
+          return { id: elementIndex + 1, status: bad ? "unmet" : "met", evidence: bad ? `缺口：${requirement}` : essay[index]!.slice(0, 20) };
+        }),
+        reason: "复核",
+      })),
+    };
+  }
+  
 
   const fiveParagraphConfig = { ...config, structureRequirements: "严格五段式：引入、抑、扬、真相、升华。抑略写，扬详写。" };
   const rewrittenEssay = ["清晨的街角藏着一个身影。", "起初我觉得她沉默寡言。", "那天清晨，我看见她弓着身子，耐心地扫净路面。", "我渐渐明白，每一处整洁都离不开这份辛劳。", "此后再走过街角，我总会向她道一声早安。"];
@@ -210,26 +238,48 @@ describe("CompositionReviewAdapter", () => {
     ].join("\n\n"),
   };
 
-  it("明确的逐段结构要复核正文，偏离时只重写范文并再次复核", async () => {
+  it("明确的逐段结构要复核正文，偏离时只重写范文并再次复核，逐轮结果写进报告", async () => {
     const harness = setup();
-    const corrected = ["妈妈给我的书令我珍惜。", "书的封面是蓝色的。", "我读书时遇到困难，妈妈陪我一起查资料。", "我们找到了答案，我也学会了求助。", "这份陪伴比书更珍贵。"];
+    const initial = sizedEssay([110, 110, 220, 110, 110]);
+    const corrected = sizedEssay([110, 110, 220, 110, 110], "改");
     harness.create
-      .mockResolvedValueOnce(completion(validResult))
-      .mockResolvedValueOnce(completion({ checks: [
-        { paragraph: 1, follows: false, reason: "首段只写天气，没有点明礼物。" },
-        ...[2, 3, 4, 5].map((paragraph) => ({ paragraph, follows: true, reason: "符合。" })),
-      ] }))
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: initial } }))
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, initial, { 1: [1] })))
       .mockResolvedValueOnce(completion({ paragraphReviews: corrected.map((revisedText) => ({ suggestions: [{ advice: "按结构任务改写新正文" }], revisedText })) }))
-      .mockResolvedValueOnce(completion({ checks: corrected.map((_, index) => ({ paragraph: index + 1, follows: true, reason: "符合。" })) }));
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, [corrected[0]!, ...initial.slice(1)])));
 
     const result = await harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
 
-    expect(result.report.rewrittenEssay).toEqual([corrected[0], ...report.rewrittenEssay!.slice(1)]);
+    expect(result.report.rewrittenEssay).toEqual([corrected[0], ...initial.slice(1)]);
     expect(result.report.paragraphReviews[0].suggestions).toEqual([{ advice: "按结构任务改写新正文" }]);
     expect(result.report.paragraphReviews.map((item) => item.revisedText)).toEqual(result.report.rewrittenEssay);
     expect(harness.create).toHaveBeenCalledTimes(4);
     expect(requestAt(harness.create, 1).messages[0].content).toContain("点明礼物是什么和珍贵的原因");
-    expect(requestAt(harness.create, 2).messages[1].content).toContain("首段只写天气");
+    const repairInput = JSON.parse(requestAt(harness.create, 2).messages[1].content);
+    expect(repairInput.affectedParagraphs).toEqual([1]);
+    expect(repairInput.hardConstraints[0].mustFix[0]).toContain("点明礼物是什么和珍贵的原因");
+    expect(result.report.structureAudit).toMatchObject({ version: 1, passed: true, repairAttempts: 1 });
+    expect(result.report.structureAudit!.rounds[0]!.paragraphs[0]).toMatchObject({ paragraph: 1, pass: false });
+    expect(result.report.structureAudit!.rounds[1]!.passed).toBe(true);
+  });
+
+  it("某段字数偏离「约N字」超过三成时触发返修", async () => {
+    const harness = setup();
+    const initial = sizedEssay([110, 110, 60, 110, 110]);
+    const fixed = sizedEssay([110, 110, 220, 110, 110], "改");
+    harness.create
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: initial } }))
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, initial)))
+      .mockResolvedValueOnce(completion({ paragraphReviews: fixed.map((revisedText) => ({ suggestions: [{ advice: "扩写第三段" }], revisedText })) }))
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, [...initial.slice(0, 2), fixed[2]!, ...initial.slice(3)])));
+
+    const result = await harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
+
+    const repairInput = JSON.parse(requestAt(harness.create, 2).messages[1].content);
+    expect(repairInput.affectedParagraphs).toEqual([3]);
+    expect(repairInput.hardConstraints[0].mustFix[0]).toMatch(/实际 \d+ 个汉字.*扩写/u);
+    expect(result.report.rewrittenEssay![2]).toBe(fixed[2]);
+    expect(result.report.structureAudit!.rounds[0]!.paragraphs[2]!.length).toMatchObject({ pass: false, minimum: 140, maximum: 325 });
   });
 
   /** 线上「这件事打动了我」的结构要求形态：每段标题一行、具体要求在下一行。 */
@@ -253,13 +303,13 @@ describe("CompositionReviewAdapter", () => {
     ].join("\n"),
   };
 
+  const headingEssay = sizedEssay([100, 100, 200, 100, 100]);
+
   it("每段要求写在下一行时，生成与复核都带上该段的必需要素", async () => {
     const harness = setup();
     harness.create
-      .mockResolvedValueOnce(completion(validResult))
-      .mockResolvedValueOnce(completion({
-        checks: report.rewrittenEssay!.map((_, index) => ({ paragraph: index + 1, follows: true, reason: "符合。" })),
-      }));
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: headingEssay } }))
+      .mockResolvedValueOnce(completion(auditReply(headingAndDetailConfig.structureRequirements, headingEssay)));
 
     await harness.adapter.analyzeText({ config: headingAndDetailConfig, paragraphs, studentName: "小艾" });
 
@@ -303,20 +353,22 @@ describe("CompositionReviewAdapter", () => {
     expect(generation).not.toContain("本篇历史和长期规则只作上下文");
   });
 
-  it("逐段结构复核后仍不符合时拒绝保存范文", async () => {
+  it("逐段结构复核在有限次返修后仍不符合时拒绝保存范文，错误码带段号", async () => {
     const harness = setup();
-    const failedCheck = { checks: [
-      { paragraph: 1, follows: false, reason: "首段没有点明礼物。" },
-      ...[2, 3, 4, 5].map((paragraph) => ({ paragraph, follows: true, reason: "符合。" })),
-    ] };
+    const essay = sizedEssay([110, 110, 220, 110, 110]);
+    const failedCheck = auditReply(paragraphPlanConfig.structureRequirements, essay, { 1: [1] });
+    const repairReply = completion({ paragraphReviews: essay.map((revisedText) => ({ suggestions: [{ advice: "压缩结构" }], revisedText })) });
     harness.create
-      .mockResolvedValueOnce(completion(validResult))
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: essay } }))
       .mockResolvedValueOnce(completion(failedCheck))
-      .mockResolvedValueOnce(completion({ paragraphReviews: report.rewrittenEssay!.map((revisedText) => ({ suggestions: [{ advice: "压缩结构" }], revisedText })) }))
+      .mockResolvedValueOnce(repairReply)
+      .mockResolvedValueOnce(completion(failedCheck))
+      .mockResolvedValueOnce(repairReply)
       .mockResolvedValueOnce(completion(failedCheck));
 
     await expect(harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" }))
-      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "rewritten_essay_structure" });
+      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "rewritten_essay_structure_p1" });
+    expect(harness.create).toHaveBeenCalledTimes(6);
   });
 
   it.each([
@@ -324,6 +376,10 @@ describe("CompositionReviewAdapter", () => {
     { structureRequirements: "严格五段式：引入、抑、扬、真相、升华。", teacherGuidance: "前两段略写，修改第一段和第二段的衔接" },
   ])("首次配置和局部意见不会被原文段数覆盖：$teacherGuidance", async ({ structureRequirements, teacherGuidance }) => {
     const harness = setup();
+    harness.create.mockResolvedValueOnce(completion(validResult));
+    if (structureRequirements.startsWith("第一段")) {
+      harness.create.mockResolvedValueOnce(completion(auditReply(structureRequirements, report.rewrittenEssay!)));
+    }
     await expect(harness.adapter.analyzeText({ config: { ...config, sampleParagraphCount: 3, structureRequirements }, paragraphs, studentName: "小艾", teacherGuidance })).resolves.toMatchObject({ report: { rewrittenEssay: report.rewrittenEssay } });
     expect(requestAt(harness.create).messages[0].content).toContain("rewrittenEssay 必须恰好 5 段");
   });
@@ -419,19 +475,44 @@ describe("CompositionReviewAdapter", () => {
     expect(JSON.stringify(requestAt(harness.create, 2).messages)).toContain("invalidResponse");
   });
 
-  it("结构复核不把建议字数或详略篇幅当作不符合依据", async () => {
+  it("结构复核要求逐要素给证据，字数改由程序计数", async () => {
     const harness = setup();
     harness.create
-      .mockResolvedValueOnce(completion(validResult))
-      .mockResolvedValueOnce(completion({
-        checks: report.rewrittenEssay!.map((_, index) => ({ paragraph: index + 1, follows: true, reason: "符合。" })),
-      }));
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: headingEssay } }))
+      .mockResolvedValueOnce(completion(auditReply(headingAndDetailConfig.structureRequirements, headingEssay)));
 
     await harness.adapter.analyzeText({ config: headingAndDetailConfig, paragraphs, studentName: "小艾" });
 
     const audit = requestAt(harness.create, 1).messages[0].content;
-    expect(audit).toContain("建议字数和详略篇幅只供写作参考，不作为不符合的依据");
-    expect(audit).not.toContain("篇幅相当即为不符合");
+    expect(audit).toContain("字数由程序单独计数");
+    expect(audit).toContain("必须逐段、逐要素判断");
+    expect(audit).not.toContain("建议字数和详略篇幅只供写作参考，不作为不符合的依据");
+  });
+
+  /** 家奇订正：第一段只写名言、解释名言、点出人物，「抑」放第二段。 */
+  it("第一段大段写「抑」时判不合格并返修，生成与返修提示词都写明第一段口径", async () => {
+    const harness = setup();
+    const fixed = sizedEssay([100, 100, 200, 100, 100], "改");
+    harness.create
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: headingEssay } }))
+      .mockResolvedValueOnce(completion(auditReply(headingAndDetailConfig.structureRequirements, headingEssay, { 1: [OPENING_NO_SUPPRESSION_ELEMENT] })))
+      .mockResolvedValueOnce(completion({ paragraphReviews: fixed.map((revisedText) => ({ suggestions: [{ advice: "开头只留名言和人物" }], revisedText })) }))
+      .mockResolvedValueOnce(completion(auditReply(headingAndDetailConfig.structureRequirements, [fixed[0]!, ...headingEssay.slice(1)])));
+
+    const result = await harness.adapter.analyzeText({ config: headingAndDetailConfig, paragraphs, studentName: "小艾" });
+
+    const generation = requestAt(harness.create).messages[0].content;
+    expect(generation).toContain("开头段只写名言、简单解释名言、点出人物");
+    expect(generation).toContain("第一段不得展开人物的「抑」");
+    expect(generation).toContain("点到即可，最多一句，不在第一段展开「抑」的铺垫");
+    expect(requestAt(harness.create, 1).messages[0].content).toContain("第一段口径（教师订正，优先于配置原文）");
+    const repair = requestAt(harness.create, 2);
+    expect(repair.messages[0].content).toContain("功能优先于凑抑");
+    const repairInput = JSON.parse(repair.messages[1].content);
+    expect(repairInput.affectedParagraphs).toEqual([1]);
+    expect(repairInput.hardConstraints[0].mustFix[0]).toContain("违反「第一段不得展开人物的「抑」");
+    expect(result.report.rewrittenEssay![0]).toBe(fixed[0]);
+    expect(result.report.structureAudit!.repairAttempts).toBe(1);
   });
 
   it("事实规则不禁止名言引入等结构手法", async () => {

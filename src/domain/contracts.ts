@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { structureAuditSchema } from "./structure-audit";
+
 export const EMPTY_DRAFT_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /** Versioned acknowledgement required before the first real composition upload. */
@@ -277,6 +279,8 @@ export const paragraphEvaluationReportSchema = z.object({
   }).optional(),
   // Optional: derived from paragraphReviews[].revisedText when omitted.
   rewrittenEssay: z.array(z.string().trim().min(1).regex(/^[^\r\n]+$/u)).min(1).max(10).optional(),
+  /** 程序写入的逐段结构复核记录（含返修轮次）；模型输出的同名字段会被丢弃。 */
+  structureAudit: structureAuditSchema.optional(),
 }).strict();
 export type ParagraphEvaluationReport = z.infer<typeof paragraphEvaluationReportSchema>;
 
