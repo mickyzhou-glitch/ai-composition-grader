@@ -493,15 +493,26 @@ function assertStructureGroups(
   return aligned;
 }
 
+/** 「名言/句子被写断、没写完、要补全」一类断言（2026-10-29、11-05 罗丹名言误判红批）。 */
+const INCOMPLETE_CLAIM_PATTERNS = [
+  /(?:名言|名句|引文|引语|引用|句子|语句|原句|这句|此句|该句|整句|这段话|这句话|原话)[^。！？!?\n]{0,16}(?:写断|断了|断开|截断|残缺|不完整|不全|未写完|没(?:有)?写完|未说完|没(?:有)?说完)/u,
+  /(?:补全|补完整|补齐|写完整)[^。！？!?\n]{0,8}(?:名言|名句|引文|引语|引用|句子|语句|原句|这句|整句)/u,
+  /写断|截断了|残句|半句话|只写了(?:一)?半|缺(?:了)?后半/u,
+];
+
+/** 比对锚点与原文前去掉空白、OCR 换行和零宽字符。 */
+function compactForAnchorCheck(value: string): string {
+  return value.replace(/[\s\u200b-\u200d\u2060\ufeff]+/gu, "");
+}
+
 function hasUnverifiedIncompleteClaim(anchor: ParagraphAnnotationAnchor, paragraphText: string): boolean {
   if (anchor.isHighlight || anchor.category === "highlight") return false;
-  const incompleteClaim = /(?:名言|引文|引语|引用|句子|语句|原句|这句|此句)[^。！？!?\n]{0,16}(?:写断|截断|残缺|不完整|未写完|没(?:有)?写完)|(?:补全|补完整)[^。！？!?\n]{0,8}(?:名言|引文|引语|引用|句子|语句|原句)/u;
-  if (!incompleteClaim.test(anchor.comment)) return false;
+  if (!INCOMPLETE_CLAIM_PATTERNS.some((pattern) => pattern.test(anchor.comment))) return false;
 
   // OCR 的换行不是句末。锚点后仍有同句正文时，短锚点不足以证明句子残缺。
   // 保守去掉此类断言；真实残句应按提示词锚到完整可疑句或段尾。
-  const text = paragraphText.replace(/\s+/gu, "");
-  const excerpt = anchor.anchorText.replace(/\s+/gu, "");
+  const text = compactForAnchorCheck(paragraphText);
+  const excerpt = compactForAnchorCheck(anchor.anchorText);
   if (!excerpt || /[。！？.!?][”’"']*$/u.test(excerpt)) return false;
   let offset = text.indexOf(excerpt);
   while (offset >= 0) {

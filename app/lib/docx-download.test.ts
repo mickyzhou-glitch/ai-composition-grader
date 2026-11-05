@@ -197,7 +197,7 @@ describe("Word 逐段批改文档", () => {
     expect(suggestionParagraphs[0]).toContain("1. 补充登台前的具体动作。");
     expect(suggestionParagraphs[1]).toContain("2. 保留。");
     const boxParagraphs = paragraphs.filter((xml) => (
-      xml.includes('w:color w:val="C00000"') || xml.includes("改后全段：") || xml.includes("第 1 段")
+      xml.includes('w:color w:val="C00000"') || xml.includes("改后全段：")
     ));
     boxParagraphs.forEach((xml) => {
       expect(xml).toMatch(/<w:jc w:val="left"\/>/u);
@@ -239,7 +239,9 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("<w:numPr>");
     expect(documentXml).toContain("1. 补充登台前的具体动作。");
     expect(documentXml).not.toContain("修改动作：");
-    expect(documentXml).toContain("第 1 段");
+    expect(documentXml).not.toContain("第 1 段");
+    expect(documentXml).not.toContain("对应原文第");
+    expect(documentXml).not.toContain("修改动作");
     expect(documentXml).toContain("保留。");
     expect(documentXml).not.toContain("开头略显概括。");
     expect(documentXml).not.toContain("手心的汗把稿纸浸出了一道浅痕。");
@@ -422,9 +424,12 @@ describe("Word 逐段批改文档", () => {
 
     expect(documentXml).toMatch(/w:orient="landscape"/u);
     expect(boxes).toHaveLength(ranges.length);
-    expect(boxes[0]).toContain("对应原文第 1–2 段");
-    expect(boxes[2]).toContain("对应原文第 4–5 段");
-    expect(boxes[4]).toContain("对应原文第 7 段");
+    expect(boxes[0]).toContain("改好第 1 组。");
+    boxes.forEach((box) => {
+      expect(box).not.toContain("对应原文第");
+      expect(box).not.toMatch(/第 \d+ 段/u);
+      expect(box).not.toContain("修改动作");
+    });
     expect(documentXml).not.toContain("改好第 6 组");
   });
 

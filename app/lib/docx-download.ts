@@ -146,7 +146,7 @@ function runOptions(style: ExportRunStyle): {
   underline?: { type: (typeof UnderlineType)["SINGLE"]; color: string };
 } {
   if (style === "suggestion") return { bold: true, color: "C00000" };
-  if (style === "demonstration" || style === "heading") return { bold: true, color: "000000" };
+  if (style === "demonstration") return { bold: true, color: "000000" };
   if (style === "changed") {
     return {
       bold: false,
@@ -215,16 +215,10 @@ function boxTextParagraph(children: TextRun[], before: number, after: number) {
 
 function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: number) {
   const runs = exportParagraphRuns(paragraph);
-  const headings = runs.filter((run) => run.style === "heading");
   const suggestion = runs.find((run) => run.style === "suggestion");
-  const remainder = runs.filter((run) => run.style !== "heading" && run.style !== "suggestion");
+  const remainder = runs.filter((run) => run.style !== "suggestion");
   const children = suggestion
     ? [
-      ...headings.map((heading) => boxTextParagraph(
-        textRuns(heading.text, heading.style, halfPoints),
-        40,
-        40,
-      )),
       // 建议每条编号各占一个 w:p，不用 w:br 软换行：两端对齐的段落里，软换行前的一行
       // 会被 Word/WPS 拉满整行宽，汉字之间出现很大的间距（像分散对齐）。
       ...suggestionLines(suggestion.text).map((line, index, lines) => boxTextParagraph(

@@ -220,7 +220,9 @@ describe("Word 与 PDF 导出文本", () => {
     expect(pdfMock.setProperties).toHaveBeenCalledWith({ title: "小明珍贵的礼物" });
     expect(docxText).toContain("1. 补充听觉");
     expect(docxText).not.toContain("修改动作：");
-    expect(docxText).toContain("第 1 段");
+    expect(docxText).not.toContain("第 1 段");
+    expect(docxText).not.toContain("对应原文第");
+    expect(docxText).not.toContain("修改动作");
     expect(docxText).toContain("2. 补一个停顿");
     expect(docxText).not.toContain("动作略快");
     expect(docxText).not.toContain("我听见急促的呼吸声。");
