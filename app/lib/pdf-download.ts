@@ -15,6 +15,7 @@ import {
   type ExportTextRun,
 } from "./export-report-content";
 import type { ReviewView } from "./types";
+import type { RevisionUnderline } from "@/src/revisions/revision-diff";
 
 const PDF_WIDTH = 841.89;
 const PDF_HEIGHT = 595.28;
@@ -49,7 +50,7 @@ type Rectangle = {
 type TextStyle = {
   color: string;
   weight: 400 | 700;
-  underline: boolean;
+  underline: RevisionUnderline | null;
 };
 
 type RichTextRun = TextStyle & {
@@ -146,15 +147,15 @@ async function loadOriginalImage(reviewId: string, imageId: number): Promise<Loa
 
 function styledRun(run: ExportTextRun): RichTextRun {
   if (run.style === "suggestion") {
-    return { text: run.text, color: SUGGESTION_COLOR, weight: 700, underline: false };
+    return { text: run.text, color: SUGGESTION_COLOR, weight: 700, underline: null };
   }
   if (run.style === "demonstration") {
-    return { text: run.text, color: TEXT_COLOR, weight: 700, underline: false };
+    return { text: run.text, color: TEXT_COLOR, weight: 700, underline: null };
   }
   if (run.style === "changed") {
-    return { text: run.text, color: CHANGE_COLOR, weight: 400, underline: true };
+    return { text: run.text, color: CHANGE_COLOR, weight: 400, underline: run.underline ?? "single" };
   }
-  return { text: run.text, color: TEXT_COLOR, weight: 400, underline: false };
+  return { text: run.text, color: TEXT_COLOR, weight: 400, underline: null };
 }
 
 function paragraphRuns(paragraph: ExportParagraph): RichTextRun[] {
@@ -207,6 +208,54 @@ function availableTextRegions(image: Rectangle): Rectangle[] {
     .sort((left, rightRegion) => (
       rightRegion.width * rightRegion.height - left.width * left.height
     ));
+}
+
+/**
+ * 改后全段线型：单线一条直线；双线上下两条细直线；波浪线用二次曲线连成的正弦波。
+ * baseline 是原单下划线所在高度，三种线都落在行距内，不压到下一行文字。
+ */
+export function drawUnderline(
+  context: Pick<CanvasRenderingContext2D, "strokeStyle" | "lineWidth" | "beginPath" | "moveTo" | "lineTo" | "quadraticCurveTo" | "stroke">,
+  style: RevisionUnderline,
+  x: number,
+  baseline: number,
+  width: number,
+  fontPt: number,
+  color: string,
+) {
+  context.strokeStyle = color;
+  const lineWidth = Math.max(0.55, fontPt * 0.06);
+  if (style === "double") {
+    context.lineWidth = Math.max(0.45, lineWidth * 0.75);
+    const gap = Math.max(1.2, fontPt * 0.09);
+    for (const offset of [-gap / 2, gap / 2]) {
+      context.beginPath();
+      context.moveTo(x, baseline + offset);
+      context.lineTo(x + width, baseline + offset);
+      context.stroke();
+    }
+    return;
+  }
+  context.lineWidth = lineWidth;
+  context.beginPath();
+  if (style === "wave") {
+    const amplitude = Math.max(0.8, fontPt * 0.07);
+    const halfWave = Math.max(1.5, fontPt * 0.18);
+    context.moveTo(x, baseline);
+    let cursor = x;
+    let up = true;
+    while (cursor < x + width - 0.01) {
+      const next = Math.min(cursor + halfWave, x + width);
+      const span = next - cursor;
+      context.quadraticCurveTo(cursor + span / 2, baseline + (up ? -amplitude : amplitude) * 2 * (span / halfWave), next, baseline);
+      cursor = next;
+      up = !up;
+    }
+  } else {
+    context.moveTo(x, baseline);
+    context.lineTo(x + width, baseline);
+  }
+  context.stroke();
 }
 
 function sameStyle(left: TextStyle, right: TextStyle) {
@@ -390,12 +439,7 @@ function drawTextBox(
       context.fillStyle = fragment.color;
       context.fillText(fragment.text, x, y);
       if (fragment.underline && fragment.text.length > 0) {
-        context.strokeStyle = fragment.color;
-        context.lineWidth = Math.max(0.55, box.fontPt * 0.06);
-        context.beginPath();
-        context.moveTo(x, y + box.fontPt * 1.18);
-        context.lineTo(x + fragment.width, y + box.fontPt * 1.18);
-        context.stroke();
+        drawUnderline(context, fragment.underline, x, y + box.fontPt * 1.18, fragment.width, box.fontPt, fragment.color);
       }
       x += fragment.width;
     }
@@ -442,7 +486,7 @@ function drawRewrittenEssayPages(paragraphs: string[]): HTMLCanvasElement[] {
   };
   nextPage();
   paragraphs.forEach((text) => {
-    const lines = wrapRichText(page.context, [{ text: rewrittenEssayLineText(text), color: TEXT_COLOR, weight: 400, underline: false }], PDF_WIDTH - margin * 2, fontPt);
+    const lines = wrapRichText(page.context, [{ text: rewrittenEssayLineText(text), color: TEXT_COLOR, weight: 400, underline: null }], PDF_WIDTH - margin * 2, fontPt);
     // Keep a paragraph together when possible; long paragraphs may continue on a new page.
     if (y + lines.length * lineHeight > PDF_HEIGHT - margin && lines.length * lineHeight <= PDF_HEIGHT - margin * 2 - 40) nextPage();
     for (const line of lines) {

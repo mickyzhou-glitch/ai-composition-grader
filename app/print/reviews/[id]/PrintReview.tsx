@@ -1,5 +1,6 @@
 import type { DeliveryDocument } from "@/src/delivery/contracts";
 import { paginateDeliveryDocument, type DeliveryPageBlock } from "@/app/lib/delivery-pagination";
+import { PREVIEW_UNDERLINE_STYLE } from "@/src/revisions/advice-underlines";
 
 import styles from "./print.module.css";
 
@@ -78,6 +79,8 @@ export function PrintReview({
                     <span
                       className={run.kind === "inserted" ? styles.inserted : undefined}
                       data-run-kind={run.kind}
+                      data-underline={run.kind === "inserted" ? run.underline ?? "single" : undefined}
+                      style={run.kind === "inserted" ? { textDecorationStyle: PREVIEW_UNDERLINE_STYLE[run.underline ?? "single"] } : undefined}
                       key={runIndex}
                     >{run.text}</span>
                   ))}

@@ -147,6 +147,37 @@ describe("ParagraphReviewEditor", () => {
     }));
   });
 
+  it("改后全段预览按修改动作摘录划波浪/双线；教师改动作措辞时保留摘录", () => {
+    const onChange = vi.fn();
+    const { container } = render(<ParagraphReviewEditor
+      reviewId="review-1"
+      report={{
+        ...report,
+        paragraphReviews: [{
+          ...report.paragraphReviews[0],
+          suggestions: [{ advice: "1. 补听觉\n2. 写清迈步", revisedQuotes: ["我听见呼吸声，", "终于走上台。"] }],
+          revisedText: "我听见呼吸声，终于走上台。",
+        }],
+      }}
+      ocr={{ ...ocr, paragraphs: [{ ...ocr.paragraphs[0], text: "我走上台。" }] }}
+      images={[{ id: 1, position: 0 }]}
+      disabled={false}
+      onChange={onChange}
+    />);
+
+    const underlines = [...container.querySelectorAll("[data-underline]")].map((node) => [node.textContent, node.getAttribute("data-underline")]);
+    expect(underlines).toEqual([["我听见呼吸声，", "wave"], ["终于走上台。", "double"]]);
+
+    fireEvent.change(screen.getByLabelText("第 1 段修改动作"), {
+      target: { value: "1. 补呼吸声\n2. 写清迈步" },
+    });
+    expect(onChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      paragraphReviews: [expect.objectContaining({
+        suggestions: [{ advice: "1. 补呼吸声\n2. 写清迈步", revisedQuotes: ["我听见呼吸声，", "终于走上台。"] }],
+      })],
+    }));
+  });
+
   it("批量审核可以隐藏建议编辑，改示范文时仍保留原建议", () => {
     const onChange = vi.fn();
     render(<ParagraphReviewEditor

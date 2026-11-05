@@ -719,10 +719,29 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("不要写问题描述，也不要写修改示例");
     expect(prompt).toContain("恰好 1 项");
     expect(prompt).toContain("改后全段");
-    expect(prompt).toContain("逐句比对");
-    expect(prompt).toContain("下划线");
+    expect(prompt).toContain("revisedQuotes");
+    expect(prompt).toContain("逐字复制");
+    expect(prompt).toContain("波浪线");
+    expect(prompt).toContain("双横线");
     expect(prompt).not.toContain("problem、advice、example");
     expect(prompt).toContain("revisedText");
+  });
+
+  it("保留能在改后全段逐字定位的 revisedQuotes，对不上的只删摘录、不判整份失败", async () => {
+    const withQuotes = invalidResult((value) => {
+      value.report.paragraphReviews[0]!.suggestions[0]!.revisedQuotes = ["雨中的赛场令我难忘。"];
+      value.report.paragraphReviews[1]!.suggestions[0]!.revisedQuotes = ["模型编造的不存在的句子。"];
+    });
+    const harness = setup({ response: withQuotes });
+
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    const reviews = result.report.paragraphReviews;
+    expect(reviews[0]?.revisedText).toBe("雨中的赛场令我难忘。");
+    expect(reviews[0]?.suggestions[0]?.revisedQuotes).toEqual(["雨中的赛场令我难忘。"]);
+    expect(reviews[4]?.suggestions[0]).not.toHaveProperty("revisedQuotes");
+    expect(reviews[4]?.suggestions[0]?.advice).toContain("保留");
+    const prompt = requestAt(harness.create).messages[0].content;
+    expect(prompt).toContain("revisedQuotes:string[]");
   });
 
   it("接受包含具体动作和示例的保留建议", async () => {

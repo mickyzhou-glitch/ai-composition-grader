@@ -1,8 +1,15 @@
 import { diffArrays } from "diff";
 
+/** 改后全段下划线线型：第 1/2/3 条修改动作依次为波浪/双线/单线。 */
+export type RevisionUnderline = "wave" | "double" | "single";
+
 export type RevisionRun = {
   kind: "unchanged" | "deleted" | "inserted" | "punctuation";
   text: string;
+  /** 仅改后全段整句标注使用；缺省按单下划线。 */
+  underline?: RevisionUnderline;
+  /** 对应第几条修改动作（0 起）；退回旧口径时没有。 */
+  actionIndex?: number;
 };
 
 type WordChange = {

@@ -8,14 +8,19 @@ import {
   deriveEssayFromParagraphReviews,
   essayDiffersFromParagraphReviews,
 } from "@/src/domain/essay-paragraph-sync";
-import { mergedParagraphAction } from "@/src/domain/paragraph-actions";
+import { collapseParagraphSuggestions, mergedParagraphAction } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import { countTextCharactersIncludingPunctuation } from "@/src/domain/sample-writing-requirements";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
+import { buildAdviceRevisionRuns } from "@/src/revisions/advice-underlines";
 import type { ReviewImageView } from "../lib/types";
 import { ParagraphCropPreview } from "./ParagraphCropPreview";
 import { RevisionPreview } from "./RevisionPreview";
+
+function withAdvice(suggestions: ParagraphReview["suggestions"], advice: string): ParagraphReview["suggestions"][number] {
+  const quotes = collapseParagraphSuggestions(suggestions)[0]?.revisedQuotes;
+  return quotes ? { advice, revisedQuotes: quotes } : { advice };
+}
 
 interface ParagraphReviewEditorProps {
   reviewId: string;
@@ -181,7 +186,8 @@ export function ParagraphReviewEditor({
                     disabled={disabled || rewriting}
                     onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
                       ...current,
-                      suggestions: [{ advice: event.target.value }],
+                      // 保留定位摘录：教师微调措辞不丢线型；条数或正文对不上时渲染自动退回单下划线。
+                      suggestions: [withAdvice(current.suggestions, event.target.value)],
                     }))}
                   />
                 </label>
@@ -201,7 +207,7 @@ export function ParagraphReviewEditor({
                 />
               </label>
               <RevisionPreview
-                runs={buildSentenceRevisionRuns(group.sourceText, paragraphReview.revisedText)}
+                runs={buildAdviceRevisionRuns(group.sourceText, paragraphReview.revisedText, paragraphReview.suggestions)}
                 sentenceHighlight
               />
               {onRewriteParagraph ? <div className="paragraph-rewrite-actions">

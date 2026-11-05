@@ -11,7 +11,8 @@ import {
   type DeliveryReadinessInput,
 } from "@/src/delivery/readiness";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
+import { buildAdviceRevisionRuns } from "@/src/revisions/advice-underlines";
+import type { RevisionUnderline } from "@/src/revisions/revision-diff";
 
 export const EXPORT_KAITI_FACE = '"LXGW WenKai"';
 export const EXPORT_KAITI_FONT = `${EXPORT_KAITI_FACE}, "KaiTi", "STKaiti", "Kaiti SC", serif`;
@@ -38,6 +39,8 @@ export class ExportContentError extends Error {
 export type ExportRevisionRun = {
   text: string;
   changed: boolean;
+  /** 改动句线型：第 1/2/3 条修改动作 → 波浪/双线/单线；缺省单线。 */
+  underline?: RevisionUnderline;
 };
 
 export type ExportParagraph = {
@@ -50,6 +53,8 @@ export type ExportRunStyle = "suggestion" | "demonstration" | "changed" | "plain
 export type ExportTextRun = {
   text: string;
   style: ExportRunStyle;
+  /** 仅 style 为 changed 时有意义；缺省单线。 */
+  underline?: RevisionUnderline;
 };
 
 export type ExportImage = {
@@ -126,10 +131,9 @@ export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[]
   return [
     { text: `${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
     { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" as const },
-    ...paragraph.revisionRuns.map((run) => ({
-      text: run.text,
-      style: run.changed ? "changed" as const : "plain" as const,
-    })),
+    ...paragraph.revisionRuns.map((run): ExportTextRun => (run.changed
+      ? { text: run.text, style: "changed", underline: run.underline ?? "single" }
+      : { text: run.text, style: "plain" })),
   ];
 }
 
@@ -141,11 +145,16 @@ export function exportFontSample(content: ExportReportContent) {
     + (content.rewrittenEssay.length ? rewrittenEssayHeading(true) : "");
 }
 
-function buildExportRevisionRuns(source: string, revised: string): ExportRevisionRun[] {
-  const runs = buildSentenceRevisionRuns(source, revised).map((run) => ({
-    text: run.text,
-    changed: run.kind === "inserted",
-  }));
+function buildExportRevisionRuns(
+  source: string,
+  revised: string,
+  suggestions: readonly ParagraphSuggestion[],
+): ExportRevisionRun[] {
+  const runs = buildAdviceRevisionRuns(source, revised, suggestions).map((run): ExportRevisionRun => (
+    run.kind === "inserted"
+      ? { text: run.text, changed: true, underline: run.underline ?? "single" }
+      : { text: run.text, changed: false }
+  ));
   if (runs.map((run) => run.text).join("") !== revised) {
     throw new ExportContentError("PDF_CONTENT_INCOMPLETE", "改后全段未能完整排版，请重试");
   }
@@ -196,7 +205,7 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     const pageParagraphs = paragraphsByPage.get(pageIndex) ?? [];
     pageParagraphs.push({
       suggestions: group.review.suggestions,
-      revisionRuns: buildExportRevisionRuns(group.sourceText, group.review.revisedText),
+      revisionRuns: buildExportRevisionRuns(group.sourceText, group.review.revisedText, group.review.suggestions),
     });
     paragraphsByPage.set(pageIndex, pageParagraphs);
   }

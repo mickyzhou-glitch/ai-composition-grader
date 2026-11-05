@@ -77,10 +77,15 @@ function wrappedLineCount(
   return Math.max(1, lines);
 }
 
-function appendRun(runs: RevisionRun[], kind: RevisionRun["kind"], text: string): void {
+function appendRun(
+  runs: RevisionRun[],
+  kind: RevisionRun["kind"],
+  text: string,
+  underline?: RevisionRun["underline"],
+): void {
   const previous = runs.at(-1);
-  if (previous?.kind === kind) previous.text += text;
-  else runs.push({ kind, text });
+  if (previous?.kind === kind && previous.underline === underline) previous.text += text;
+  else runs.push(underline ? { kind, text, underline } : { kind, text });
 }
 
 function wrapRevisionRuns(
@@ -111,7 +116,7 @@ function wrapRevisionRuns(
       if (current.length > 0 && width + characterWidth > CONTENT_WIDTH_MM) {
         pushLine();
       }
-      appendRun(current, run.kind, character);
+      appendRun(current, run.kind, character, run.underline);
       width += characterWidth;
     }
   }
@@ -123,7 +128,7 @@ function joinedRevisionRuns(lines: RevisionRun[][]): RevisionRun[] {
   const runs: RevisionRun[] = [];
   lines.forEach((line, lineIndex) => {
     if (lineIndex > 0) appendRun(runs, "unchanged", "\n");
-    for (const run of line) appendRun(runs, run.kind, run.text);
+    for (const run of line) appendRun(runs, run.kind, run.text, run.underline);
   });
   return runs;
 }

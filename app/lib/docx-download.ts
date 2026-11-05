@@ -21,6 +21,7 @@ import {
   type IBorderOptions,
 } from "docx";
 import JSZip from "jszip";
+import type { RevisionUnderline } from "@/src/revisions/revision-diff";
 
 import {
   buildExportReportContent,
@@ -140,10 +141,16 @@ async function loadOriginalImage(reviewId: string, image: ExportImage) {
   return new Uint8Array(await response.arrayBuffer());
 }
 
-function runOptions(style: ExportRunStyle): {
+const DOCX_UNDERLINE = {
+  wave: UnderlineType.WAVE,
+  double: UnderlineType.DOUBLE,
+  single: UnderlineType.SINGLE,
+} as const satisfies Record<RevisionUnderline, (typeof UnderlineType)[keyof typeof UnderlineType]>;
+
+export function runOptions(style: ExportRunStyle, underline: RevisionUnderline = "single"): {
   bold: boolean;
   color: string;
-  underline?: { type: (typeof UnderlineType)["SINGLE"]; color: string };
+  underline?: { type: (typeof DOCX_UNDERLINE)[RevisionUnderline]; color: string };
 } {
   if (style === "suggestion") return { bold: true, color: "C00000" };
   if (style === "demonstration") return { bold: true, color: "000000" };
@@ -151,14 +158,14 @@ function runOptions(style: ExportRunStyle): {
     return {
       bold: false,
       color: "1F4E78",
-      underline: { type: UnderlineType.SINGLE, color: "1F4E78" },
+      underline: { type: DOCX_UNDERLINE[underline], color: "1F4E78" },
     };
   }
   return { bold: false, color: "000000" };
 }
 
-function textRuns(text: string, style: ExportRunStyle, halfPoints: number) {
-  const options = runOptions(style);
+function textRuns(text: string, style: ExportRunStyle, halfPoints: number, underline?: RevisionUnderline) {
+  const options = runOptions(style, underline);
   const normalized = text.endsWith("\n") ? text.slice(0, -1) : text;
   return normalized.split("\n").map((line, index) => new TextRun({
     text: line,
@@ -232,6 +239,7 @@ function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: num
           run.style === "changed" || run.style === "plain" ? run.text.replace(/[\r\n\u2028\u2029]+/gu, "") : run.text,
           run.style,
           halfPoints,
+          run.underline,
         )),
         20,
         40,

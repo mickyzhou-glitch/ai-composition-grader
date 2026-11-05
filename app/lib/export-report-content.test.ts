@@ -60,13 +60,37 @@ function review(): ExportReviewSource {
 }
 
 describe("导出段落建议正文与改后全段，不含标签", () => {
+  it("有修改动作摘录时按第 1/2/3 条动作标波浪、双线、单线，且不出现段号与动作标签", () => {
+    const source = review();
+    const reviewReport = source.report as ParagraphEvaluationReport;
+    reviewReport.paragraphReviews[0] = {
+      ...reviewReport.paragraphReviews[0]!,
+      suggestions: [{
+        advice: "1. 换掉“慢慢”，写出终于登台。\n2. 补写呼吸声。\n3. 补一句心理。",
+        revisedQuotes: ["我终于走上台。", "我听见自己的呼吸。", "我不再害怕。"],
+      }],
+      revisedText: "我终于走上台。灯光很亮。我听见自己的呼吸。我不再害怕。",
+    };
+    reviewReport.rewrittenEssay = ["我终于走上台。灯光很亮。我听见自己的呼吸。我不再害怕。"];
+    const paragraph = buildExportReportContent(source).pages[0]!.paragraphs[0]!;
+    expect(paragraph.revisionRuns).toEqual([
+      { text: "我终于走上台。", changed: true, underline: "wave" },
+      { text: "灯光很亮。", changed: false },
+      { text: "我听见自己的呼吸。", changed: true, underline: "double" },
+      { text: "我不再害怕。", changed: true, underline: "single" },
+    ]);
+    const runs = exportParagraphRuns(paragraph);
+    expect(runs.find((run) => run.style === "suggestion")).not.toHaveProperty("underline");
+    expect(runs.map((run) => run.text).join("")).not.toMatch(/第 ?\d+ ?段|对应原文第|修改动作：/u);
+  });
+
   it("用与原段的逐句比对标记修改句和新增句", () => {
     const content = buildExportReportContent(review());
     const paragraph = content.pages[0]?.paragraphs[0];
     expect(paragraph?.revisionRuns).toEqual([
-      { text: "我终于走上台。", changed: true },
+      { text: "我终于走上台。", changed: true, underline: "single" },
       { text: "灯光很亮。", changed: false },
-      { text: "我听见自己的呼吸。", changed: true },
+      { text: "我听见自己的呼吸。", changed: true, underline: "single" },
     ]);
 
     const runs = exportParagraphRuns(paragraph!);
@@ -129,7 +153,7 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
     expect(content.pages[0]?.paragraphs).toHaveLength(2);
     expect(content.pages[0]?.paragraphs[0]?.revisionRuns).toEqual([
       { text: "甲句。", changed: false },
-      { text: "新的经过。", changed: true },
+      { text: "新的经过。", changed: true, underline: "single" },
     ]);
     const groupedText = exportParagraphRuns(content.pages[0]!.paragraphs[0]!).map((run) => run.text).join("");
     expect(groupedText).not.toContain("对应原文第");
@@ -191,7 +215,7 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
     const content = buildExportReportContent(source);
     const paragraph = content.pages[0]?.paragraphs[0];
     expect(paragraph?.revisionRuns).toEqual([
-      { text: "我终于走上台。", changed: true },
+      { text: "我终于走上台。", changed: true, underline: "single" },
       { text: "灯光很亮。", changed: false },
     ]);
     expect(exportParagraphRuns(paragraph!).map((run) => run.text).join("")).toContain("我终于走上台。灯光很亮。");
@@ -227,7 +251,7 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
     const exported = content.pages.flatMap((page) => page.paragraphs);
     expect(exported).toHaveLength(3);
     expect(exportParagraphRuns(exported[1]!).map((run) => run.text).join("")).not.toContain("原文无对应段");
-    expect(exported[1]?.revisionRuns).toEqual([{ text: "新增句。", changed: true }]);
+    expect(exported[1]?.revisionRuns).toEqual([{ text: "新增句。", changed: true, underline: "single" }]);
     expect(exported[0]?.revisionRuns).toEqual([{ text: "甲句。", changed: false }]);
   });
 

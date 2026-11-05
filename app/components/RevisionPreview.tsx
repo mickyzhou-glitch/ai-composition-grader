@@ -1,10 +1,12 @@
 "use client";
 
+import { PREVIEW_UNDERLINE_STYLE } from "@/src/revisions/advice-underlines";
 import type { RevisionRun } from "@/src/revisions/revision-diff";
 
 const TEXT_COLOR = "#171717";
 const CHANGE_COLOR = "#C91F32";
 const SENTENCE_CHANGE_COLOR = "#1F4E78";
+
 
 export function RevisionPreview({
   runs,
@@ -30,10 +32,12 @@ export function RevisionPreview({
         }
         return <span
           className={changedSentence ? "revision-preview__changed-sentence" : undefined}
+          data-underline={changedSentence ? run.underline ?? "single" : undefined}
           key={`${index}:${run.text}`}
           style={{
             color,
             textDecoration: changedSentence ? "underline" : undefined,
+            textDecorationStyle: changedSentence ? PREVIEW_UNDERLINE_STYLE[run.underline ?? "single"] : undefined,
             textUnderlineOffset: changedSentence ? "3px" : undefined,
           }}
         >{run.text}</span>;

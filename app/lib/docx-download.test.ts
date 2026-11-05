@@ -330,6 +330,45 @@ describe("Word 逐段批改文档", () => {
     expect(runXml("我听见自己的呼吸。")).toContain('<w:u w:val="single"');
   });
 
+  it("改后全段按修改动作序号划波浪线、双线、单线，未改动句不划线，建议正文不划线", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const ocr = review.ocr;
+    if (!ocr || ocr.version !== 2) throw new Error("fixture ocr");
+    ocr.pages[0].text = "我站在台下。灯光很亮。";
+    ocr.paragraphs[0].text = "我站在台下。灯光很亮。";
+    const report = review.report as {
+      paragraphReviews: Array<{
+        revisedText: string;
+        suggestions: Array<{ advice: string; revisedQuotes?: string[] }>;
+      }>;
+    };
+    report.paragraphReviews[0].suggestions = [{
+      advice: "1. 加入心理描写。\n2. 增加暖色调环境描写。\n3. 增加一段转折。",
+      revisedQuotes: ["我心头一颤，", "一缕夕阳洒进来。", "我被深深感动。"],
+    }];
+    report.paragraphReviews[0].revisedText = "我站在台下，我心头一颤，灯光很亮。一缕夕阳洒进来。我被深深感动。";
+    const { documentXml } = await unpack(review);
+    const runXml = (text: string) => {
+      const token = `<w:t xml:space="preserve">${text}</w:t>`;
+      const at = documentXml.indexOf(token);
+      expect(at).toBeGreaterThan(-1);
+      const start = documentXml.lastIndexOf("<w:r>", at);
+      return documentXml.slice(start, documentXml.indexOf("</w:r>", at));
+    };
+
+    expect(runXml("我心头一颤，")).toContain('<w:u w:val="wave"');
+    expect(runXml("一缕夕阳洒进来。")).toContain('<w:u w:val="double"');
+    expect(runXml("我被深深感动。")).toContain('<w:u w:val="single"');
+    expect(runXml("我站在台下，")).not.toContain("<w:u ");
+    expect(runXml("灯光很亮。")).not.toContain("<w:u ");
+    // 其余段落（夹具里没有摘录的旧口径段）仍按改动句单线，不出现额外的波浪/双线。
+    expect(documentXml.match(/<w:u w:val="wave"/gu)).toHaveLength(1);
+    expect(documentXml.match(/<w:u w:val="double"/gu)).toHaveLength(1);
+    expect(runXml("1. 加入心理描写。")).not.toContain("<w:u ");
+    expect(documentXml).not.toMatch(/第 \d+ 段|对应原文第|修改动作：/u);
+  });
+
   it("横向页上每段一个浅黄文本框，框数等于段数", async () => {
     installBrowserExport();
     const review = fixture();

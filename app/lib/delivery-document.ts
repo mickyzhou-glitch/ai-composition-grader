@@ -8,7 +8,7 @@ import { paragraphEvaluationReportSchema } from "@/src/domain/contracts";
 import { collapseParagraphSuggestions } from "@/src/domain/paragraph-actions";
 import { paragraphReviewUsesGroups, resolveReviewGroups } from "@/src/domain/paragraph-review-groups";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import { buildSentenceRevisionRuns } from "@/src/revisions/revision-diff";
+import { buildAdviceRevisionRuns } from "@/src/revisions/advice-underlines";
 import {
   cropImageRegion,
   type BitmapDimensions,
@@ -141,7 +141,7 @@ export async function buildDeliveryDocument(
         ...(group.sourceLabel ? { sourceLabel: group.sourceLabel } : {}),
         crops,
         suggestions: collapseParagraphSuggestions(group.review.suggestions),
-        revisionRuns: buildSentenceRevisionRuns(group.sourceText, group.review.revisedText),
+        revisionRuns: buildAdviceRevisionRuns(group.sourceText, group.review.revisedText, group.review.suggestions),
       });
     }
     const sourceCount = paragraphs.length;

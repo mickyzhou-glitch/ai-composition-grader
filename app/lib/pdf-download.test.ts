@@ -24,6 +24,7 @@ import {
   createReviewPdf,
   downloadReviewPdf,
   downloadReviewPdfArchive,
+  drawUnderline,
   markReviewExported,
   triggerFileDownload,
 } from "./pdf-download";
@@ -312,5 +313,52 @@ describe("PDF 文件下载", () => {
     await markReviewExported("review-1");
 
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/exported", { method: "POST" });
+  });
+});
+
+describe("drawUnderline", () => {
+  function recorder() {
+    const calls: Array<[string, ...number[]]> = [];
+    let strokes = 0;
+    const context = {
+      strokeStyle: "",
+      lineWidth: 1,
+      beginPath: () => calls.push(["beginPath"]),
+      moveTo: (x: number, y: number) => calls.push(["moveTo", x, y]),
+      lineTo: (x: number, y: number) => calls.push(["lineTo", x, y]),
+      quadraticCurveTo: (cx: number, cy: number, x: number, y: number) => calls.push(["quad", cx, cy, x, y]),
+      stroke: () => { strokes += 1; },
+    };
+    return { context, calls, strokes: () => strokes };
+  }
+
+  it("单线画一条直线", () => {
+    const { context, calls, strokes } = recorder();
+    drawUnderline(context, "single", 10, 50, 100, 12, "#1f4e78");
+    expect(strokes()).toBe(1);
+    expect(calls.filter(([name]) => name === "lineTo")).toEqual([["lineTo", 110, 50]]);
+    expect(context.strokeStyle).toBe("#1f4e78");
+  });
+
+  it("双线画上下两条平行直线", () => {
+    const { context, calls, strokes } = recorder();
+    drawUnderline(context, "double", 10, 50, 100, 12, "#1f4e78");
+    expect(strokes()).toBe(2);
+    const ys = calls.filter(([name]) => name === "lineTo").map(([, , y]) => y);
+    expect(ys).toHaveLength(2);
+    expect(ys[0]).toBeLessThan(50);
+    expect(ys[1]).toBeGreaterThan(50);
+  });
+
+  it("波浪线由上下交替的曲线连到终点，不超出文字宽度", () => {
+    const { context, calls, strokes } = recorder();
+    drawUnderline(context, "wave", 10, 50, 100, 12, "#1f4e78");
+    expect(strokes()).toBe(1);
+    const curves = calls.filter(([name]) => name === "quad");
+    expect(curves.length).toBeGreaterThan(10);
+    expect(curves.at(-1)?.[3]).toBeCloseTo(110);
+    expect(curves.every(([, , , x]) => x! <= 110 + 1e-9)).toBe(true);
+    expect(curves[0]![2]).toBeLessThan(50);
+    expect(curves[1]![2]).toBeGreaterThan(50);
   });
 });

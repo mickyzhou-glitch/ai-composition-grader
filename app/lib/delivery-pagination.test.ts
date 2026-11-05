@@ -51,6 +51,28 @@ describe("交付文档分页", () => {
     expect(pages.every((page) => page.remainingHeightMm >= 0)).toBe(true);
   });
 
+  it("改后全段折行后仍保留各句线型，相邻不同线型不合并", () => {
+    const base = paragraph(1, { crops: [] });
+    const wave = "我心头一颤，眼睛有些湿润。".repeat(6);
+    const double = "一缕夕阳洒进来。".repeat(6);
+    const pages = paginateDeliveryDocument(documentWith({
+      ...base,
+      revisionRuns: [
+        { kind: "inserted", text: wave, underline: "wave" },
+        { kind: "inserted", text: double, underline: "double" },
+        { kind: "unchanged", text: "他笑了。" },
+      ],
+    }), { measureText });
+    const runs = pages.flatMap((page) => page.blocks)
+      .flatMap((block) => block.kind === "revision-lines" ? block.runs : []);
+    const textOf = (underline?: string) => runs
+      .filter((run) => run.kind === "inserted" && run.underline === underline)
+      .map((run) => run.text.replaceAll("\n", "")).join("");
+    expect(textOf("wave")).toBe(wave);
+    expect(textOf("double")).toBe(double);
+    expect(runs.filter((run) => run.kind === "inserted" && !run.underline)).toEqual([]);
+  });
+
   it("完整范文跨页时保留范文段号并完整输出，不生成空点评标题", () => {
     const text = "这是一段需要完整保留的范文。".repeat(350);
     const essay = { ...paragraph(4, { crops: [], suggestionCount: 0, revisionText: text }), essayParagraphNumber: 1 };

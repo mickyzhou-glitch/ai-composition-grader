@@ -10,9 +10,19 @@ export function mergedParagraphAction(suggestions: readonly { advice: string }[]
   return lines.map((advice, index) => `${index + 1}. ${advice}`).join("\n");
 }
 
-export function collapseParagraphSuggestions<T extends { advice: string }>(
+export function collapseParagraphSuggestions<T extends { advice: string; revisedQuotes?: string[] }>(
   suggestions: readonly T[],
 ): T[] {
   if (suggestions.length <= 1) return [...suggestions];
-  return [{ ...suggestions[0], advice: mergedParagraphAction(suggestions) }];
+  const { revisedQuotes: _first, ...first } = suggestions[0]!;
+  void _first;
+  // 合并编号后摘录按同样顺序拼接；有一条缺摘录就整体不带，渲染时退回单下划线。
+  const quotes = suggestions.every((suggestion) => Array.isArray(suggestion.revisedQuotes))
+    ? suggestions.flatMap((suggestion) => suggestion.revisedQuotes ?? [])
+    : undefined;
+  return [{
+    ...first,
+    advice: mergedParagraphAction(suggestions),
+    ...(quotes ? { revisedQuotes: quotes } : {}),
+  } as T];
 }

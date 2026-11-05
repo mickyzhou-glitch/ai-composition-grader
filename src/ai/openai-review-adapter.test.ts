@@ -433,6 +433,28 @@ describe("OpenAIReviewAdapter", () => {
     expect(JSON.stringify(harness.create.mock.calls[0][0])).toContain("实际不足或超出也正常返回");
   });
 
+  it.each([
+    [["耳边只剩急促的呼吸声。"], ["耳边只剩急促的呼吸声。"]],
+    [["耳边只剩呼吸声"], undefined],
+  ])("单段重写返回的 revisedQuotes 逐字可定位才保留：%j", async (quotes, expected) => {
+    const rewritten: ParagraphReview = {
+      ...currentParagraphReview,
+      suggestions: [{ advice: "补充听觉细节", revisedQuotes: quotes }],
+      revisedText: "我的手指攒紧衣角，耳边只剩急促的呼吸声。",
+    };
+    const harness = setup([JSON.stringify(rewritten)]);
+    const result = await harness.adapter.rewriteParagraph({
+      config,
+      paragraphs: [
+        { id: "paragraph-1", text: "我站在台下，心里很紧张。" },
+        { id: "paragraph-2", text: "轮到我时，我终于走上台。" },
+      ],
+      current: currentParagraphReview,
+      paragraphId: "paragraph-1",
+    });
+    expect(result.suggestions[0]?.revisedQuotes).toEqual(expected);
+  });
+
   it("单段批改重写只发送原文上下文、当前草稿与教师要求", async () => {
     const rewritten: ParagraphReview = {
       ...currentParagraphReview,
@@ -465,8 +487,10 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("不要写问题描述，也不要写修改示例");
     expect(serialized).toContain("一两句话");
     expect(serialized).toContain("改后全段");
-    expect(serialized).toContain("逐句比对");
-    expect(serialized).toContain("下划线");
+    expect(serialized).toContain("revisedQuotes");
+    expect(serialized).toContain("逐字复制");
+    expect(serialized).toContain("波浪线");
+    expect(serialized).toContain("双横线");
     expect(serialized).toContain(config.title);
     expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
     expect(serialized).toContain("只返回 1 条");
