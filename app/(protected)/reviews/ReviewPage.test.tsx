@@ -142,6 +142,28 @@ describe("复核页", () => {
     expect(screen.getByRole("button", { name: "保存复核" })).toBeEnabled();
   });
 
+  it("识别结果带模型警告时，复核页顶部提示先校对识别原文并可切换到识别原文", async () => {
+    const warned = { ...paragraphReview, ocr: { ...paragraphReview.ocr, pages: [{ ...paragraphReview.ocr.pages[0], warnings: ["结尾两行有遮挡"] }] } };
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(warned))
+      .mockImplementationOnce(() => json({ job: null }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+    const banner = await screen.findByRole("alert", { name: "请先校对识别原文" });
+    expect(banner).toHaveTextContent("模型警告：结尾两行有遮挡");
+    await user.click(screen.getByRole("button", { name: "去校对识别原文" }));
+    expect(screen.getByRole("tab", { name: "识别原文" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("识别正常时复核页不提示校对", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: null }));
+    render(<ReviewPage />);
+    await screen.findByLabelText("老师补充观点");
+    expect(screen.queryByRole("alert", { name: "请先校对识别原文" })).not.toBeInTheDocument();
+  });
+
   it("清空已有生成指导后保存空草稿，刷新不得复活旧指导", async () => {
     const loaded = { ...paragraphReview, teacherGuidance: "旧五段式" };
     const saved = { ...paragraphReview, revision: 2, teacherGuidance: "", report: { ...paragraphReview.report, teacherGuidanceDraft: "" } };

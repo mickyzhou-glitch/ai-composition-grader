@@ -23,6 +23,7 @@ import {
   normalizeAssignmentTitle,
   REANALYSIS_SKIP_REASONS,
   type BatchReanalysisCommitItem,
+  type BatchReanalysisCommitOptions,
   type BatchReanalysisCommitResult,
   type BatchReanalysisPreview,
   type ReanalysisSkipCode,
@@ -432,12 +433,14 @@ export class ReanalysisRepository {
   commitBatch(
     ownerId: string,
     items: BatchReanalysisCommitItem[],
+    options: BatchReanalysisCommitOptions = {},
   ): BatchReanalysisCommitResult {
+    const applyFramework = options.applyCurrentFramework === true;
     const submitted: BatchReanalysisCommitResult["submitted"] = [];
     const skippedItems: BatchReanalysisCommitResult["skipped"] = [];
     for (const item of items) {
       try {
-        submitted.push(this.commitOne(ownerId, item));
+        submitted.push(this.commitOne(ownerId, item, applyFramework));
       } catch (error) {
         if (!(error instanceof ReanalysisDomainError)) throw error;
         skippedItems.push(skipped(item.reviewId, error.code, error.review));
@@ -446,7 +449,7 @@ export class ReanalysisRepository {
     return { submitted, skipped: skippedItems };
   }
 
-  private commitOne(ownerId: string, item: BatchReanalysisCommitItem) {
+  private commitOne(ownerId: string, item: BatchReanalysisCommitItem, applyFramework: boolean) {
     const execute = () => this.database.transaction((transaction) => {
       const row = transaction.select({
         status: reviews.status,
@@ -482,25 +485,28 @@ export class ReanalysisRepository {
         throw domainError("REVIEW_UNAVAILABLE", publicReview);
       }
 
-      const assignments = transaction.select({
-        id: savedAssignments.id,
-        title: savedAssignments.title,
-        config: savedAssignments.config,
-        updatedAt: savedAssignments.updatedAt,
-      }).from(savedAssignments).where(eq(savedAssignments.ownerId, ownerId))
-        .orderBy(desc(savedAssignments.updatedAt), desc(savedAssignments.id))
-        .all();
-      const assignment = assignments.find(
-        (candidate) => normalizeAssignmentTitle(candidate.title) === title,
-      );
-      if (
-        !assignment ||
-        assignment.id !== item.assignmentId ||
-        assignment.updatedAt.toISOString() !== item.expectedAssignmentUpdatedAt
-      ) {
-        throw domainError("FRAMEWORK_CHANGED", publicReview);
+      let assignmentConfig: ReturnType<typeof assignmentConfigSchema.parse> | null = null;
+      if (applyFramework) {
+        const assignments = transaction.select({
+          id: savedAssignments.id,
+          title: savedAssignments.title,
+          config: savedAssignments.config,
+          updatedAt: savedAssignments.updatedAt,
+        }).from(savedAssignments).where(eq(savedAssignments.ownerId, ownerId))
+          .orderBy(desc(savedAssignments.updatedAt), desc(savedAssignments.id))
+          .all();
+        const assignment = assignments.find(
+          (candidate) => normalizeAssignmentTitle(candidate.title) === title,
+        );
+        if (
+          !assignment ||
+          assignment.id !== item.assignmentId ||
+          assignment.updatedAt.toISOString() !== item.expectedAssignmentUpdatedAt
+        ) {
+          throw domainError("FRAMEWORK_CHANGED", publicReview);
+        }
+        assignmentConfig = assignmentConfigSchema.parse(assignment.config);
       }
-      const assignmentConfig = assignmentConfigSchema.parse(assignment.config);
       const mode = reanalysisMode(
         row.report,
         readStoredOcrCheckpoint(row.ocrCheckpoint, row.imageRevision),
@@ -533,7 +539,7 @@ export class ReanalysisRepository {
         throw error;
       }
       const update = transaction.update(reviews).set({
-        config: assignmentConfig,
+        ...(assignmentConfig ? { config: assignmentConfig } : {}),
         revision: sql`${reviews.revision} + 1`,
         status: "analyzing",
         analysisRunId: id,

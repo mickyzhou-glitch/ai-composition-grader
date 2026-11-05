@@ -12,6 +12,7 @@ import {
   normalizeAssignmentTitle,
   REANALYSIS_SKIP_REASONS,
   type BatchReanalysisCommitItem,
+  type BatchReanalysisCommitOptions,
   type BatchReanalysisCommitResult,
   type BatchReanalysisMatchedItem,
   type BatchReanalysisPreview,
@@ -329,11 +330,7 @@ export class D1Reanalysis {
     const formattedGuidance = formatRevisionTeacherGuidance(input.commonIssue, input.contentSuggestion);
     const standingIssue = input.commonIssue ? describeScopedOpinion(input.commonIssue) : null;
     const essaySuggestion = input.contentSuggestion ? describeScopedOpinion(input.contentSuggestion) : null;
-    const [standing, essayOpinions] = await Promise.all([
-      listD1StandingOpinions(this.database, ownerId, configTitle(row!.config)),
-      listD1EssayOpinions(this.database, ownerId, reviewId),
-    ]);
-    const teacherGuidance = composeReviewGuidance(formattedGuidance, standing, essayOpinions) ?? formattedGuidance;
+    const teacherGuidance = await this.mergedGuidance(ownerId, reviewId, configTitle(row!.config), formattedGuidance) ?? formattedGuidance;
     const mode = reanalysisMode(row!);
     const statements = this.requestStatements(
       ownerId,
@@ -371,12 +368,14 @@ export class D1Reanalysis {
   async commitBatch(
     ownerId: string,
     items: BatchReanalysisCommitItem[],
+    options: BatchReanalysisCommitOptions = {},
   ): Promise<BatchReanalysisCommitResult> {
+    const applyFramework = options.applyCurrentFramework === true;
     const submitted: BatchReanalysisCommitResult["submitted"] = [];
     const skippedItems: BatchReanalysisCommitResult["skipped"] = [];
     for (const item of items) {
       try {
-        submitted.push(await this.commitOne(ownerId, item));
+        submitted.push(await this.commitOne(ownerId, item, applyFramework));
       } catch (error) {
         if (error instanceof D1ReanalysisError) {
           skippedItems.push(skipped(item.reviewId, error.code, error.review));
@@ -413,26 +412,24 @@ export class D1Reanalysis {
     await this.database.batch(statements);
   }
 
-  private async commitOne(ownerId: string, item: BatchReanalysisCommitItem) {
+  private async commitOne(ownerId: string, item: BatchReanalysisCommitItem, applyFramework: boolean) {
     const row = await this.readReview(ownerId, item.reviewId);
     const review = this.assertCommitRequestable(row, item);
-    const assignments = await this.readAssignments(ownerId);
-    const assignment = this.findAssignment(assignments, review.title);
-    if (!assignment || assignment.id !== item.assignmentId || asIso(assignment.updated_at) !== item.expectedAssignmentUpdatedAt) {
-      throw new D1ReanalysisError("FRAMEWORK_CHANGED", review);
+    if (applyFramework) {
+      const assignments = await this.readAssignments(ownerId);
+      const assignment = this.findAssignment(assignments, review.title);
+      if (!assignment || assignment.id !== item.assignmentId || asIso(assignment.updated_at) !== item.expectedAssignmentUpdatedAt) {
+        throw new D1ReanalysisError("FRAMEWORK_CHANGED", review);
+      }
+      if (assignment.config !== undefined) {
+        assignmentConfigSchema.parse(JSON.parse(assignment.config));
+      }
     }
-    if (assignment.config !== undefined) {
-      assignmentConfigSchema.parse(JSON.parse(assignment.config));
-    }
-    const assignmentUpdatedAt = asEpoch(item.expectedAssignmentUpdatedAt);
+    const assignmentUpdatedAt = applyFramework ? asEpoch(item.expectedAssignmentUpdatedAt) : null;
     const mode = reanalysisMode(row!);
     const jobId = crypto.randomUUID();
     const now = Date.now();
-    const [standingOpinions, essayOpinions] = await Promise.all([
-      listD1StandingOpinions(this.database, ownerId, review.title),
-      listD1EssayOpinions(this.database, ownerId, item.reviewId),
-    ]);
-    const teacherGuidance = composeReviewGuidance(null, standingOpinions, essayOpinions);
+    const teacherGuidance = await this.mergedGuidance(ownerId, item.reviewId, review.title, null);
     const statements = this.commitStatements(
       ownerId,
       item,
@@ -451,9 +448,21 @@ export class D1Reanalysis {
       throw error;
     }
     if (changes(outcomes[0]) !== 1 || changes(outcomes[1]) !== 1) {
-      await this.resolveCommitConflict(ownerId, item);
+      await this.resolveCommitConflict(ownerId, item, applyFramework);
     }
     return { reviewId: item.reviewId, jobId, revision: row!.revision + 1 };
+  }
+
+  /**
+   * requestRevision and commitBatch share this: every essay-scoped opinion of the review merged
+   * old to new (all effective), the current submission last, plus standing rules of the same title.
+   */
+  private async mergedGuidance(ownerId: string, reviewId: string, title: string, current: string | null): Promise<string | null> {
+    const [standing, essayOpinions] = await Promise.all([
+      listD1StandingOpinions(this.database, ownerId, title),
+      listD1EssayOpinions(this.database, ownerId, reviewId),
+    ]);
+    return composeReviewGuidance(current, standing, essayOpinions);
   }
 
   private async readReview(ownerId: string, reviewId: string): Promise<ReviewRow | null> {
@@ -545,21 +554,34 @@ export class D1Reanalysis {
     ownerId: string,
     item: BatchReanalysisCommitItem,
     title: string,
-    assignmentUpdatedAt: number,
+    assignmentUpdatedAt: number | null,
     jobId: string,
     now: number,
     mode: AnalysisMode,
     teacherGuidance: string | null,
   ): D1ReanalysisStatement[] {
-    return [
-      this.database.prepare(`
-        UPDATE reviews SET
-          config = (
+    // Only an explicit applyCurrentFramework overwrites reviews.config with the saved framework.
+    const framework = assignmentUpdatedAt !== null;
+    const configSet = framework
+      ? `config = (
             SELECT config FROM saved_assignments
             WHERE id = ? AND owner_id = ? AND updated_at = ?
               AND TRIM(title) = TRIM(?)
             LIMIT 1
-          ),
+          ),`
+      : "";
+    const frameworkGuard = framework
+      ? `AND EXISTS (
+            SELECT 1 FROM saved_assignments
+            WHERE id = ? AND owner_id = ? AND updated_at = ?
+              AND TRIM(title) = TRIM(?)
+          )`
+      : "";
+    const frameworkBindings = framework ? [item.assignmentId, ownerId, assignmentUpdatedAt, title] : [];
+    return [
+      this.database.prepare(`
+        UPDATE reviews SET
+          ${configSet}
           revision = revision + 1, status = 'analyzing', analysis_run_id = ?,
           teacher_reviewed_at = NULL, pdf_filename = NULL, pdf_path = NULL,
           pdf_revision = NULL, exported_at = NULL, updated_at = ?
@@ -571,25 +593,15 @@ export class D1Reanalysis {
             SELECT 1 FROM analysis_jobs
             WHERE review_id = reviews.id AND status IN ('queued', 'running')
           )
-          AND EXISTS (
-            SELECT 1 FROM saved_assignments
-            WHERE id = ? AND owner_id = ? AND updated_at = ?
-              AND TRIM(title) = TRIM(?)
-          )
+          ${frameworkGuard}
       `).bind(
-        item.assignmentId,
-        ownerId,
-        assignmentUpdatedAt,
-        title,
+        ...frameworkBindings,
         jobId,
         now,
         item.reviewId,
         ownerId,
         item.expectedRevision,
-        item.assignmentId,
-        ownerId,
-        assignmentUpdatedAt,
-        title,
+        ...frameworkBindings,
       ),
       this.database.prepare(`
         INSERT INTO analysis_jobs (
@@ -644,10 +656,11 @@ export class D1Reanalysis {
     );
   }
 
-  private async resolveCommitConflict(ownerId: string, item: BatchReanalysisCommitItem): Promise<never> {
+  private async resolveCommitConflict(ownerId: string, item: BatchReanalysisCommitItem, applyFramework: boolean): Promise<never> {
     const row = await this.readReview(ownerId, item.reviewId);
     this.assertCommitRequestable(row, item);
     const review = publicReview(row!);
+    if (!applyFramework) throw new D1ReanalysisError("REVISION_CONFLICT", review);
     const assignment = this.findAssignment(await this.readAssignments(ownerId), review.title);
     if (!assignment || assignment.id !== item.assignmentId || asIso(assignment.updated_at) !== item.expectedAssignmentUpdatedAt) {
       throw new D1ReanalysisError("FRAMEWORK_CHANGED", review);

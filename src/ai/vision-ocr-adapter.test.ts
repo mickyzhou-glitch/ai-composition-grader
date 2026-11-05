@@ -85,6 +85,16 @@ describe("VisionOcrAdapter", () => {
     expect(serialized).not.toContain("修改建议");
   });
 
+  it("看不清的字逐字用□占位，不得补成通顺句子或编造情节人物学科，病句照写", async () => {
+    const harness = setup(validSinglePageResponse());
+    await harness.adapter.recognize({ imageUrls: ["data:image/jpeg;base64,eA=="] });
+    const system = JSON.stringify(harness.create.mock.calls[0][0]);
+    expect(system).toContain("看不清、无法确认的字一律用「□」占位，每个看不清的字写一个「□」");
+    expect(system).toContain("不得根据上下文把看不清的地方补成通顺的句子");
+    expect(system).toMatch(/不得编造或替换原文的情节、人物.*学科/u);
+    expect(system).toContain("病句、错别字、重复、漏字和不通顺之处照原样写");
+  });
+
   it("returns pages and recognized paragraph regions for one page", async () => {
     const response = validSinglePageResponse();
     const harness = setup(response);

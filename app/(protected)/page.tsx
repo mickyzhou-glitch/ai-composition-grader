@@ -247,7 +247,7 @@ export default function Home() {
     }
   }
 
-  async function submitBatchReanalysis(items: BatchReanalysisCommitItem[]) {
+  async function submitBatchReanalysis(items: BatchReanalysisCommitItem[], options: { applyCurrentFramework: boolean }) {
     if (reanalysisSubmitting || items.length === 0) return;
     setReanalysisSubmitting(true);
     setReanalysisError("");
@@ -255,7 +255,7 @@ export default function Home() {
       const result = await apiFetch<BatchReanalysisCommitResult>("/api/reviews/batch-reanalysis", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({ items, applyCurrentFramework: options.applyCurrentFramework }),
       });
       setReanalysisResult(result);
       setSelectedReviewIds((current) => {
@@ -501,7 +501,7 @@ export default function Home() {
         error={reanalysisError}
         result={reanalysisResult}
         onClose={closeBatchReanalysis}
-        onConfirm={(items) => { void submitBatchReanalysis(items); }}
+        onConfirm={(items, options) => { void submitBatchReanalysis(items, options); }}
       />
     </div>
   );

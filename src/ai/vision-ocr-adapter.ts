@@ -9,6 +9,7 @@ import {
   type OcrPage,
   type OcrParagraph,
 } from "../ocr/contracts";
+import { OCR_UNREADABLE_PLACEHOLDER } from "../ocr/ocr-quality";
 import { alignParagraphsToSource } from "../ocr/source-paragraphs";
 import { completionContent, parseJsonResponse, roleClient } from "./adapter-shared";
 import {
@@ -36,6 +37,10 @@ const OCR_PROMPT = [
   "每个 segment 返回 pageIndex、text、x、y、width、height，只标注该段在整页上的大致范围，不是裁图识别结果。",
   "只有整页空白、图片损坏或核心正文无法读取时才设置 readable=false。",
   "只转写，不评价、不分析、不改写原文，也不提出改写意见。",
+  `看不清、无法确认的字一律用「${OCR_UNREADABLE_PLACEHOLDER}」占位，每个看不清的字写一个「${OCR_UNREADABLE_PLACEHOLDER}」，宁可多占位也不要猜字。`,
+  "不得根据上下文把看不清的地方补成通顺的句子；不得编造或替换原文的情节、人物、称呼、姓氏、性别、学科、地点、时间；看清了什么就写什么。",
+  "学生原文的病句、错别字、重复、漏字和不通顺之处照原样写，不要修正、不要润色、不要补全。",
+  "有较多字看不清、某页字迹模糊或有遮挡时，在该页 warnings 里用一句话说明原因和大致位置。",
   "只返回严格 JSON：{\"pages\":[{\"pageIndex\":0,\"text\":\"\",\"readable\":true,\"warnings\":[],\"blocks\":[{\"text\":\"\",\"x\":0,\"y\":0,\"width\":0.1,\"height\":0.1}]}],\"paragraphs\":[{\"paragraphIndex\":0,\"text\":\"\",\"segments\":[{\"pageIndex\":0,\"text\":\"\",\"x\":0,\"y\":0,\"width\":0.1,\"height\":0.1}]}]}。",
 ].join("\n");
 
@@ -74,7 +79,7 @@ export class VisionOcrAdapter {
         {
           role: "user",
           content: [
-            { type: "text", text: "请直接识别每张完整作文图片，按原文自然段分行，不要裁成段再识别。" },
+            { type: "text", text: `请直接识别每张完整作文图片，按原文自然段分行，不要裁成段再识别。看不清的字每字用一个「${OCR_UNREADABLE_PLACEHOLDER}」占位，不要猜、不要补写、病句照写。` },
             ...input.imageUrls.map((url) => ({
               type: "image_url",
               image_url: { url, detail: "high" },

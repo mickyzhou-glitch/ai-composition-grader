@@ -283,6 +283,26 @@ describe("CompositionReviewAdapter", () => {
     expect(generation).toContain("只能使用同一个称呼和同一个人称代词");
   });
 
+  /** 章皓轩一篇：识别成“英语老师”，老师在本篇要求中更正为数学老师、男、姓金。 */
+  it("老师在本篇要求里更正的人物、学科、姓氏、性别、情节以老师为准，其余仍以原文为准", async () => {
+    const harness = setup();
+    const teacherGuidance = composeReviewGuidance("[内容建议]\n名人名言不合适，字数不够", [], [
+      { text: "这个主人公是数学老师，男的，姓金。时间是请他们吃炸鸡", createdAt: Date.parse("2026-10-28T15:57:35+08:00") },
+    ])!;
+    await harness.adapter.analyzeText({ config, paragraphs, studentName: "章皓轩", teacherGuidance });
+
+    const generation = requestAt(harness.create).messages[0].content;
+    expect(generation).toContain("人物、学科、姓氏、性别、情节默认以学生原文为准");
+    expect(generation).toContain("明确更正了人物、学科、姓氏、性别或情节时，一律以老师的更正为准，视为识别错误");
+    expect(generation).toContain("范文与点评都不得再用原文否定");
+    expect(generation).toContain("全篇按老师更正后的人物设定统一称呼和人称代词");
+    expect(generation).toContain("除老师明确更正的事项外");
+    expect(generation).toContain("老师在本篇要求中明确更正的人物、学科、姓氏、性别、情节除外（以老师为准）");
+    expect(generation).toContain("这个主人公是数学老师，男的，姓金。");
+    expect(generation).toContain("[本篇有效要求");
+    expect(generation).not.toContain("本篇历史和长期规则只作上下文");
+  });
+
   it("逐段结构复核后仍不符合时拒绝保存范文", async () => {
     const harness = setup();
     const failedCheck = { checks: [

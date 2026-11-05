@@ -1264,7 +1264,7 @@ describe("reanalysis route handlers", () => {
     expect(response.status).toBe(200);
     expect(await json(response)).toEqual({ ok: true, data: result });
     expectNoStore(response);
-    expect(commitBatch).toHaveBeenCalledWith(OWNER_ID, items);
+    expect(commitBatch).toHaveBeenCalledWith(OWNER_ID, items, { applyCurrentFramework: false });
   });
 
   it.each([

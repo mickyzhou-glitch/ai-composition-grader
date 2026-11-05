@@ -45,6 +45,8 @@ const batchReanalysisCommitItemSchema = z.object({
 
 export const batchReanalysisCommitInputSchema = z.object({
   items: z.array(batchReanalysisCommitItemSchema).min(1).max(BATCH_REANALYSIS_LIMIT),
+  /** Overwrite each review's stored config with the current saved framework. Off by default. */
+  applyCurrentFramework: z.boolean().optional().default(false),
 }).strict().superRefine(({ items }, context) => {
   const reviewIds = items.map(({ reviewId }) => reviewId);
   if (new Set(reviewIds).size !== reviewIds.length) {
@@ -67,6 +69,10 @@ export interface RejectReviewResult {
   rejectionChangeRequest: string | null;
 }
 export type BatchReanalysisCommitItem = z.infer<typeof batchReanalysisCommitItemSchema>;
+export interface BatchReanalysisCommitOptions {
+  /** When false (default) the review keeps its own config and framework edits never reject the commit. */
+  applyCurrentFramework?: boolean;
+}
 
 export function normalizeAssignmentTitle(value: string): string {
   return value.trim();

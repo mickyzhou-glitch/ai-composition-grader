@@ -347,6 +347,7 @@ describe("历史首页", () => {
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/batch-reanalysis", expect.objectContaining({ method: "POST" }));
     expect(JSON.parse(String(fetchMock.mock.calls.find(([input]) => String(input) === "/api/reviews/batch-reanalysis")?.[1]?.body))).toEqual({
       items: [{ reviewId: "review-1", expectedRevision: 1, assignmentId: "assignment-1", expectedAssignmentUpdatedAt: "2026-08-22T09:30:00.000Z" }],
+      applyCurrentFramework: false,
     });
   });
 

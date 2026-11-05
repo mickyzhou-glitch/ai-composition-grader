@@ -1,4 +1,5 @@
 import { guidanceForPrompt } from "../grading-opinions/review-guidance";
+import { ESSAY_FACT_RULE } from "./essay-fact-rule";
 import OpenAI from "openai";
 import { z } from "zod";
 
@@ -326,6 +327,7 @@ function rewriteParagraphPrompt(input: RewriteParagraphInput): string {
     ...(input.teacherGuidance?.trim()
       ? [`本篇批改历史要求与教师指导：${JSON.stringify(guidanceForPrompt(input.teacherGuidance))}`]
       : []),
+    ESSAY_FACT_RULE,
     targetLine,
     `目标段当前未保存批改草稿：${JSON.stringify(input.current)}`,
     `教师附加要求：${JSON.stringify(input.instruction?.trim() || "换一种更具体、更自然的批改方案。")}`,

@@ -1228,7 +1228,7 @@ describe("ReanalysisRepository requestRevision", () => {
       expectedAssignmentUpdatedAt: conflictPreview.assignmentUpdatedAt,
     };
 
-    const result = repository.commitBatch(OWNER, [successItem, conflictItem]);
+    const result = repository.commitBatch(OWNER, [successItem, conflictItem], { applyCurrentFramework: true });
 
     expect(result).toEqual({
       submitted: [{ reviewId: "review-1", jobId: "reanalysis-job-1", revision: 4 }],
@@ -1469,7 +1469,7 @@ describe("ReanalysisRepository requestRevision", () => {
     expect(opened.sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 3 });
   });
 
-  it("预览后框架变化时跳过，不信任客户端的旧版本", () => {
+  it("applyCurrentFramework=true 时预览后框架变化跳过，不信任客户端的旧版本", () => {
     opened.sqlite.prepare(`
       INSERT INTO saved_assignments (id, owner_id, title, config, created_at, updated_at)
       VALUES ('assignment-current', ?, 'My  Essay', ?, ?, ?)
@@ -1485,7 +1485,7 @@ describe("ReanalysisRepository requestRevision", () => {
       UPDATE saved_assignments SET config = ?, updated_at = ? WHERE id = 'assignment-current'
     `).run(JSON.stringify({ ...config, title: "My  Essay", scoringFocus: "预览后变更" }), NOW.valueOf() + 1_000);
 
-    expect(repository.commitBatch(OWNER, [item])).toEqual({
+    expect(repository.commitBatch(OWNER, [item], { applyCurrentFramework: true })).toEqual({
       submitted: [],
       skipped: [{
         reviewId: "review-1",
@@ -1501,6 +1501,26 @@ describe("ReanalysisRepository requestRevision", () => {
       status: "ready_for_review",
       analysisRunId: null,
     });
+  });
+
+  it("默认不覆盖题目设置：预览后框架变化也照常提交，config 保持原样", () => {
+    opened.sqlite.prepare(`
+      INSERT INTO saved_assignments (id, owner_id, title, config, created_at, updated_at)
+      VALUES ('assignment-current', ?, 'My  Essay', ?, ?, ?)
+    `).run(OWNER, JSON.stringify({ ...config, title: "My  Essay" }), NOW.valueOf() - 1_000, NOW.valueOf());
+    const before = opened.sqlite.prepare("SELECT config FROM reviews WHERE id = 'review-1'").get();
+    const preview = repository.preview(OWNER, ["review-1"]).matched[0]!;
+    opened.sqlite.prepare(`
+      UPDATE saved_assignments SET config = ?, updated_at = ? WHERE id = 'assignment-current'
+    `).run(JSON.stringify({ ...config, title: "My  Essay", scoringFocus: "预览后变更" }), NOW.valueOf() + 1_000);
+
+    expect(repository.commitBatch(OWNER, [{
+      reviewId: preview.reviewId,
+      expectedRevision: preview.expectedRevision,
+      assignmentId: preview.assignmentId,
+      expectedAssignmentUpdatedAt: preview.assignmentUpdatedAt,
+    }])).toMatchObject({ submitted: [{ reviewId: "review-1" }], skipped: [] });
+    expect(opened.sqlite.prepare("SELECT config FROM reviews WHERE id = 'review-1'").get()).toEqual(before);
   });
 
   it("未知的框架数据损坏必须继续抛出而不是被转成 skipped", () => {
@@ -1519,7 +1539,7 @@ describe("ReanalysisRepository requestRevision", () => {
       UPDATE saved_assignments SET config = '{broken-json' WHERE id = 'assignment-current'
     `).run();
 
-    expect(() => repository.commitBatch(OWNER, [item])).toThrow();
+    expect(() => repository.commitBatch(OWNER, [item], { applyCurrentFramework: true })).toThrow();
     expect(opened.sqlite.prepare("SELECT count(*) AS count FROM analysis_jobs").get()).toEqual({ count: 0 });
     expect(reviewRepository.getById(OWNER, "review-1")).toMatchObject({
       revision: 3,

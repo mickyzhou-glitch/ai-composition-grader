@@ -1,6 +1,7 @@
 import type { AnalysisJobRecord } from "../jobs/analysis-job-repository";
 import type {
   BatchReanalysisCommitItem,
+  BatchReanalysisCommitOptions,
   BatchReanalysisCommitResult,
   BatchReanalysisPreview,
   PublicAnalysisJobView,
@@ -53,7 +54,8 @@ export class ReanalysisService {
   commitBatch(
     ownerId: string,
     items: BatchReanalysisCommitItem[],
+    options: BatchReanalysisCommitOptions = {},
   ): BatchReanalysisCommitResult {
-    return this.repository.commitBatch(ownerId, items);
+    return this.repository.commitBatch(ownerId, items, options);
   }
 }

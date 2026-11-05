@@ -23,6 +23,7 @@ import { AsyncButton } from "../../components/AsyncButton";
 import { ClassInput } from "../../components/ClassInput";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { ExportMenu } from "../../components/ExportMenu";
+import { OcrProofreadBanner } from "../../components/OcrProofreadBanner";
 import { OcrTextEditor } from "../../components/OcrTextEditor";
 import { PhotoAnnotationEditor } from "../../components/PhotoAnnotationEditor";
 import { ReportEditor, type FeedbackSection } from "../../components/ReportEditor";
@@ -824,6 +825,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             : error.includes("冲突") ? () => void forceRefresh() : undefined}
           retryLabel={analysisResultLoadFailed ? "重新加载结果" : error.includes("冲突") ? "放弃本地修改并刷新" : undefined}
         /> : null}
+        <OcrProofreadBanner ocr={review.ocr} onOpenOcr={activeView === "ocr" ? undefined : () => setActiveView("ocr")} />
         {notice ? <div className="success-banner" role="status">{notice}</div> : null}
         {loadingAnalysisResult ? <div className="success-banner" role="status">AI 分析已完成，正在加载批改结果。</div> : null}
         {analysisJob && !loadingAnalysisResult && !analysisResultLoadFailed ? <div className="success-banner" role="status">AI 分析：{stageLabels[analysisJob.progressStage]}{analysisJob.message ? `。${analysisJob.message}` : ""}{analysisJob.detail ? <details><summary>查看原始信息</summary><p>{analysisJob.detail}</p></details> : null}</div> : null}

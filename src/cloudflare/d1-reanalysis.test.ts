@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { describe, expect, it, vi } from "vitest";
 
+import { guidanceForPrompt, readReviewGuidance } from "../grading-opinions/review-guidance";
 import {
   D1Reanalysis,
   D1ReanalysisBatchError,
@@ -274,45 +275,99 @@ describe("D1Reanalysis", () => {
       .toContain("content_only");
   });
 
-  it("批量确认逐项使用独立 batch，读取数据库 assignment.config 且保留旧报告", async () => {
+  function commitHarness(options: { assignmentUpdatedAt?: number; essayRows?: Array<Record<string, unknown>> } = {}) {
     const batches: Array<Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }>> = [];
-    let index = 0;
+    let assignmentReads = 0;
     const database = {
       prepare: vi.fn((sql: string) => {
-        const current = statement(sql, {
+        if (/^\s*SELECT/iu.test(sql) && sql.includes("FROM saved_assignments")) assignmentReads += 1;
+        return statement(sql, {
           first: vi.fn(async () => reviewRow({ report: "old-report" })),
-          all: vi.fn(async () => sql.includes("saved_assignments") ? {
-            results: [{ id: ASSIGNMENT, title: " 春天 ", config: reviewRow().config, updated_at: 1_700_000_000_000 }],
-          } : { results: [] }),
+          all: vi.fn(async () => sql.includes("FROM saved_assignments") ? {
+            results: [{ id: ASSIGNMENT, title: " 春天 ", config: reviewRow().config, updated_at: options.assignmentUpdatedAt ?? 1_700_000_000_000 }],
+          } : sql.includes("scope = 'essay'") ? { results: options.essayRows ?? [] } : { results: [] }),
         });
-        return current;
       }),
       batch: vi.fn(async (batchStatements: D1ReanalysisStatement[]) => {
         batches.push(batchStatements as Array<D1ReanalysisStatement & { sql: string; bindings: unknown[] }>);
-        index += 1;
         return batchStatements.map(() => ({ meta: { changes: 1 } }));
       }),
     } as unknown as D1Database;
+    return { database, batches, assignmentReads: () => assignmentReads };
+  }
+  const commitItem = {
+    reviewId: REVIEW,
+    expectedRevision: 3,
+    assignmentId: ASSIGNMENT,
+    expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString(),
+  };
+
+  it("批量确认默认不覆盖 reviews.config，逐项独立 batch 且保留旧报告", async () => {
+    const harness = commitHarness();
     vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("job-batch");
 
-    const result = await new D1Reanalysis(database).commitBatch(OWNER, [{
-      reviewId: REVIEW,
-      expectedRevision: 3,
-      assignmentId: ASSIGNMENT,
-      expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString(),
-    }]);
+    const result = await new D1Reanalysis(harness.database).commitBatch(OWNER, [commitItem]);
 
-    expect(index).toBe(1);
-    expect(batches).toHaveLength(1);
-    expect(batches[0][0].sql).toContain("revision = revision + 1");
-    expect(batches[0][0].sql).toContain("SELECT config FROM saved_assignments");
-    expect(batches[0][0].sql).not.toContain("report = NULL");
-    expect(batches[0].find(({ sql }) => /INSERT INTO analysis_jobs/iu.test(sql))?.bindings)
+    expect(harness.batches).toHaveLength(1);
+    expect(harness.batches[0][0].sql).toContain("revision = revision + 1");
+    expect(harness.batches[0][0].sql).not.toContain("saved_assignments");
+    expect(harness.batches[0][0].sql).not.toMatch(/\bconfig\s*=/u);
+    expect(harness.batches[0][0].sql).not.toContain("report = NULL");
+    expect(harness.assignmentReads()).toBe(0);
+    expect(harness.batches[0].find(({ sql }) => /INSERT INTO analysis_jobs/iu.test(sql))?.bindings)
       .toContain("full");
     expect(result).toEqual({
       submitted: [{ reviewId: REVIEW, jobId: "job-batch", revision: 4 }],
       skipped: [],
     });
+  });
+
+  it("不覆盖框架时，预览后框架被修改也不拒绝", async () => {
+    const harness = commitHarness({ assignmentUpdatedAt: 1_800_000_000_000 });
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("job-batch");
+    await expect(new D1Reanalysis(harness.database).commitBatch(OWNER, [commitItem], { applyCurrentFramework: false }))
+      .resolves.toMatchObject({ submitted: [{ reviewId: REVIEW }], skipped: [] });
+  });
+
+  it("applyCurrentFramework=true 时读取数据库 assignment.config 覆盖，并在框架变动时跳过", async () => {
+    const harness = commitHarness();
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("job-batch");
+    await new D1Reanalysis(harness.database).commitBatch(OWNER, [commitItem], { applyCurrentFramework: true });
+    expect(harness.batches[0][0].sql).toContain("SELECT config FROM saved_assignments");
+    expect(harness.batches[0][0].bindings.slice(0, 4)).toEqual([ASSIGNMENT, OWNER, 1_700_000_000_000, "春天"]);
+
+    const changed = commitHarness({ assignmentUpdatedAt: 1_800_000_000_000 });
+    await expect(new D1Reanalysis(changed.database).commitBatch(OWNER, [commitItem], { applyCurrentFramework: true }))
+      .resolves.toMatchObject({ submitted: [], skipped: [{ reviewId: REVIEW, code: "FRAMEWORK_CHANGED" }] });
+    expect(changed.batches).toHaveLength(0);
+  });
+
+  it("批量确认与单篇退回使用同一合并：章皓轩的本篇意见全部有效且无重复", async () => {
+    const row = (text: string, beijing: string) => ({ text, paragraphLabel: null, category: "内容", sourceReviewId: REVIEW, updatedAt: Date.parse(`${beijing.replace(" ", "T")}+08:00`) });
+    const essayRows = [
+      row("这个主人公是数学老师，男的，姓金。时间是请他们吃炸鸡\n这个老师是数学老师，金老师\n名人名言不合适，字数不够", "2026-11-05 10:14:01"),
+      row("这个主人公是数学老师，男的，姓金。时间是请他们吃炸鸡\n这个老师是数学老师，金老师\n名人名言不合适", "2026-11-05 10:01:58"),
+      row("这个主人公是数学老师，男的，姓金。时间是请他们吃炸鸡", "2026-10-28 15:57:35"),
+      row("这个老师是数学老师，金老师", "2026-10-28 15:32:32"),
+      row("名人名言不合适", "2026-10-28 15:32:32"),
+    ];
+    const batch = commitHarness({ essayRows });
+    vi.spyOn(globalThis.crypto, "randomUUID").mockReturnValue("job-batch");
+    await new D1Reanalysis(batch.database).commitBatch(OWNER, [commitItem]);
+    const batchGuidance = batch.batches[0][1].bindings[3] as string;
+    expect(readReviewGuidance(batchGuidance).history.split("\n")).toEqual([
+      "[2026-11-05] 这个主人公是数学老师，男的，姓金。",
+      "[2026-11-05] 时间是请他们吃炸鸡",
+      "[2026-11-05] 这个老师是数学老师，金老师",
+      "[2026-11-05] 名人名言不合适，字数不够",
+    ]);
+    expect(guidanceForPrompt(batchGuidance)).toContain("以下全部有效；同一事项前后矛盾时以日期较新的为准");
+
+    const single = commitHarness({ essayRows });
+    await new D1Reanalysis(single.database).requestRevision(OWNER, REVIEW, { expectedRevision: 3, commonIssue: "", contentSuggestion: "结尾再点题" });
+    const singleGuidance = single.batches[0][1].bindings[3] as string;
+    expect(readReviewGuidance(singleGuidance).history).toBe(readReviewGuidance(batchGuidance).history);
+    expect(readReviewGuidance(singleGuidance).current).toBe("[内容建议]\n结尾再点题");
   });
 
   it("Queue 投递补偿只处理仍 queued 且仍由目标 job 占用的记录", async () => {
@@ -476,7 +531,7 @@ describe("D1Reanalysis", () => {
         assignmentId: ASSIGNMENT,
         expectedAssignmentUpdatedAt: new Date(1_700_000_000_000).toISOString(),
       },
-    ])).resolves.toEqual({
+    ], { applyCurrentFramework: true })).resolves.toEqual({
       submitted: [{ reviewId: REVIEW, jobId: "job-1", revision: 4 }],
       skipped: [{
         reviewId: "review-2",

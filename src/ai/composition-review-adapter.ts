@@ -1,4 +1,5 @@
 import { guidanceForPrompt, readReviewGuidance } from "../grading-opinions/review-guidance";
+import { ESSAY_FACT_RULE } from "./essay-fact-rule";
 import { buildModelParagraphReviews, deriveEssayFromParagraphReviews } from "../domain/essay-paragraph-sync";
 import { allocateSourceRanges, paragraphReviewUsesGroups } from "../domain/paragraph-review-groups";
 import OpenAI from "openai";
@@ -77,17 +78,6 @@ function applyParagraphRepair(
   return { ...report, paragraphReviews, rewrittenEssay: deriveEssayFromParagraphReviews(paragraphReviews) };
 }
 
-/**
- * 线上曾把原文的「英语老师」改写成「数学金老师」，并在同一篇里混用他／她。
- * 范文只能改写原文已有的事实，不能替学生补一个新的人物设定。
- */
-const ESSAY_FACT_RULE = [
-  "范文中的人物身份、称呼、性别代词、学科、姓氏、地点、时间和事件结局必须与原文完全一致，逐段核对后再输出。",
-  "原文没有写明的姓名、学科、职务、亲属关系或人物外貌，不得补写、不得改写、也不得从识别出的断句里推测；需要称呼时沿用原文的说法。",
-  "同一人物在全篇只能使用同一个称呼和同一个人称代词；原文用“她”时不得改成“他”。",
-  "结构要求中的写作手法（如名言引入、环境描写、伏笔、点题升华）必须完成，这些手法本身不算编造事实。",
-  "需要第三方人物或物件揭示真相时，优先由原文已出现的人物、物件或细节承担；不得新增有名有姓的人物或原文没有的关键经历。",
-].join("\n");
 
 const LIFE_LOGIC_REVIEW_RULE = [
   "原文涉及事件时，必须先核对时间、地点和行动能否同时成立。",
@@ -139,7 +129,7 @@ function teacherGuidanceRule(teacherGuidance?: string): string {
   if (!guidance) return "教师补充意见数据为空。";
   return [
     `教师补充意见数据：${JSON.stringify(guidance)}`,
-    "教师补充意见是本次必须落实的批改与改写任务；特别是[结构问题 / 共性问题]、[内容建议]和[修改要求]，必须反映在 rewrittenEssay 的实际正文中，不能只在点评中提到。只有[本轮要求]对写作方式的调整优先于当前作业配置；本篇历史和长期规则只作上下文，不得覆盖当前框架；与原文冲突时以原文事实为准。不得据此虚构关键经历或改变安全边界、JSON 输出格式。",
+    "教师补充意见是本次必须落实的批改与改写任务；特别是[结构问题 / 共性问题]、[内容建议]和[修改要求]，必须反映在 rewrittenEssay 的实际正文中，不能只在点评中提到。[本篇有效要求]与[本轮要求]同等有效、都必须落实，对写作方式的调整优先于当前作业配置；同一事项前后矛盾时以日期较新的为准，[本轮要求]最新；长期规则只作上下文，不得覆盖当前框架。与原文冲突时以原文事实为准，但老师在本篇要求中明确更正的人物、学科、姓氏、性别、情节除外（以老师为准）。不得据此虚构关键经历或改变安全边界、JSON 输出格式。",
     "本轮修改要求优先：若与初始配置中的字数分配、详略或结尾写法不同，以此处最新要求为准。输出前逐项核对实际正文；明确的字数上限/下限要实际计数并调整，要求逐字使用的句子必须原样作为独立完整句，不得加前缀、改字或只放在点评里。",
   ].join("\n");
 }

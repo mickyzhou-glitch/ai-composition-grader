@@ -113,7 +113,9 @@ describe("reanalysis contracts", () => {
       expectedAssignmentUpdatedAt: "2026-08-22T01:02:03.000Z",
     };
 
-    expect(batchReanalysisCommitInputSchema.parse({ items: [item] })).toEqual({ items: [item] });
+    expect(batchReanalysisCommitInputSchema.parse({ items: [item] })).toEqual({ items: [item], applyCurrentFramework: false });
+    expect(batchReanalysisCommitInputSchema.parse({ items: [item], applyCurrentFramework: true })).toEqual({ items: [item], applyCurrentFramework: true });
+    expect(batchReanalysisCommitInputSchema.safeParse({ items: [item], applyCurrentFramework: "yes" }).success).toBe(false);
     expect(batchReanalysisCommitInputSchema.safeParse({
       items: Array.from({ length: BATCH_REANALYSIS_LIMIT }, (_, index) => ({
         ...item,

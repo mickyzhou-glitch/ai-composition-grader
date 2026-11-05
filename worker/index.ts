@@ -565,15 +565,16 @@ export default {
     if (url.pathname === "/api/reviews/batch-reanalysis" && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       let items: Parameters<D1Reanalysis["commitBatch"]>[1];
+      let applyCurrentFramework = false;
       try {
-        items = batchReanalysisCommitInputSchema.parse(await request.json()).items;
+        ({ items, applyCurrentFramework } = batchReanalysisCommitInputSchema.parse(await request.json()));
       } catch (error) {
         return apiError("VALIDATION_ERROR", "请求参数无效", 400, validationErrorDetails(error));
       }
       const reanalysis = new D1Reanalysis(env.DB);
       let data: Awaited<ReturnType<D1Reanalysis["commitBatch"]>>;
       try {
-        data = await reanalysis.commitBatch(user.id, items);
+        data = await reanalysis.commitBatch(user.id, items, { applyCurrentFramework });
       } catch (error) {
         if (error instanceof D1ReanalysisBatchError) {
           return failBatchCommit(reanalysis, user.id, error);

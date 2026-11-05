@@ -69,7 +69,19 @@ describe("BatchReanalysisDialog", () => {
         assignmentId: "assignment-1",
         expectedAssignmentUpdatedAt: "2026-08-22T09:30:00.000Z",
       },
-    ]);
+    ], { applyCurrentFramework: false });
+  });
+
+  it("默认不覆盖题目设置，勾选后才提交 applyCurrentFramework", async () => {
+    const onConfirm = vi.fn();
+    const user = userEvent.setup();
+    render(<BatchReanalysisDialog {...baseProps} onConfirm={onConfirm} />);
+    const option = screen.getByRole("checkbox", { name: /同时用当前保存的题目框架覆盖/u });
+    expect(option).not.toBeChecked();
+    expect(screen.getByText(/默认不覆盖，沿用每篇作文原有的题目设置/u)).toBeInTheDocument();
+    await user.click(option);
+    await user.click(screen.getByRole("button", { name: "确认重新分析 2 篇" }));
+    expect(onConfirm).toHaveBeenCalledWith(expect.any(Array), { applyCurrentFramework: true });
   });
 
   it("提交中锁定关闭和确认，结果页展示部分成功", () => {

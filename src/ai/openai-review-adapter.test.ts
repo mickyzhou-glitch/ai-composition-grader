@@ -521,6 +521,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("归组覆盖原文第 1–2 段，共 2 个自然段");
     expect(serialized).toContain("全文当前逐段批改与改后草稿上下文");
     expect(serialized).toContain("严格按两段式改写，第一段略写铺垫");
+    expect(serialized).toContain("一律以老师的更正为准，视为识别错误");
   });
 
   it("noSourceParagraph 新增结构段单段重写不会因缺少原文自然段抛错，并保留 noSourceParagraph", async () => {

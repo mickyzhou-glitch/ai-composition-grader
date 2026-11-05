@@ -509,11 +509,11 @@ export function createBatchReanalysisRouteHandlers(dependencies: {
   return {
     async POST(request: Request) {
       try {
-        const { items } = batchReanalysisCommitInputSchema.parse(
+        const { items, applyCurrentFramework } = batchReanalysisCommitInputSchema.parse(
           await readReanalysisJson(request),
         );
         return okNoStore(
-          await dependencies.reanalysisService.commitBatch(dependencies.ownerId, items),
+          await dependencies.reanalysisService.commitBatch(dependencies.ownerId, items, { applyCurrentFramework }),
         );
       } catch (error) {
         return failureNoStore(error);

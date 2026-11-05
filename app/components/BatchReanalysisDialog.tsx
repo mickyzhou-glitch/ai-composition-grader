@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 
 import type {
   BatchReanalysisCommitItem,
@@ -17,7 +17,7 @@ export interface BatchReanalysisDialogProps {
   error: string;
   result: BatchReanalysisCommitResult | null;
   onClose(): void;
-  onConfirm(items: BatchReanalysisCommitItem[]): void;
+  onConfirm(items: BatchReanalysisCommitItem[], options: { applyCurrentFramework: boolean }): void;
 }
 
 function groupMatchedItems(items: BatchReanalysisMatchedItem[]) {
@@ -54,6 +54,12 @@ export function BatchReanalysisDialog({
   onConfirm,
 }: BatchReanalysisDialogProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
+  const [applyCurrentFramework, setApplyCurrentFramework] = useState(false);
+  // Each opening starts from the safe default: keep every review's own question setup.
+  function close() {
+    setApplyCurrentFramework(false);
+    onClose();
+  }
   const groups = useMemo(() => groupMatchedItems(preview?.matched ?? []), [preview]);
   const hasResult = result !== null;
   const matchedCount = preview?.matched.length ?? 0;
@@ -70,7 +76,7 @@ export function BatchReanalysisDialog({
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape" && !loading && !submitting) {
       event.preventDefault();
-      onClose();
+      close();
     }
   }
 
@@ -95,7 +101,7 @@ export function BatchReanalysisDialog({
             <p className="eyebrow">批量操作</p>
             <h2 id="batch-reanalysis-title">按最新框架重新分析</h2>
           </div>
-          <button ref={closeRef} type="button" className="button button--quiet" disabled={loading || submitting} onClick={onClose}>关闭</button>
+          <button ref={closeRef} type="button" className="button button--quiet" disabled={loading || submitting} onClick={close}>关闭</button>
         </div>
 
         {loading ? <div className="batch-reanalysis-loading" role="status">正在检查所选作文与最新框架…</div> : null}
@@ -116,6 +122,10 @@ export function BatchReanalysisDialog({
               </ul>
             </section>)}
           </div> : null}
+          <label className="batch-reanalysis-option">
+            <input type="checkbox" checked={applyCurrentFramework} disabled={submitting} onChange={(event) => setApplyCurrentFramework(event.target.checked)} />
+            <span>同时用当前保存的题目框架覆盖这些作文的题目设置{applyCurrentFramework ? "（框架在预览后又被修改的作文会被跳过）" : "（默认不覆盖，沿用每篇作文原有的题目设置）"}</span>
+          </label>
           {skippedCount > 0 ? <section className="batch-reanalysis-skipped" aria-labelledby="batch-reanalysis-skipped-title">
             <h3 id="batch-reanalysis-skipped-title">将跳过的作文</h3>
             <ul>{preview.skipped.map((item) => <li key={item.reviewId}><span>{item.studentName || "作文"}{item.title ? ` · ${item.title}` : ""}</span><span>{item.reason}</span></li>)}</ul>
@@ -131,9 +141,9 @@ export function BatchReanalysisDialog({
         </div> : null}
 
         <div className="batch-reanalysis-actions">
-          {hasResult ? <button type="button" className="button button--primary" onClick={onClose}>完成</button> : <>
-            <button type="button" className="button button--quiet" disabled={loading || submitting} onClick={onClose}>取消</button>
-            <button type="button" className="button button--primary" disabled={loading || submitting || items.length === 0} onClick={() => onConfirm(items)} aria-busy={submitting}>
+          {hasResult ? <button type="button" className="button button--primary" onClick={close}>完成</button> : <>
+            <button type="button" className="button button--quiet" disabled={loading || submitting} onClick={close}>取消</button>
+            <button type="button" className="button button--primary" disabled={loading || submitting || items.length === 0} onClick={() => onConfirm(items, { applyCurrentFramework })} aria-busy={submitting}>
               {submitting ? "正在提交…" : `确认重新分析 ${items.length} 篇`}
             </button>
           </>}
