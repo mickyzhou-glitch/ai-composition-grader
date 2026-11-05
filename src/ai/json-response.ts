@@ -13,7 +13,7 @@
 
 /** Strip a markdown fence, including the unclosed one models emit when they run long. */
 function stripJsonWrapper(content: string): string {
-  const text = content.replace(/^﻿/u, "").trim();
+  const text = content.replace(/^\uFEFF/u, "").trim();
   const fenced = text.match(/```[a-zA-Z]*\s*([\s\S]*?)\s*```/u);
   if (fenced?.[1]?.includes("{")) return fenced[1].trim();
   return text.replace(/^```[a-zA-Z]*\s*/u, "").replace(/\s*```$/u, "").trim();
@@ -130,7 +130,8 @@ function repairJsonText(text: string): string {
         delimiter = null;
         output += "\"";
       } else {
-        output += "\\\"";
+        // A full-width quote that does not end the string is prose; keep it as written.
+        output += char === "\"" ? "\\\"" : char;
       }
       continue;
     }

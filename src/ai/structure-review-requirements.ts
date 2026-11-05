@@ -7,6 +7,8 @@ const PARAGRAPH_NUMBERS: Record<string, number> = {
 };
 
 const PARAGRAPH_HEADING = /^(?:开头段|首段|结尾段|末段|第\s*[一二三四五六七八九十1-9])/u;
+/** Lines about the whole essay, written after the outline, are not part of the last paragraph's task. */
+const WHOLE_ESSAY_NOTE = /^(?:全文|全篇|整篇|通篇|总字数|总体|整体|注意|备注|另外|此外|其他|其它|字数|书写|卷面|标题|题目)/u;
 
 /**
  * Only treat an explicit, complete paragraph outline as one-to-one essay tasks.
@@ -15,11 +17,18 @@ const PARAGRAPH_HEADING = /^(?:开头段|首段|结尾段|末段|第\s*[一二�
  */
 export function parseParagraphStructurePlan(value: string, paragraphCount: number): string[] | null {
   const lines: string[] = [];
+  let attachDetails = false;
   for (const line of value.split(/\r?\n/u)) {
     const trimmed = line.trim().replace(/^(?:[-*]\s+|\d+[.、．)）]\s*)/u, "");
     if (!trimmed) continue;
-    if (PARAGRAPH_HEADING.test(trimmed)) lines.push(trimmed);
-    else if (lines.length > 0) lines[lines.length - 1] += `\n${trimmed}`;
+    if (PARAGRAPH_HEADING.test(trimmed)) {
+      lines.push(trimmed);
+      attachDetails = true;
+    } else if (WHOLE_ESSAY_NOTE.test(trimmed)) {
+      attachDetails = false;
+    } else if (attachDetails) {
+      lines[lines.length - 1] += `\n${trimmed}`;
+    }
   }
   if (lines.length !== paragraphCount || paragraphCount < 2) return null;
   const tasks = lines.map((line, index) => {

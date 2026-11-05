@@ -65,8 +65,10 @@ export async function completionJsonWithFinish(
     messages: [...request.messages, { role: "user", content: JSON_RETRY_INSTRUCTION }],
   });
   // Keep the first answer when the retry is no better, so the repair step still
-  // sees the richer response and the failure keeps its json_parse category.
-  return retry.truncated || tryParseJsonResponse(retry.content).ok ? retry : first;
+  // sees the richer response and the failure keeps its json_parse category. A
+  // truncated retry is no better: returning it would turn a json_parse failure
+  // into a truncation retry at the same output cap.
+  return !retry.truncated && tryParseJsonResponse(retry.content).ok ? retry : first;
 }
 
 export async function completionWithFinish(

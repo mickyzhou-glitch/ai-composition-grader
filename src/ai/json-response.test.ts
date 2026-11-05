@@ -66,6 +66,20 @@ describe("tryParseJsonResponse", () => {
       .toEqual({ ok: true, value: { advice: "补上伏笔", revisedText: "正文" } });
   });
 
+  it("中文引号包裹的字符串里，不收尾的中文右引号保持原样", () => {
+    expect(tryParseJsonResponse("{“advice”：“写出”抑“的伏笔”，“revisedText”：“正文”}"))
+      .toEqual({ ok: true, value: { advice: "写出”抑“的伏笔", revisedText: "正文" } });
+  });
+
+  it("带 BOM 的合法 JSON 原样解析", () => {
+    expect(tryParseJsonResponse('\uFEFF{"a":"x, y"}')).toEqual({ ok: true, value: { a: "x, y" } });
+  });
+
+  it("合法 JSON 中的中文标点、引号和注释样文字不被改动", () => {
+    const value = { advice: "他说：“好，”然后笑了。// 不是注释", list: ["a,", "}"] };
+    expect(tryParseJsonResponse(JSON.stringify(value))).toEqual({ ok: true, value });
+  });
+
   it.each([
     ['{"a":1,"b":[1,2,],}', { a: 1, b: [1, 2] }],
     ['{\n  // 第一段\n  "a":1,\n  /* 第二段 */ "b":2\n}', { a: 1, b: 2 }],

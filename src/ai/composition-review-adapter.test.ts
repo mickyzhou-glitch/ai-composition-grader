@@ -386,6 +386,43 @@ describe("CompositionReviewAdapter", () => {
     expect(retry[0]!.content).toBe(requestAt(harness.create).messages[0].content);
   });
 
+  it("解析重试被截断时保留第一次回答，走原有修复而不是误报截断", async () => {
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: "抱歉，我无法完成这个任务。" } }] } as never)
+      .mockResolvedValueOnce({ choices: [{ message: { content: "{\"report\":" }, finish_reason: "length" }] } as never)
+      .mockResolvedValueOnce(completion(validResult));
+
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(harness.create).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(requestAt(harness.create, 2).messages)).toContain("invalidResponse");
+  });
+
+  it("结构复核不把建议字数或详略篇幅当作不符合依据", async () => {
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(validResult))
+      .mockResolvedValueOnce(completion({
+        checks: report.rewrittenEssay!.map((_, index) => ({ paragraph: index + 1, follows: true, reason: "符合。" })),
+      }));
+
+    await harness.adapter.analyzeText({ config: headingAndDetailConfig, paragraphs, studentName: "小艾" });
+
+    const audit = requestAt(harness.create, 1).messages[0].content;
+    expect(audit).toContain("建议字数和详略篇幅只供写作参考，不作为不符合的依据");
+    expect(audit).not.toContain("篇幅相当即为不符合");
+  });
+
+  it("事实规则不禁止名言引入等结构手法", async () => {
+    const harness = setup();
+    await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+
+    const generation = requestAt(harness.create).messages[0].content;
+    expect(generation).toContain("名言引入、环境描写、伏笔、点题升华）必须完成");
+    expect(generation).not.toContain("如名言、第三方证人、物件）只能用原文已有的材料补足");
+  });
+
   it("重试后仍不是 JSON 时才报 json_parse", async () => {
     const harness = setup({ response: undefined });
     harness.create.mockResolvedValue({ choices: [{ message: { content: "抱歉，我无法完成这个任务。" } }] } as never);

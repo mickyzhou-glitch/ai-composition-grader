@@ -50,6 +50,19 @@ describe("explicit paragraph structure plan", () => {
     expect(plan!.join("\n")).not.toContain("文章必须严格遵循");
   });
 
+  it("提纲后面的全文说明不并入最后一段任务", () => {
+    const plan = parseParagraphStructurePlan([
+      "第一段：开头点题",
+      "要求：用一句名言引入。",
+      "第二段：结尾升华",
+      "要求：呼应开头。",
+      "全文不少于600字，注意详略得当。",
+      "书写工整。",
+    ].join("\n"), 2);
+
+    expect(plan).toEqual(["第一段：开头点题\n要求：用一句名言引入。", "第二段：结尾升华\n要求：呼应开头。"]);
+  });
+
   it("不把一般编号评分点误当作逐段任务", () => {
     expect(parseParagraphStructurePlan(numberedRequirements, 3)).toBeNull();
     expect(parseParagraphStructurePlan("第一段：开头。\n第三段：结尾。", 2)).toBeNull();
