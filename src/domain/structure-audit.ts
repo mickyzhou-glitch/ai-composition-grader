@@ -40,7 +40,9 @@ export const structureAuditSchema = z.object({
   version: z.literal(1),
   passed: z.boolean(),
   repairAttempts: z.number().int().nonnegative(),
-  rounds: z.array(structureAuditRoundSchema).min(1),
+  rounds: z.array(structureAuditRoundSchema),
+  /** 复核或返修环节自身出错（模型返回无效）时的说明；结果仍保存，供老师人工核对。 */
+  note: z.string().max(500).optional(),
 }).strict();
 
 export type StructureAuditElement = z.infer<typeof structureAuditElementSchema>;

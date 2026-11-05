@@ -6,6 +6,7 @@ import {
   NO_LEAK_ELEMENT,
   OPENING_FORESHADOW_NOTE,
   OPENING_FUNCTION_ELEMENT,
+  OPENING_FUNCTION_SCENE_ELEMENT,
   OPENING_NO_SUPPRESSION_ELEMENT,
   describeStructureTask,
   evidenceAppearsIn,
@@ -15,7 +16,9 @@ import {
   parseTaskCharacterTarget,
   structureAuditPrompt,
   structureAuditResponseSchema,
+  structureFailureCount,
   structureRepairConstraints,
+  structureRepairFeedback,
   type StructureTask,
 } from "./structure-audit";
 import { structureAuditRoundSchema } from "../domain/structure-audit";
@@ -204,5 +207,70 @@ describe("辅助解析", () => {
   it("证据忽略标点，可用省略号分多处摘录", () => {
     expect(evidenceAppearsIn("书山有路勤为径……金老师", "“书山有路勤为径。”这句话让我想起了金老师。")).toBe(true);
     expect(evidenceAppearsIn("学海无涯", "书山有路勤为径。")).toBe(false);
+  });
+});
+
+/** 家奇 2026-11-05 订正后的作业配置文案（线上已同步）。 */
+const ZHX_REQUIREMENTS_REVISED = ZHX_REQUIREMENTS
+  .replace("要求： 使用名人名言引入；埋下“抑”的伏笔或设置悬念；点出特定人物。", "要求： 使用名人名言引入，并简短解释名言；点出特定人物；可用一句话过渡（点到即可，不在本段展开“抑”）。")
+  .replace("呼应开头的环境元素并赋予新的情感意义", "呼应前文并赋予新的情感意义");
+
+describe("家奇订正：文案与返修意见", () => {
+  const essay = [han(100), han(100), han(200), han(100), han(100)];
+
+  it("订正后的配置：第一段不再要求埋抑的伏笔，第五段只要求呼应前文", () => {
+    const tasks = parseStructureTasks(ZHX_REQUIREMENTS_REVISED, 5)!;
+    expect(tasks[0]!.elements).toContain("使用名人名言引入，并简短解释名言");
+    expect(tasks[0]!.elements.filter((item) => !tasks[0]!.systemRules.includes(item)).some((item) => item.includes("伏笔"))).toBe(false);
+    expect(tasks[0]!.elements).toContain(OPENING_NO_SUPPRESSION_ELEMENT);
+    expect(describeStructureTask(tasks[0]!)).not.toContain(OPENING_FORESHADOW_NOTE);
+    expect(tasks[4]!.elements).toContain("呼应前文并赋予新的情感意义");
+    expect(tasks[4]!.elements.join("")).not.toContain("环境元素");
+  });
+
+  it("复核口径：呼应前文不强制环境；不提前写真相允许一句过渡", () => {
+    const prompt = structureAuditPrompt(parseStructureTasks(ZHX_REQUIREMENTS_REVISED, 5)!, "", false);
+    expect(prompt).toContain("“呼应前文”要求前文确实有被呼应的内容");
+    expect(prompt).not.toContain("呼应开头的环境元素");
+    expect(NO_LEAK_ELEMENT).toContain("允许一句过渡或点到");
+    expect(NO_LEAK_ELEMENT).toContain("禁止成段或两句以上");
+  });
+
+  it("第一段功能要素是限定性要求：met 时不要求摘抄原句（李妍霖案例）", () => {
+    const tasks = parseStructureTasks(ZHX_REQUIREMENTS, 5)!;
+    const response = reply(tasks, essay);
+    const functionId = tasks[0]!.elements.indexOf(OPENING_FUNCTION_ELEMENT) + 1;
+    response.paragraphs[0]!.elements.find((item) => item.id === functionId)!.evidence = "无";
+    expect(judgeStructureAudit(essay, tasks, response, { round: 0, allowSuperseded: false }).passed).toBe(true);
+  });
+
+  it("配置允许生活化场景引入时，第一段功能要素不强制名言", () => {
+    const scene = ZHX_REQUIREMENTS.replace("使用名人名言引入", "使用生活化场景或名人名言引入");
+    const tasks = parseStructureTasks(scene, 5)!;
+    expect(tasks[0]!.systemRules[0]).toBe(OPENING_FUNCTION_SCENE_ELEMENT);
+  });
+
+  it("返修意见逐条带要求、问题类型、复核原句/缺口、改法和当前正文", () => {
+    const tasks = parseStructureTasks(ZHX_REQUIREMENTS_REVISED, 5)!;
+    const bad = [han(100), han(100), han(200), han(100), han(40)];
+    const response = reply(tasks, bad, { 3: [NO_LEAK_ELEMENT], 5: ["呼应前文并赋予新的情感意义"] });
+    const round = judgeStructureAudit(bad, tasks, response, { round: 0, allowSuperseded: false });
+    const feedback = structureRepairFeedback(round, bad, tasks);
+    expect(feedback.map((item) => item.paragraph)).toEqual([3, 5]);
+    expect(feedback[0]).toMatchObject({ currentText: bad[2], actualHanCharacters: 200, allowedHanCharacters: "140-260" });
+    expect(feedback[0]!.issues).toEqual([expect.objectContaining({ requirement: NO_LEAK_ELEMENT, problem: "violation", auditorNote: "违规原句" })]);
+    expect(feedback[1]!.task).toContain("呼应前文");
+    expect(feedback[1]!.issues.map((item) => item.problem)).toEqual(["missing", "length"]);
+    expect(feedback[1]!.issues[1]!.fix).toBe("扩写到 70-130 个汉字");
+    expect(structureFailureCount(round)).toBe(3);
+  });
+
+  it("met 但正文找不到证据时，返修意见指出找不到的句子", () => {
+    const tasks = parseStructureTasks(ZHX_REQUIREMENTS_REVISED, 5)!;
+    const response = reply(tasks, essay, {}, { 2: "不存在的句子" });
+    const round = judgeStructureAudit(essay, tasks, response, { round: 0, allowSuperseded: false });
+    const [item] = structureRepairFeedback(round, essay, tasks);
+    expect(item!.paragraph).toBe(2);
+    expect(item!.issues[0]).toMatchObject({ problem: "no_evidence", auditorNote: expect.stringContaining("不存在的句子") });
   });
 });

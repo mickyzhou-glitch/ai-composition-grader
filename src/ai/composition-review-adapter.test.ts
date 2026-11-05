@@ -257,7 +257,15 @@ describe("CompositionReviewAdapter", () => {
     expect(requestAt(harness.create, 1).messages[0].content).toContain("点明礼物是什么和珍贵的原因");
     const repairInput = JSON.parse(requestAt(harness.create, 2).messages[1].content);
     expect(repairInput.affectedParagraphs).toEqual([1]);
-    expect(repairInput.hardConstraints[0].mustFix[0]).toContain("点明礼物是什么和珍贵的原因");
+    expect(repairInput.auditFeedback).toHaveLength(1);
+    expect(repairInput.auditFeedback[0]).toMatchObject({ paragraph: 1, currentText: initial[0], auditorConclusion: "复核" });
+    expect(repairInput.auditFeedback[0].task).toContain("点明礼物是什么和珍贵的原因");
+    expect(repairInput.auditFeedback[0].issues[0]).toMatchObject({
+      requirement: expect.stringContaining("点明礼物是什么和珍贵的原因"),
+      problem: "missing",
+      auditorNote: expect.stringContaining("缺口"),
+    });
+    expect(requestAt(harness.create, 2).messages[0].content).toContain("auditFeedback 是独立复核员对当前范文的逐条不合格意见");
     expect(result.report.structureAudit).toMatchObject({ version: 1, passed: true, repairAttempts: 1 });
     expect(result.report.structureAudit!.rounds[0]!.paragraphs[0]).toMatchObject({ paragraph: 1, pass: false });
     expect(result.report.structureAudit!.rounds[1]!.passed).toBe(true);
@@ -277,7 +285,7 @@ describe("CompositionReviewAdapter", () => {
 
     const repairInput = JSON.parse(requestAt(harness.create, 2).messages[1].content);
     expect(repairInput.affectedParagraphs).toEqual([3]);
-    expect(repairInput.hardConstraints[0].mustFix[0]).toMatch(/实际 \d+ 个汉字.*扩写/u);
+    expect(repairInput.auditFeedback[0].issues).toEqual([expect.objectContaining({ problem: "length", auditorNote: expect.stringMatching(/实际 \d+ 个汉字/u), fix: expect.stringContaining("扩写到 140-325") })]);
     expect(result.report.rewrittenEssay![2]).toBe(fixed[2]);
     expect(result.report.structureAudit!.rounds[0]!.paragraphs[2]!.length).toMatchObject({ pass: false, minimum: 140, maximum: 325 });
   });
@@ -353,7 +361,7 @@ describe("CompositionReviewAdapter", () => {
     expect(generation).not.toContain("本篇历史和长期规则只作上下文");
   });
 
-  it("逐段结构复核在有限次返修后仍不符合时拒绝保存范文，错误码带段号", async () => {
+  it("逐段结构复核在有限次返修后仍不符合时不让分析失败：保留结果并标记未通过", async () => {
     const harness = setup();
     const essay = sizedEssay([110, 110, 220, 110, 110]);
     const failedCheck = auditReply(paragraphPlanConfig.structureRequirements, essay, { 1: [1] });
@@ -366,9 +374,58 @@ describe("CompositionReviewAdapter", () => {
       .mockResolvedValueOnce(repairReply)
       .mockResolvedValueOnce(completion(failedCheck));
 
-    await expect(harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" }))
-      .rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "rewritten_essay_structure_p1" });
+    const result = await harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
     expect(harness.create).toHaveBeenCalledTimes(6);
+    expect(result.report.rewrittenEssay).toEqual(essay);
+    expect(result.report.structureAudit).toMatchObject({ passed: false, repairAttempts: 2 });
+    expect(result.report.structureAudit!.rounds).toHaveLength(3);
+    expect(result.report.structureAudit!.note).toContain("自动返修 2 次后仍有段落未通过结构复核");
+    // 每次返修都带着上一轮复核的逐条意见。
+    for (const index of [2, 4]) {
+      expect(JSON.parse(requestAt(harness.create, index).messages[1].content).auditFeedback[0].issues[0].problem).toBe("missing");
+    }
+  });
+
+  it("返修输出无效时保留当前版本、用同一份意见再修，修好后再复核通过", async () => {
+    const harness = setup();
+    const essay = sizedEssay([110, 110, 220, 110, 110]);
+    const fixed = sizedEssay([110, 110, 220, 110, 110], "改");
+    harness.create
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: essay } }))
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, essay, { 2: [1] })))
+      .mockResolvedValueOnce(completion({ broken: true }))
+      .mockResolvedValueOnce(completion({ paragraphReviews: fixed.map((revisedText) => ({ suggestions: [{ advice: "补写礼物样子" }], revisedText })) }))
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, [essay[0]!, fixed[1]!, ...essay.slice(2)])));
+
+    const result = await harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
+
+    expect(harness.create).toHaveBeenCalledTimes(5);
+    expect(JSON.parse(requestAt(harness.create, 3).messages[1].content).auditFeedback[0].paragraph).toBe(2);
+    expect(result.report.rewrittenEssay![1]).toBe(fixed[1]);
+    expect(result.report.structureAudit).toMatchObject({ passed: true, repairAttempts: 2 });
+    expect(result.report.structureAudit!.rounds).toHaveLength(2);
+    expect(result.report.structureAudit!.note).toContain("第 1 次返修返回无效");
+  });
+
+  it("复核返回无效时重试一次；两次都无效也保存结果并标记未完成复核", async () => {
+    const harness = setup();
+    const essay = sizedEssay([110, 110, 220, 110, 110]);
+    harness.create
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: essay } }))
+      .mockResolvedValueOnce(completion({ nope: 1 }))
+      .mockResolvedValueOnce(completion(auditReply(paragraphPlanConfig.structureRequirements, essay)));
+    const retried = await harness.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
+    expect(retried.report.structureAudit).toMatchObject({ passed: true, repairAttempts: 0 });
+
+    const second = setup();
+    second.create
+      .mockResolvedValueOnce(completion({ ...validResult, report: { ...report, rewrittenEssay: essay } }))
+      .mockResolvedValueOnce(completion({ nope: 1 }))
+      .mockResolvedValueOnce(completion({ nope: 2 }));
+    const unaudited = await second.adapter.analyzeText({ config: paragraphPlanConfig, paragraphs, studentName: "小艾" });
+    expect(unaudited.report.rewrittenEssay).toEqual(essay);
+    expect(unaudited.report.structureAudit).toMatchObject({ passed: false, repairAttempts: 0, rounds: [] });
+    expect(unaudited.report.structureAudit!.note).toContain("结构复核返回无效");
   });
 
   it.each([
@@ -510,7 +567,12 @@ describe("CompositionReviewAdapter", () => {
     expect(repair.messages[0].content).toContain("功能优先于凑抑");
     const repairInput = JSON.parse(repair.messages[1].content);
     expect(repairInput.affectedParagraphs).toEqual([1]);
-    expect(repairInput.hardConstraints[0].mustFix[0]).toContain("违反「第一段不得展开人物的「抑」");
+    expect(repairInput.auditFeedback[0].issues[0]).toMatchObject({
+      requirement: OPENING_NO_SUPPRESSION_ELEMENT,
+      problem: "violation",
+      auditorNote: `缺口：${OPENING_NO_SUPPRESSION_ELEMENT}`,
+      fix: expect.stringContaining("删去或压缩违规句子"),
+    });
     expect(result.report.rewrittenEssay![0]).toBe(fixed[0]);
     expect(result.report.structureAudit!.repairAttempts).toBe(1);
   });

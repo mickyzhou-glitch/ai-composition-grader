@@ -14,19 +14,21 @@ export const LENGTH_DEVIATION_RATIO = 0.3;
 export const MAX_STRUCTURE_REPAIRS = 2;
 
 /** 系统为分阶段结构追加的要素：每段只完成本段任务。 */
-export const NO_LEAK_ELEMENT = "只完成本段任务，不提前写出后续段落的核心内容（如转折、真相、点明道理或升华；按要求埋的伏笔、悬念除外）";
+export const NO_LEAK_ELEMENT = "只完成本段任务，不提前展开后续段落的核心内容（如转折、真相、点明道理或升华）：允许一句过渡或点到，禁止成段或两句以上讲真相、道理（按要求埋的伏笔、悬念除外）";
 
 /**
  * 家奇订正（2026-11-05）：欲扬先抑结构里，第一段只写名言、简单解释名言、点出人物，
  * 最多一句过渡；「抑」主要放在第二段。很多范文把开头近一半篇幅用来写「抑」，必须判不合格。
  */
 export const OPENING_FUNCTION_ELEMENT = "第一段只做开头功能：写名人名言、简单解释这句名言、点出人物，最多再加一句过渡";
+/** 配置允许「生活化场景或名人名言」引入时的开头功能口径。 */
+export const OPENING_FUNCTION_SCENE_ELEMENT = "第一段只做开头功能：用名人名言（并简单解释）或生活化场景引入、点出人物，最多再加一句过渡";
 export const OPENING_NO_SUPPRESSION_ELEMENT = "第一段不得展开人物的「抑」：人物缺点、误解、外貌邋遢、脾气古怪、他人或群体的排斥冷落等最多用一句点到（作伏笔），不能成段或用两句以上描写，「抑」放在第二段";
 /** 配置第一段写了「埋下抑的伏笔」时的统一理解：点到即可，不是在第一段展开抑的铺垫。 */
 export const OPENING_FORESHADOW_NOTE = "（按教师订正：点到即可，最多一句，不在第一段展开「抑」的铺垫）";
 
 /** 这些要素是禁止性要求：met 时无需摘抄落实句，unmet 时摘抄违规原句。 */
-const PROHIBITION_ELEMENTS = new Set<string>([NO_LEAK_ELEMENT, OPENING_NO_SUPPRESSION_ELEMENT]);
+const PROHIBITION_ELEMENTS = new Set<string>([NO_LEAK_ELEMENT, OPENING_NO_SUPPRESSION_ELEMENT, OPENING_FUNCTION_ELEMENT, OPENING_FUNCTION_SCENE_ELEMENT]);
 
 export interface StructureCharacterTarget {
   /** 教师原话，如「约100字」「100-150字」。 */
@@ -96,8 +98,8 @@ export function parseStructureTasks(structureRequirements: string, paragraphCoun
     const systemRules: string[] = [];
     let elements = extractTaskElements(task);
     if (index === 0 && suppressionLater) {
-      elements = elements.map((element) => element.includes("抑") ? `${element}${OPENING_FORESHADOW_NOTE}` : element);
-      if (/名言|名句|格言|警句/u.test(task)) systemRules.push(OPENING_FUNCTION_ELEMENT);
+      elements = elements.map((element) => element.includes("抑") && element.includes("伏笔") ? `${element}${OPENING_FORESHADOW_NOTE}` : element);
+      if (/名言|名句|格言|警句/u.test(task)) systemRules.push(/场景/u.test(task) ? OPENING_FUNCTION_SCENE_ELEMENT : OPENING_FUNCTION_ELEMENT);
       systemRules.push(OPENING_NO_SUPPRESSION_ELEMENT);
     }
     if (plan.length >= 3 && index < plan.length - 1) systemRules.push(NO_LEAK_ELEMENT);
@@ -113,7 +115,7 @@ export function isProhibitionElement(requirement: string): boolean {
 
 /** 生成/返修提示词里该段的完整任务：教师原文 + 系统追加要求（含第一段口径）。 */
 export function describeStructureTask(task: StructureTask): string {
-  const foreshadow = task.paragraph === 1 && task.systemRules.includes(OPENING_NO_SUPPRESSION_ELEMENT) && task.task.includes("抑")
+  const foreshadow = task.paragraph === 1 && task.systemRules.includes(OPENING_NO_SUPPRESSION_ELEMENT) && /伏笔/u.test(task.task)
     ? `\n其中「抑」的伏笔${OPENING_FORESHADOW_NOTE}。`
     : "";
   return `${task.task}${foreshadow}${task.systemRules.length ? `\n本段另须：${task.systemRules.join("；")}。` : ""}`;
@@ -186,7 +188,7 @@ export function judgeStructureAudit(
       if (status === "unmet") {
         failures.push(prohibition
           ? `违反「${requirement}」${evidence ? `（违规原句：${evidence}）` : ""}，必须删减或移到后文，本段改回只做规定功能`
-          : `未落实「${requirement}」${evidence ? `（复核依据：${evidence}）` : ""}`);
+          : `未落实「${requirement}」${evidence ? `（复核指出：${evidence}）` : ""}，必须在本段正文写出落实这一要求的明确句子`);
       } else if (status === "met" && !evidenceFound) {
         failures.push(`「${requirement}」在本段正文中找不到可核对的落实句子，必须用明确的句子写出`);
       }
@@ -219,6 +221,88 @@ export function structureRepairConstraints(round: StructureAuditRound): Array<{ 
   return round.paragraphs.filter((item) => !item.pass).map((item) => ({ paragraph: item.paragraph, mustFix: item.failures }));
 }
 
+export interface StructureRepairIssue {
+  requirement: string;
+  /** missing=没写到；violation=写了不该写的；no_evidence=复核说写了但正文找不到；length=字数越界。 */
+  problem: "missing" | "violation" | "no_evidence" | "length";
+  /** 复核摘抄的范文原句，或复核指出缺了什么。 */
+  auditorNote: string;
+  fix: string;
+}
+
+export interface StructureRepairFeedback {
+  paragraph: number;
+  task: string;
+  currentText: string;
+  actualHanCharacters: number;
+  allowedHanCharacters?: string;
+  auditorConclusion: string;
+  issues: StructureRepairIssue[];
+}
+
+/**
+ * 交给写范文模型的逐条返修意见：每段带当前正文、复核结论，
+ * 每条失败要素写明是缺失还是违规、复核摘抄的原句/缺口，以及怎么改。
+ */
+export function structureRepairFeedback(
+  round: StructureAuditRound,
+  essay: readonly string[],
+  tasks: readonly StructureTask[],
+): StructureRepairFeedback[] {
+  return round.paragraphs.filter((item) => !item.pass).map((item) => {
+    const task = tasks[item.paragraph - 1];
+    const text = essay[item.paragraph - 1] ?? "";
+    const issues: StructureRepairIssue[] = [];
+    for (const element of item.elements) {
+      const prohibition = isProhibitionElement(element.requirement);
+      if (element.status === "unmet") {
+        issues.push(prohibition
+          ? {
+            requirement: element.requirement,
+            problem: "violation",
+            auditorNote: element.evidence || "复核判定违规，未摘抄原句",
+            fix: "删去或压缩违规句子（属于后续段落的内容移到对应段），本段只保留规定功能，其余句子不必重写",
+          }
+          : {
+            requirement: element.requirement,
+            problem: "missing",
+            auditorNote: element.evidence || "复核判定未写到",
+            fix: "在本段补写一两句明确落实这一要求的句子（尽量用原文已有的事实），或改写复核指出的句子",
+          });
+      } else if (element.status === "met" && !element.evidenceFound) {
+        issues.push({
+          requirement: element.requirement,
+          problem: "no_evidence",
+          auditorNote: element.evidence ? `复核给出的句子「${element.evidence}」在本段正文里找不到` : "复核未摘抄到落实句子",
+          fix: "用一句明确、可直接看出落实了这一要求的句子写出来",
+        });
+      }
+    }
+    if (item.length && !item.length.pass) {
+      issues.push({
+        requirement: `本段字数：教师要求${item.length.requirement}`,
+        problem: "length",
+        auditorNote: `实际 ${item.length.actual} 个汉字（不含标点）`,
+        fix: `${item.length.actual > item.length.maximum ? "压缩" : "扩写"}到 ${item.length.minimum}-${item.length.maximum} 个汉字`,
+      });
+    }
+    return {
+      paragraph: item.paragraph,
+      task: task ? describeStructureTask(task) : "",
+      currentText: text,
+      actualHanCharacters: countHanCharacters(text),
+      ...(item.length ? { allowedHanCharacters: `${item.length.minimum}-${item.length.maximum}` } : {}),
+      auditorConclusion: item.reason,
+      issues,
+    };
+  });
+}
+
+/** 未通过条目总数，用于在多轮返修中挑出最接近合格的版本。 */
+export function structureFailureCount(round: StructureAuditRound): number {
+  return round.paragraphs.reduce((sum, item) => sum + item.failures.length, 0);
+}
+
 export function structureAuditPrompt(tasks: readonly StructureTask[], guidanceRule: string, allowSuperseded: boolean): string {
   return [
     "你是独立、严格的作文结构复核员。只核对范文每一自然段是否实际完成对应的教师任务，不评价学生原文或诊断文字。",
@@ -233,7 +317,7 @@ export function structureAuditPrompt(tasks: readonly StructureTask[], guidanceRu
       ? "只有教师补充意见明确替代了某个要素时，该要素 status 才能写 superseded，evidence 摘录教师意见原话；没有明确替代的要素不得用 superseded。"
       : "没有教师补充意见，不得使用 superseded。",
     "必须逐段、逐要素判断，每段返回该段全部要素。仅有正确段数、提到关键词、或把该任务写在别段，都不算 met。",
-    "要素里带有限定的必须按限定判断：例如“名言的核心要与文章内容一致”要核对名言本身的意思与全文主旨是否一致，不一致或意思相反即 unmet；“保留余味”时直接说出道理即 unmet；“描述人物现状”要写到该人物本人的现状；“呼应开头的环境元素”要求开头确实有该环境元素。",
+    "要素里带有限定的必须按限定判断：例如“名言的核心要与文章内容一致”要核对名言本身的意思与全文主旨是否一致，不一致或意思相反即 unmet；“保留余味”时直接说出道理即 unmet；“描述人物现状”要写到该人物本人的现状；“呼应前文”要求前文确实有被呼应的内容。",
     ...(tasks.some((task) => task.elements.includes(OPENING_NO_SUPPRESSION_ELEMENT))
       ? [
         "第一段口径（教师订正，优先于配置原文）：第一段只写名人名言、简单解释名言、点出人物，最多一句过渡。配置里「埋下抑的伏笔」只指点到即可，不是在第一段展开抑的铺垫；「抑」的铺垫属于第二段。",
