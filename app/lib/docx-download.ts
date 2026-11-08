@@ -34,6 +34,7 @@ import {
   type ExportReportPage,
   type ExportReviewSource,
   type ExportRunStyle,
+  type ExportTextRun,
 } from "./export-report-content";
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -142,23 +143,28 @@ async function loadOriginalImage(reviewId: string, image: ExportImage) {
 }
 
 const DOCX_UNDERLINE = {
-  wave: UnderlineType.WAVE,
-  double: UnderlineType.DOUBLE,
   single: UnderlineType.SINGLE,
+  wave: UnderlineType.WAVE,
+  dotDotDash: UnderlineType.DOTDOTDASH,
 } as const satisfies Record<RevisionUnderline, (typeof UnderlineType)[keyof typeof UnderlineType]>;
 
-export function runOptions(style: ExportRunStyle, underline: RevisionUnderline = "single"): {
+export function runOptions(style: ExportRunStyle, underline?: RevisionUnderline): {
   bold: boolean;
   color: string;
   underline?: { type: (typeof DOCX_UNDERLINE)[RevisionUnderline]; color: string };
 } {
-  if (style === "suggestion") return { bold: true, color: "C00000" };
+  if (style === "suggestion") {
+    // 修改动作只在与改后全段落实句对应时才划线，线型相同。
+    return underline
+      ? { bold: true, color: "C00000", underline: { type: DOCX_UNDERLINE[underline], color: "C00000" } }
+      : { bold: true, color: "C00000" };
+  }
   if (style === "demonstration") return { bold: true, color: "000000" };
   if (style === "changed") {
     return {
       bold: false,
       color: "1F4E78",
-      underline: { type: DOCX_UNDERLINE[underline], color: "1F4E78" },
+      underline: { type: DOCX_UNDERLINE[underline ?? "single"], color: "1F4E78" },
     };
   }
   return { bold: false, color: "000000" };
@@ -207,8 +213,22 @@ export function chooseBoxHalfPoints(
   return MIN_BOX_HALF_POINTS;
 }
 
-function suggestionLines(text: string) {
-  return text.split(/\r\n?|\n|\u2028|\u2029/u).map((line) => line.trimEnd()).filter((line) => line.length > 0);
+/** 修改动作按换行拆成逐行，每行保留各自的划线片段；空行丢弃。 */
+function suggestionLines(runs: ExportTextRun[]) {
+  const lines: ExportTextRun[][] = [[]];
+  for (const run of runs) {
+    run.text.split(/\r\n?|\n|\u2028|\u2029/u).forEach((part, index) => {
+      if (index > 0) lines.push([]);
+      if (part) lines.at(-1)!.push({ ...run, text: part });
+    });
+  }
+  return lines
+    .map((line) => {
+      const last = line.at(-1);
+      if (last) last.text = last.text.trimEnd();
+      return line.filter((run) => run.text.length > 0);
+    })
+    .filter((line) => line.length > 0);
 }
 
 /** 文本框里的段落：显式左对齐 + 带 lineRule 的行距，不继承 WPS 默认的两端对齐。 */
@@ -222,14 +242,14 @@ function boxTextParagraph(children: TextRun[], before: number, after: number) {
 
 function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: number) {
   const runs = exportParagraphRuns(paragraph);
-  const suggestion = runs.find((run) => run.style === "suggestion");
+  const suggestions = runs.filter((run) => run.style === "suggestion");
   const remainder = runs.filter((run) => run.style !== "suggestion");
-  const children = suggestion
+  const children = suggestions.length
     ? [
       // 建议每条编号各占一个 w:p，不用 w:br 软换行：两端对齐的段落里，软换行前的一行
       // 会被 Word/WPS 拉满整行宽，汉字之间出现很大的间距（像分散对齐）。
-      ...suggestionLines(suggestion.text).map((line, index, lines) => boxTextParagraph(
-        textRuns(line, suggestion.style, halfPoints),
+      ...suggestionLines(suggestions).map((line, index, lines) => boxTextParagraph(
+        line.flatMap((run) => textRuns(run.text, run.style, halfPoints, run.underline)),
         index === 0 ? 40 : 0,
         index === lines.length - 1 ? 40 : 0,
       )),

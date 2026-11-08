@@ -147,7 +147,7 @@ async function loadOriginalImage(reviewId: string, imageId: number): Promise<Loa
 
 function styledRun(run: ExportTextRun): RichTextRun {
   if (run.style === "suggestion") {
-    return { text: run.text, color: SUGGESTION_COLOR, weight: 700, underline: null };
+    return { text: run.text, color: SUGGESTION_COLOR, weight: 700, underline: run.underline ?? null };
   }
   if (run.style === "demonstration") {
     return { text: run.text, color: TEXT_COLOR, weight: 700, underline: null };
@@ -211,7 +211,8 @@ function availableTextRegions(image: Rectangle): Rectangle[] {
 }
 
 /**
- * 改后全段线型：单线一条直线；双线上下两条细直线；波浪线用二次曲线连成的正弦波。
+ * 改后全段与修改动作线型：单线一条直线；波浪线用二次曲线连成的正弦波；
+ * 点划线按「长划、点、点」循环（与 Word 的 dotDotDash 一致）。
  * baseline 是原单下划线所在高度，三种线都落在行距内，不压到下一行文字。
  */
 export function drawUnderline(
@@ -225,15 +226,25 @@ export function drawUnderline(
 ) {
   context.strokeStyle = color;
   const lineWidth = Math.max(0.55, fontPt * 0.06);
-  if (style === "double") {
-    context.lineWidth = Math.max(0.45, lineWidth * 0.75);
-    const gap = Math.max(1.2, fontPt * 0.09);
-    for (const offset of [-gap / 2, gap / 2]) {
-      context.beginPath();
-      context.moveTo(x, baseline + offset);
-      context.lineTo(x + width, baseline + offset);
-      context.stroke();
+  if (style === "dotDotDash") {
+    context.lineWidth = lineWidth;
+    const unit = Math.max(0.8, fontPt * 0.12);
+    // 长划 4、空 1.5、点 1、空 1.5、点 1、空 1.5（单位 unit）
+    const pattern: Array<[boolean, number]> = [[true, 4], [false, 1.5], [true, 1], [false, 1.5], [true, 1], [false, 1.5]];
+    context.beginPath();
+    let cursor = x;
+    let step = 0;
+    while (cursor < x + width - 0.01) {
+      const [draw, length] = pattern[step % pattern.length]!;
+      const next = Math.min(cursor + length * unit, x + width);
+      if (draw) {
+        context.moveTo(cursor, baseline);
+        context.lineTo(next, baseline);
+      }
+      cursor = next;
+      step += 1;
     }
+    context.stroke();
     return;
   }
   context.lineWidth = lineWidth;

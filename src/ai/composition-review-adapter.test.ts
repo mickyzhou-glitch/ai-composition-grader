@@ -727,8 +727,8 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("改后全段");
     expect(prompt).toContain("revisedQuotes");
     expect(prompt).toContain("逐字复制");
-    expect(prompt).toContain("波浪线");
-    expect(prompt).toContain("双横线");
+    expect(prompt).toContain("第 1 条动作和它的摘录划单线、第 2 条划波浪线、第 3 条划点划线");
+    expect(prompt).toContain("该项写成字符串数组");
     expect(prompt).not.toContain("problem、advice、example");
     expect(prompt).toContain("revisedText");
     expect(prompt).toContain(ADVICE_ACTIONS_RULE);
@@ -749,7 +749,7 @@ describe("CompositionReviewAdapter", () => {
     expect(reviews[4]?.suggestions[0]).not.toHaveProperty("revisedQuotes");
     expect(reviews[4]?.suggestions[0]?.advice).toContain("保留");
     const prompt = requestAt(harness.create).messages[0].content;
-    expect(prompt).toContain("revisedQuotes:string[]");
+    expect(prompt).toContain("revisedQuotes:(string|string[])[]");
   });
 
   it("接受包含具体动作和示例的保留建议", async () => {

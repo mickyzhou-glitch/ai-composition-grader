@@ -60,7 +60,7 @@ function review(): ExportReviewSource {
 }
 
 describe("导出段落建议正文与改后全段，不含标签", () => {
-  it("有修改动作摘录时按第 1/2/3 条动作标波浪、双线、单线，且不出现段号与动作标签", () => {
+  it("有修改动作摘录时按第 1/2/3 条动作标单线、波浪线、点划线，动作本身划同样的线，且不出现段号与动作标签", () => {
     const source = review();
     const reviewReport = source.report as ParagraphEvaluationReport;
     reviewReport.paragraphReviews[0] = {
@@ -74,13 +74,28 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
     reviewReport.rewrittenEssay = ["我终于走上台。灯光很亮。我听见自己的呼吸。我不再害怕。"];
     const paragraph = buildExportReportContent(source).pages[0]!.paragraphs[0]!;
     expect(paragraph.revisionRuns).toEqual([
-      { text: "我终于走上台。", changed: true, underline: "wave" },
+      { text: "我终于走上台。", changed: true, underline: "single" },
       { text: "灯光很亮。", changed: false },
-      { text: "我听见自己的呼吸。", changed: true, underline: "double" },
-      { text: "我不再害怕。", changed: true, underline: "single" },
+      { text: "我听见自己的呼吸。", changed: true, underline: "wave" },
+      { text: "我不再害怕。", changed: true, underline: "dotDotDash" },
     ]);
     const runs = exportParagraphRuns(paragraph);
-    expect(runs.find((run) => run.style === "suggestion")).not.toHaveProperty("underline");
+    expect(runs.filter((run) => run.style === "suggestion")).toEqual([
+      { text: "1. ", style: "suggestion" },
+      { text: "换掉“慢慢”，写出终于登台。", style: "suggestion", underline: "single" },
+      { text: "\n", style: "suggestion" },
+      { text: "2. ", style: "suggestion" },
+      { text: "补写呼吸声。", style: "suggestion", underline: "wave" },
+      { text: "\n", style: "suggestion" },
+      { text: "3. ", style: "suggestion" },
+      { text: "补一句心理。", style: "suggestion", underline: "dotDotDash" },
+      { text: "\n", style: "suggestion" },
+    ]);
+    // 只有删除动作的条目不划线；整框文字与不划线时一致。
+    const withDeletion = exportParagraphRuns({ ...paragraph, actionUnderlines: [null, "wave", "dotDotDash"] });
+    expect(withDeletion[1]).toEqual({ text: "换掉“慢慢”，写出终于登台。", style: "suggestion" });
+    expect(withDeletion.map((run) => run.text).join(""))
+      .toBe(exportParagraphRuns({ ...paragraph, actionUnderlines: undefined }).map((run) => run.text).join(""));
     expect(runs.map((run) => run.text).join("")).not.toMatch(/第 ?\d+ ?段|对应原文第|修改动作：/u);
   });
 

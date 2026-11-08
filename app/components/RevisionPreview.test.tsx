@@ -19,20 +19,20 @@ describe("RevisionPreview", () => {
     expect(screen.getByText("！")).toHaveStyle({ color: "#171717" });
   });
 
-  it("改后全段预览与导出一致：第 1/2/3 条动作依次波浪、双线、单线，未改动句不划线", () => {
+  it("改后全段预览与导出一致：第 1/2/3 条动作依次单线、波浪线、点划线（预览用虚线），未改动句不划线", () => {
     render(<RevisionPreview sentenceHighlight runs={[
       { kind: "inserted", text: "我心头一颤，", underline: "wave" },
       { kind: "unchanged", text: "眼睛有些湿润。" },
-      { kind: "inserted", text: "一缕夕阳洒进来。", underline: "double" },
+      { kind: "inserted", text: "一缕夕阳洒进来。", underline: "dotDotDash" },
       { kind: "inserted", text: "我被深深感动。", underline: "single" },
       { kind: "inserted", text: "旧报告改动句。" },
     ]} />);
 
     expect(screen.getByText("我心头一颤，")).toHaveStyle({ textDecorationStyle: "wavy", color: "#1F4E78" });
-    expect(screen.getByText("一缕夕阳洒进来。")).toHaveStyle({ textDecorationStyle: "double" });
+    expect(screen.getByText("一缕夕阳洒进来。")).toHaveStyle({ textDecorationStyle: "dashed" });
     expect(screen.getByText("我被深深感动。")).toHaveStyle({ textDecorationStyle: "solid" });
     expect(screen.getByText("我心头一颤，").style.textDecorationStyle).toBe("wavy");
-    expect(screen.getByText("一缕夕阳洒进来。").style.textDecorationStyle).toBe("double");
+    expect(screen.getByText("一缕夕阳洒进来。").style.textDecorationStyle).toBe("dashed");
     expect(screen.getByText("我被深深感动。")).toHaveAttribute("data-underline", "single");
     expect(screen.getByText("旧报告改动句。")).toHaveAttribute("data-underline", "single");
     expect(screen.getByText("眼睛有些湿润。")).not.toHaveAttribute("data-underline");

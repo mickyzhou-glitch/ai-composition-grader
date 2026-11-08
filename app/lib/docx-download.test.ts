@@ -330,7 +330,7 @@ describe("Word 逐段批改文档", () => {
     expect(runXml("我听见自己的呼吸。")).toContain('<w:u w:val="single"');
   });
 
-  it("改后全段按修改动作序号划波浪线、双线、单线，未改动句不划线，建议正文不划线", async () => {
+  it("改后全段按修改动作序号划单线、波浪线、点划线，未改动句不划线，修改动作划同样的线、编号不划", async () => {
     installBrowserExport();
     const review = fixture();
     const ocr = review.ocr;
@@ -357,15 +357,18 @@ describe("Word 逐段批改文档", () => {
       return documentXml.slice(start, documentXml.indexOf("</w:r>", at));
     };
 
-    expect(runXml("我心头一颤，")).toContain('<w:u w:val="wave"');
-    expect(runXml("一缕夕阳洒进来。")).toContain('<w:u w:val="double"');
-    expect(runXml("我被深深感动。")).toContain('<w:u w:val="single"');
+    expect(runXml("我心头一颤，")).toContain('<w:u w:val="single" w:color="1F4E78"');
+    expect(runXml("一缕夕阳洒进来。")).toContain('<w:u w:val="wave" w:color="1F4E78"');
+    expect(runXml("我被深深感动。")).toContain('<w:u w:val="dotDotDash" w:color="1F4E78"');
+    expect(runXml("加入心理描写。")).toContain('<w:u w:val="single" w:color="C00000"');
+    expect(runXml("增加暖色调环境描写。")).toContain('<w:u w:val="wave" w:color="C00000"');
+    expect(runXml("增加一段转折。")).toContain('<w:u w:val="dotDotDash" w:color="C00000"');
+    expect(runXml("1. ")).not.toContain("<w:u ");
     expect(runXml("我站在台下，")).not.toContain("<w:u ");
     expect(runXml("灯光很亮。")).not.toContain("<w:u ");
-    // 其余段落（夹具里没有摘录的旧口径段）仍按改动句单线，不出现额外的波浪/双线。
-    expect(documentXml.match(/<w:u w:val="wave"/gu)).toHaveLength(1);
-    expect(documentXml.match(/<w:u w:val="double"/gu)).toHaveLength(1);
-    expect(runXml("1. 加入心理描写。")).not.toContain("<w:u ");
+    // 其余段落（夹具里没有摘录的旧口径段）仍按改动句单线，不出现额外的波浪/点划线。
+    expect(documentXml.match(/<w:u w:val="wave"/gu)).toHaveLength(2);
+    expect(documentXml.match(/<w:u w:val="dotDotDash"/gu)).toHaveLength(2);
     expect(documentXml).not.toMatch(/第 \d+ 段|对应原文第|修改动作：/u);
   });
 

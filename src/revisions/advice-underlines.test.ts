@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { collapseParagraphSuggestions } from "../domain/paragraph-actions";
 import { paragraphReviewSchema } from "../domain/contracts";
 import {
+  adviceActionUnderlines,
   adviceUnderlineStyle,
   buildAdviceRevisionRuns,
   locateRevisedQuotes,
@@ -51,21 +52,21 @@ describe("splitParagraphActions", () => {
 });
 
 describe("adviceUnderlineStyle", () => {
-  it("波浪、双线、单线循环", () => {
+  it("按手改稿：单线、波浪线、点划线循环", () => {
     expect([0, 1, 2, 3, 4, 5, 6].map(adviceUnderlineStyle)).toEqual([
-      "wave", "double", "single", "wave", "double", "single", "wave",
+      "single", "wave", "dotDotDash", "single", "wave", "dotDotDash", "single",
     ]);
   });
 });
 
 describe("buildAdviceRevisionRuns", () => {
-  it("按样例图把三条动作对应句分别标成波浪、双线、单线，未改动句不划线", () => {
+  it("三条动作对应句分别标成单线、波浪线、点划线，未改动句不划线", () => {
     const runs = buildAdviceRevisionRuns(SOURCE, REVISED, [{ advice: ADVICE, revisedQuotes: QUOTES }]);
     expect(joined(runs)).toBe(REVISED);
     expect(runs.filter((run) => run.kind === "inserted")).toEqual([
-      { kind: "inserted", text: QUOTES[0], underline: "wave", actionIndex: 0 },
-      { kind: "inserted", text: QUOTES[1], underline: "double", actionIndex: 1 },
-      { kind: "inserted", text: QUOTES[2], underline: "single", actionIndex: 2 },
+      { kind: "inserted", text: QUOTES[0], underline: "single", actionIndex: 0 },
+      { kind: "inserted", text: QUOTES[1], underline: "wave", actionIndex: 1 },
+      { kind: "inserted", text: QUOTES[2], underline: "dotDotDash", actionIndex: 2 },
     ]);
     expect(runs[0]).toEqual({ kind: "unchanged", text: "下课后，李老师把我叫到办公室。他柔声问我是不是不舒服，" });
   });
@@ -77,8 +78,8 @@ describe("buildAdviceRevisionRuns", () => {
     }]);
     expect(joined(runs)).toBe(REVISED);
     expect(runs.filter((run) => run.kind === "inserted").map((run) => [run.text, run.underline])).toEqual([
-      [QUOTES[0], "double"],
-      [QUOTES[2], "wave"],
+      [QUOTES[0], "wave"],
+      [QUOTES[2], "single"],
     ]);
   });
 
@@ -89,7 +90,7 @@ describe("buildAdviceRevisionRuns", () => {
       revisedQuotes: ["甲句。", "乙句。", "", "丁句。", "戊句。"],
     }]);
     expect(runs.filter((run) => run.kind === "inserted").map((run) => run.underline)).toEqual([
-      "wave", "double", "wave", "double",
+      "single", "wave", "single", "wave",
     ]);
     expect(runs.find((run) => run.text === "丙句。")?.kind).toBe("unchanged");
   });
@@ -99,7 +100,20 @@ describe("buildAdviceRevisionRuns", () => {
       { advice: "加入心理描写", revisedQuotes: [QUOTES[0]!] },
       { advice: "增加环境描写", revisedQuotes: [QUOTES[1]!] },
     ]);
-    expect(runs.filter((run) => run.kind === "inserted").map((run) => run.underline)).toEqual(["wave", "double"]);
+    expect(runs.filter((run) => run.kind === "inserted").map((run) => run.underline)).toEqual(["single", "wave"]);
+  });
+
+  it("一条动作落在不相邻的几处时，几处都划同一种线", () => {
+    const revised = "推开门时，冷雨停了。她笑了笑。阳光暖暖地照进来。";
+    const runs = buildAdviceRevisionRuns("我推开门。她笑了笑。", revised, [{
+      advice: "1. 段首加过渡\n2. 增加雨停、阳光照进来的环境描写",
+      revisedQuotes: ["", ["推开门时，冷雨停了。", "阳光暖暖地照进来。"]],
+    }]);
+    expect(joined(runs)).toBe(revised);
+    expect(runs.filter((run) => run.kind === "inserted").map((run) => [run.text, run.underline])).toEqual([
+      ["推开门时，冷雨停了。", "wave"],
+      ["阳光暖暖地照进来。", "wave"],
+    ]);
   });
 
   it("旧报告没有摘录时退回：相对原文改动的句子一律单线", () => {
@@ -162,6 +176,17 @@ describe("buildAdviceRevisionRuns", () => {
   it("相同摘录出现两次时取不重叠的下一处", () => {
     const ranges = locateRevisedQuotes("好。好。", [{ advice: "1. 一\n2. 二", revisedQuotes: ["好。", "好。"] }]);
     expect(ranges?.map(({ start, end }) => [start, end])).toEqual([[0, 2], [2, 4]]);
+  });
+});
+
+describe("adviceActionUnderlines", () => {
+  it("有落实句的动作与落实句同线型；删除动作和摘录不可靠时不划线", () => {
+    expect(adviceActionUnderlines(REVISED, [{ advice: ADVICE, revisedQuotes: QUOTES }]))
+      .toEqual(["single", "wave", "dotDotDash"]);
+    expect(adviceActionUnderlines(REVISED, [{ advice: "1. 删去重复句\n2. 加环境", revisedQuotes: ["", QUOTES[1]!] }]))
+      .toEqual([null, "wave"]);
+    expect(adviceActionUnderlines(REVISED, [{ advice: ADVICE }])).toEqual([null, null, null]);
+    expect(adviceActionUnderlines(REVISED, [{ advice: "本段无需修改", revisedQuotes: [] }])).toEqual([]);
   });
 });
 

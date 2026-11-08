@@ -492,7 +492,7 @@ describe("OpenAIReviewAdapter", () => {
     expect(serialized).toContain("对照目标段原文重写 advice");
     expect(serialized).toContain("错别字、语病、标点、用词微调等基础修改");
     expect(serialized).toContain("波浪线");
-    expect(serialized).toContain("双横线");
+    expect(serialized).toContain("点划线");
     expect(serialized).toContain(config.title);
     expect(serialized).not.toMatch(/image_url|segments|blocks|"x"|"y"|data:image|base64|images\//u);
     expect(serialized).toContain("只返回 1 条");

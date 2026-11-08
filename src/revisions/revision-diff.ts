@@ -1,7 +1,7 @@
 import { diffArrays } from "diff";
 
-/** 改后全段下划线线型：第 1/2/3 条修改动作依次为波浪/双线/单线。 */
-export type RevisionUnderline = "wave" | "double" | "single";
+/** 改后全段下划线线型：第 1/2/3 条修改动作依次为单线/波浪线/点划线。 */
+export type RevisionUnderline = "single" | "wave" | "dotDotDash";
 
 export type RevisionRun = {
   kind: "unchanged" | "deleted" | "inserted" | "punctuation";

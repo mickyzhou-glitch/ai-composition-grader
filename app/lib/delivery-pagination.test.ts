@@ -59,7 +59,7 @@ describe("交付文档分页", () => {
       ...base,
       revisionRuns: [
         { kind: "inserted", text: wave, underline: "wave" },
-        { kind: "inserted", text: double, underline: "double" },
+        { kind: "inserted", text: double, underline: "dotDotDash" },
         { kind: "unchanged", text: "他笑了。" },
       ],
     }), { measureText });
@@ -69,7 +69,7 @@ describe("交付文档分页", () => {
       .filter((run) => run.kind === "inserted" && run.underline === underline)
       .map((run) => run.text.replaceAll("\n", "")).join("");
     expect(textOf("wave")).toBe(wave);
-    expect(textOf("double")).toBe(double);
+    expect(textOf("dotDotDash")).toBe(double);
     expect(runs.filter((run) => run.kind === "inserted" && !run.underline)).toEqual([]);
   });
 

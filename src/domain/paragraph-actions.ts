@@ -10,7 +10,7 @@ export function mergedParagraphAction(suggestions: readonly { advice: string }[]
   return lines.map((advice, index) => `${index + 1}. ${advice}`).join("\n");
 }
 
-export function collapseParagraphSuggestions<T extends { advice: string; revisedQuotes?: string[] }>(
+export function collapseParagraphSuggestions<T extends { advice: string; revisedQuotes?: Array<string | string[]> }>(
   suggestions: readonly T[],
 ): T[] {
   if (suggestions.length <= 1) return [...suggestions];

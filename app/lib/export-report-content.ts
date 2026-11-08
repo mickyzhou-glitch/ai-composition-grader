@@ -11,7 +11,7 @@ import {
   type DeliveryReadinessInput,
 } from "@/src/delivery/readiness";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import { buildAdviceRevisionRuns } from "@/src/revisions/advice-underlines";
+import { adviceActionUnderlines, buildAdviceRevisionRuns, splitParagraphActions } from "@/src/revisions/advice-underlines";
 import type { RevisionUnderline } from "@/src/revisions/revision-diff";
 
 export const EXPORT_KAITI_FACE = '"LXGW WenKai"';
@@ -39,13 +39,15 @@ export class ExportContentError extends Error {
 export type ExportRevisionRun = {
   text: string;
   changed: boolean;
-  /** 改动句线型：第 1/2/3 条修改动作 → 波浪/双线/单线；缺省单线。 */
+  /** 改动句线型：第 1/2/3 条修改动作 → 单线/波浪线/点划线；缺省单线。 */
   underline?: RevisionUnderline;
 };
 
 export type ExportParagraph = {
   suggestions: ParagraphSuggestion[];
   revisionRuns: ExportRevisionRun[];
+  /** 每条修改动作的线型（与它在改后全段里的落实句一致）；null 不划线。缺省整框不划线。 */
+  actionUnderlines?: Array<RevisionUnderline | null>;
 };
 
 export type ExportRunStyle = "suggestion" | "demonstration" | "changed" | "plain";
@@ -53,7 +55,7 @@ export type ExportRunStyle = "suggestion" | "demonstration" | "changed" | "plain
 export type ExportTextRun = {
   text: string;
   style: ExportRunStyle;
-  /** 仅 style 为 changed 时有意义；缺省单线。 */
+  /** style 为 changed 时缺省单线；style 为 suggestion 时只有带线型的修改动作才有。 */
   underline?: RevisionUnderline;
 };
 
@@ -129,12 +131,35 @@ function suggestionText(suggestions: ParagraphSuggestion[]) {
  */
 export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[] {
   return [
-    { text: `${suggestionText(paragraph.suggestions)}\n`, style: "suggestion" as const },
+    ...suggestionRuns(paragraph),
     { text: REVISED_PARAGRAPH_LABEL, style: "demonstration" as const },
     ...paragraph.revisionRuns.map((run): ExportTextRun => (run.changed
       ? { text: run.text, style: "changed", underline: run.underline ?? "single" }
       : { text: run.text, style: "plain" })),
   ];
+}
+
+/**
+ * 修改动作按条划线：编号不划，动作正文划与改后全段落实句相同的线。
+ * 拆条后拼不回原文（编号写法特殊）时整框不划线，保证文字不变。
+ */
+function suggestionRuns(paragraph: ExportParagraph): ExportTextRun[] {
+  const text = suggestionText(paragraph.suggestions);
+  const plain: ExportTextRun[] = [{ text: `${text}\n`, style: "suggestion" }];
+  const underlines = paragraph.actionUnderlines;
+  if (!underlines?.some(Boolean)) return plain;
+  const actions = splitParagraphActions(text);
+  if (actions.length !== underlines.length) return plain;
+  const runs: ExportTextRun[] = [];
+  actions.forEach((action, index) => {
+    const prefix = actions.length > 1 ? `${index + 1}. ` : "";
+    if (prefix) runs.push({ text: prefix, style: "suggestion" });
+    const underline = underlines[index];
+    runs.push(underline ? { text: action, style: "suggestion", underline } : { text: action, style: "suggestion" });
+    runs.push({ text: "\n", style: "suggestion" });
+  });
+  if (runs.map((run) => run.text).join("") !== `${text}\n`) return plain;
+  return runs;
 }
 
 export function exportFontSample(content: ExportReportContent) {
@@ -206,6 +231,7 @@ export function buildExportReportContent(review: ExportReviewSource): ExportRepo
     pageParagraphs.push({
       suggestions: group.review.suggestions,
       revisionRuns: buildExportRevisionRuns(group.sourceText, group.review.revisedText, group.review.suggestions),
+      actionUnderlines: adviceActionUnderlines(group.review.revisedText, group.review.suggestions),
     });
     paragraphsByPage.set(pageIndex, pageParagraphs);
   }

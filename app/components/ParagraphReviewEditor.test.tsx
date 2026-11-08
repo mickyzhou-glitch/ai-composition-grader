@@ -147,7 +147,7 @@ describe("ParagraphReviewEditor", () => {
     }));
   });
 
-  it("改后全段预览按修改动作摘录划波浪/双线；教师改动作措辞时保留摘录", () => {
+  it("改后全段预览按修改动作摘录划单线/波浪线；教师改动作措辞时保留摘录", () => {
     const onChange = vi.fn();
     const { container } = render(<ParagraphReviewEditor
       reviewId="review-1"
@@ -166,7 +166,7 @@ describe("ParagraphReviewEditor", () => {
     />);
 
     const underlines = [...container.querySelectorAll("[data-underline]")].map((node) => [node.textContent, node.getAttribute("data-underline")]);
-    expect(underlines).toEqual([["我听见呼吸声，", "wave"], ["终于走上台。", "double"]]);
+    expect(underlines).toEqual([["我听见呼吸声，", "single"], ["终于走上台。", "wave"]]);
 
     fireEvent.change(screen.getByLabelText("第 1 段修改动作"), {
       target: { value: "1. 补呼吸声\n2. 写清迈步" },

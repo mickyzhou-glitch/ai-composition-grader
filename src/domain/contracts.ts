@@ -219,9 +219,13 @@ export const paragraphSuggestionSchema = z.object({
   advice: z.string().trim().min(1),
   example: optionalSuggestionText,
   // 按 advice 编号顺序，每条修改动作在 revisedText 里落实处的逐字摘录（无法定位写空串）。
-  // 只用于改后全段按动作划波浪/双线/单线；旧报告没有此字段时退回单下划线。
+  // 一条动作落在不相邻的几处时写成字符串数组，每处一项。
+  // 只用于改后全段与修改动作按条划单线/波浪线/点划线；旧报告没有此字段时退回单下划线。
   // 教师改稿后可能对不上，因此这里不强制必须是子串，渲染时再核对。
-  revisedQuotes: z.array(z.string().trim().max(600)).max(12).optional(),
+  revisedQuotes: z.array(z.union([
+    z.string().trim().max(600),
+    z.array(z.string().trim().max(600)).max(4),
+  ])).max(12).optional(),
 }).strict();
 export type ParagraphSuggestion = z.infer<typeof paragraphSuggestionSchema>;
 

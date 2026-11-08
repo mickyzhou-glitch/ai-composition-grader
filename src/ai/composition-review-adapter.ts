@@ -70,7 +70,7 @@ export interface CompositionReviewResult {
 
 const CONTENT_RESULT_SCHEMA = [
   "根对象={report:ParagraphEvaluationReport,annotationAnchors:ParagraphAnnotationAnchor[]}",
-  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,grade:A+|A|A-|B+|B|B-|C,paragraphReviews:{paragraphId:string,suggestions:{advice:string,revisedQuotes:string[]}[],revisedText:string,sourceParagraphStart?:number,sourceParagraphEnd?:number,noSourceParagraph?:true}[]}",
+  "ParagraphEvaluationReport={version:2,themeFit:fits|partial|off_topic,grade:A+|A|A-|B+|B|B-|C,paragraphReviews:{paragraphId:string,suggestions:{advice:string,revisedQuotes:(string|string[])[]}[],revisedText:string,sourceParagraphStart?:number,sourceParagraphEnd?:number,noSourceParagraph?:true}[]}",
   "ParagraphAnnotationAnchor={paragraphId:string,category:typo|punctuation|sentence|expression|structure|highlight,anchorText:string,comment:string,isHighlight:boolean}",
 ].join("\n");
 

@@ -2,23 +2,24 @@ import { mergedParagraphAction, UNCHANGED_PARAGRAPH_ACTION } from "../domain/par
 import { buildSubstantiveSentenceRuns, type RevisionRun, type RevisionUnderline } from "./revision-diff";
 
 /**
- * 改后全段按「第 N 条修改动作」划不同线（家奇 2026-11-05）：
- * 第 1 条波浪线、第 2 条双横线、第 3 条单横线，超过 3 条从头循环。
+ * 改后全段按「第 N 条修改动作」划不同线，修改动作本身也划同样的线，方便一一对应。
+ * 线型顺序按家奇 2026-11-08 手改稿：第 1 条单线、第 2 条波浪线、第 3 条点划线，超过 3 条从头循环。
  */
-export const ADVICE_UNDERLINE_CYCLE: readonly RevisionUnderline[] = ["wave", "double", "single"];
+export const ADVICE_UNDERLINE_CYCLE: readonly RevisionUnderline[] = ["single", "wave", "dotDotDash"];
 
 export function adviceUnderlineStyle(actionIndex: number): RevisionUnderline {
   return ADVICE_UNDERLINE_CYCLE[actionIndex % ADVICE_UNDERLINE_CYCLE.length]!;
 }
 
 /** 网页预览/打印页用的 CSS text-decoration-style，与 Word/PDF 导出一致。 */
-export const PREVIEW_UNDERLINE_STYLE: Record<RevisionUnderline, "wavy" | "double" | "solid"> = {
-  wave: "wavy",
-  double: "double",
+/** CSS 没有点划线，网页预览用虚线代替。 */
+export const PREVIEW_UNDERLINE_STYLE: Record<RevisionUnderline, "wavy" | "dashed" | "solid"> = {
   single: "solid",
+  wave: "wavy",
+  dotDotDash: "dashed",
 };
 
-type SuggestionLike = { advice: string; revisedQuotes?: readonly string[] };
+type SuggestionLike = { advice: string; revisedQuotes?: ReadonlyArray<string | readonly string[]> };
 
 const NUMBER_MARKER = /(\d{1,2})\s*[.、．)）]\s*/gu;
 
@@ -51,12 +52,17 @@ export function paragraphActions(suggestions: readonly SuggestionLike[]): string
   return splitParagraphActions(mergedParagraphAction(suggestions));
 }
 
-/** 按动作顺序拼出的定位摘录；任何一条 suggestion 缺字段即视为没有（退回旧口径）。 */
-function collectQuotes(suggestions: readonly SuggestionLike[]): string[] | null {
+/**
+ * 按动作顺序拼出的定位摘录，每条动作一组（一条动作可落在不相邻的几处）；
+ * 任何一条 suggestion 缺字段即视为没有（退回旧口径）。
+ */
+function collectQuotes(suggestions: readonly SuggestionLike[]): string[][] | null {
   if (suggestions.length === 0 || suggestions.some((suggestion) => !Array.isArray(suggestion.revisedQuotes))) {
     return null;
   }
-  return suggestions.flatMap((suggestion) => suggestion.revisedQuotes ?? []).map((quote) => quote.trim());
+  return suggestions
+    .flatMap((suggestion) => [...(suggestion.revisedQuotes ?? [])])
+    .map((item) => (typeof item === "string" ? [item] : [...item]).map((quote) => quote.trim()).filter(Boolean));
 }
 
 type QuoteRange = { start: number; end: number; actionIndex: number };
@@ -74,14 +80,15 @@ export function locateRevisedQuotes(
   if (!quotes) return null;
   if (quotes.length !== paragraphActions(suggestions).length) return null;
   const ranges: QuoteRange[] = [];
-  for (const [actionIndex, quote] of quotes.entries()) {
-    if (!quote) continue;
-    let offset = revisedText.indexOf(quote);
-    while (offset >= 0 && ranges.some((range) => offset < range.end && offset + quote.length > range.start)) {
-      offset = revisedText.indexOf(quote, offset + 1);
+  for (const [actionIndex, segments] of quotes.entries()) {
+    for (const quote of segments) {
+      let offset = revisedText.indexOf(quote);
+      while (offset >= 0 && ranges.some((range) => offset < range.end && offset + quote.length > range.start)) {
+        offset = revisedText.indexOf(quote, offset + 1);
+      }
+      if (offset < 0) return null;
+      ranges.push({ start: offset, end: offset + quote.length, actionIndex });
     }
-    if (offset < 0) return null;
-    ranges.push({ start: offset, end: offset + quote.length, actionIndex });
   }
   return ranges.sort((left, right) => left.start - right.start);
 }
@@ -101,7 +108,22 @@ export function sanitizeRevisedQuotes<T extends { suggestions: SuggestionLike[];
 }
 
 /**
- * 改后全段下划线：有可靠摘录时按动作序号划波浪/双线/单线，未改动和未摘录的句子不划线；
+ * 每条修改动作该划的线型：摘录可靠且这条动作在改后全段里有落实句时，与那几句同线型；
+ * 没有落实句（删除、调序）或摘录不可靠时为 null，动作不划线。
+ */
+export function adviceActionUnderlines(
+  revisedText: string,
+  suggestions: readonly SuggestionLike[],
+): Array<RevisionUnderline | null> {
+  const actions = paragraphActions(suggestions);
+  const ranges = locateRevisedQuotes(revisedText, suggestions);
+  return actions.map((_action, index) => (
+    ranges?.some((range) => range.actionIndex === index) ? adviceUnderlineStyle(index) : null
+  ));
+}
+
+/**
+ * 改后全段下划线：有可靠摘录时按动作序号划单线/波浪线/点划线，未改动和未摘录的句子不划线；
  * 否则退回「相对原文实质改动的句子单下划线」（只改错字、语病、标点的句子不划）。
  * 拼接后的文字始终等于 revisedText。
  */
@@ -138,10 +160,11 @@ export function buildAdviceRevisionRuns(
  */
 export const ADVICE_ACTIONS_RULE = [
   "修改动作（suggestions.advice）的口径：逐句核对这一段的学生原文（归组段按 sourceParagraphStart–sourceParagraphEnd 对应的全部原文段）和本段最终 revisedText 哪里不一样，只写范文相对学生原文做了哪些实质修改：补写或扩写了什么、删去了原文哪些内容、把原文哪句改成了什么意思、调整了哪些顺序或详略、加了什么过渡或伏笔。",
-  "每条写成简短的动作短语，例如「简单解释名言并点出英语老师」「用一句伏笔点到“原先对她的印象”即可，不写具体的事件」；多条用「1. 」「2. 」分行编号。",
-  "不写：错别字、语病、标点、用词微调等基础修改；与原文意思基本相同的句子；「保留……」这类没有改动的内容；修改理由或解释；相对上一版底稿、复核意见或返修过程改了什么。advice 只描述学生原文到最终范文的差异，每次重写 revisedText 后都要按这个口径重新核对并重写 advice。",
+  "每条写成简短的动作短语，例如「简单解释和点出英语老师」「用一句伏笔点到“原先对她的印象”即可，不写具体的事件」「增加雨停、阳光照进办公室的暖色环境描写，象征情感转折」「补充老师的语言、动作、神态，具体展现老师的温暖」；多条用「1. 」「2. 」分行编号，一般不超过 3 条。",
+  "每条对应正文里一处具体修改，读者能在改后全段里找到落实它的句子（删除、调序除外）。同一处修改只写一次：不要另写一条总括性的动作去概括其他几条已写到的内容（例如已逐条写了过渡句、环境描写、语言动作神态，就不要再写「把原文第四段内容移到本段，详写老师讲题过程，放缓转变节奏」）。",
+  "不写：错别字、语病、标点、用词微调等基础修改；与原文意思基本相同的句子；「保留……」这类没有改动的内容；句末附加的理由、目的说明或提醒（如「因为……」「使第一段只承担开头功能」「不刻意贬低老师」）；相对上一版底稿、复核意见或返修过程改了什么。advice 只描述学生原文到最终范文的差异，每次重写 revisedText 后都要按这个口径重新核对并重写 advice。",
   "整段只有基础修改、没有实质改动时，advice 写「本段无需修改」。",
 ].join("");
 
 /** 给模型的摘录规则（首轮批改、返修、单段重写共用）。 */
-export const REVISED_QUOTES_RULE = "suggestions 里同时返回 revisedQuotes 数组：按 advice 的编号顺序，每条修改动作对应一项，内容是该动作在本段 revisedText 里落实后的那一句或连续几句，必须从 revisedText 逐字复制（含标点），不得改写、缩写或拼接不相邻的句子；各项互不重叠。只摘实质修改落实的句子：与学生原文相同、意思基本相同或只修了错字语病标点的句子不摘。advice 只有一条动作时 revisedQuotes 只有一项；动作在正文里没有可定位的句子（如删除）时该项写空字符串 \"\"；advice 为「本段无需修改」时 revisedQuotes 为 []。导出时第 1 条动作的摘录划波浪线、第 2 条双横线、第 3 条单横线，未摘录的句子不划线。";
+export const REVISED_QUOTES_RULE = "suggestions 里同时返回 revisedQuotes 数组：按 advice 的编号顺序，每条修改动作对应一项，内容是该动作在本段 revisedText 里落实后的那一句或连续几句，必须从 revisedText 逐字复制（含标点），不得改写、缩写或拼接不相邻的句子；一条动作落实在不相邻的几处时，该项写成字符串数组，每处一个元素（例如 [\"推开门时，冷雨停了。\",\"阳光暖暖地照进来。\"]）；所有摘录互不重叠。只摘这条动作真正落实的句子，不要把整段都摘进来。只摘实质修改落实的句子：与学生原文相同、意思基本相同或只修了错字语病标点的句子不摘。advice 只有一条动作时 revisedQuotes 只有一项；动作在正文里没有可定位的句子（如删除）时该项写空字符串 \"\"；advice 为「本段无需修改」时 revisedQuotes 为 []。导出时第 1 条动作和它的摘录划单线、第 2 条划波浪线、第 3 条划点划线，未摘录的句子不划线。";

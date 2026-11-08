@@ -340,14 +340,19 @@ describe("drawUnderline", () => {
     expect(context.strokeStyle).toBe("#1f4e78");
   });
 
-  it("双线画上下两条平行直线", () => {
+  it("点划线按长划、点、点循环，落在同一基线且不超出文字宽度", () => {
     const { context, calls, strokes } = recorder();
-    drawUnderline(context, "double", 10, 50, 100, 12, "#1f4e78");
-    expect(strokes()).toBe(2);
-    const ys = calls.filter(([name]) => name === "lineTo").map(([, , y]) => y);
-    expect(ys).toHaveLength(2);
-    expect(ys[0]).toBeLessThan(50);
-    expect(ys[1]).toBeGreaterThan(50);
+    drawUnderline(context, "dotDotDash", 10, 50, 100, 12, "#1f4e78");
+    expect(strokes()).toBe(1);
+    const moves = calls.filter(([name]) => name === "moveTo");
+    const lines = calls.filter(([name]) => name === "lineTo");
+    expect(lines.length).toBeGreaterThan(6);
+    expect(moves).toHaveLength(lines.length);
+    expect([...moves, ...lines].every(([, x, y]) => y === 50 && x! >= 10 && x! <= 110 + 1e-9)).toBe(true);
+    const lengths = lines.map(([, x], index) => x! - moves[index]![1]!);
+    // 一个长划后跟两个短点
+    expect(lengths[0]).toBeGreaterThan(lengths[1]! * 3);
+    expect(lengths[1]).toBeCloseTo(lengths[2]!);
   });
 
   it("波浪线由上下交替的曲线连到终点，不超出文字宽度", () => {
