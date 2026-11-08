@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AssignmentConfig, ParagraphEvaluationReport } from "../domain/contracts";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "./openai-review-adapter";
 import { CompositionReviewAdapter } from "./composition-review-adapter";
+import { ADVICE_ACTIONS_RULE } from "../revisions/advice-underlines";
 import { OPENING_NO_SUPPRESSION_ELEMENT, parseStructureTasks } from "./structure-audit";
 
 const config: AssignmentConfig = {
@@ -266,6 +267,11 @@ describe("CompositionReviewAdapter", () => {
       auditorNote: expect.stringContaining("缺口"),
     });
     expect(requestAt(harness.create, 2).messages[0].content).toContain("auditFeedback 是独立复核员对当前范文的逐条不合格意见");
+    // 返修后的修改动作仍是「学生原文 → 范文」的差异，不是「本次返修改了什么」。
+    const repairPrompt = requestAt(harness.create, 2).messages[0].content;
+    expect(repairPrompt).toContain(ADVICE_ACTIONS_RULE);
+    expect(repairPrompt).toContain("不写本次返修相对 currentEssay 改了什么");
+    expect(repairPrompt).not.toContain("写明本次针对复核意见做了哪些修改");
     expect(result.report.structureAudit).toMatchObject({ version: 1, passed: true, repairAttempts: 1 });
     expect(result.report.structureAudit!.rounds[0]!.paragraphs[0]).toMatchObject({ paragraph: 1, pass: false });
     expect(result.report.structureAudit!.rounds[1]!.passed).toBe(true);
@@ -725,6 +731,8 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("双横线");
     expect(prompt).not.toContain("problem、advice、example");
     expect(prompt).toContain("revisedText");
+    expect(prompt).toContain(ADVICE_ACTIONS_RULE);
+    expect(prompt).not.toContain("简述润色动作");
   });
 
   it("保留能在改后全段逐字定位的 revisedQuotes，对不上的只删摘录、不判整份失败", async () => {

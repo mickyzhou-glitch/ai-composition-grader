@@ -1,5 +1,5 @@
 import { mergedParagraphAction, UNCHANGED_PARAGRAPH_ACTION } from "../domain/paragraph-actions";
-import { buildSentenceRevisionRuns, type RevisionRun, type RevisionUnderline } from "./revision-diff";
+import { buildSubstantiveSentenceRuns, type RevisionRun, type RevisionUnderline } from "./revision-diff";
 
 /**
  * 改后全段按「第 N 条修改动作」划不同线（家奇 2026-11-05）：
@@ -63,7 +63,8 @@ type QuoteRange = { start: number; end: number; actionIndex: number };
 
 /**
  * 在改后全段里依次定位每条摘录（逐字子串、互不重叠）。
- * 条数与动作数不符、有摘录找不到、或一条都没有时返回 null。
+ * 条数与动作数不符、或有摘录找不到时返回 null。
+ * 摘录全为空（本段无需修改、只有删除动作）时返回空数组：可靠且无句可划。
  */
 export function locateRevisedQuotes(
   revisedText: string,
@@ -82,7 +83,6 @@ export function locateRevisedQuotes(
     if (offset < 0) return null;
     ranges.push({ start: offset, end: offset + quote.length, actionIndex });
   }
-  if (ranges.length === 0) return null;
   return ranges.sort((left, right) => left.start - right.start);
 }
 
@@ -102,7 +102,8 @@ export function sanitizeRevisedQuotes<T extends { suggestions: SuggestionLike[];
 
 /**
  * 改后全段下划线：有可靠摘录时按动作序号划波浪/双线/单线，未改动和未摘录的句子不划线；
- * 否则退回「相对原文改动的句子一律单下划线」。拼接后的文字始终等于 revisedText。
+ * 否则退回「相对原文实质改动的句子单下划线」（只改错字、语病、标点的句子不划）。
+ * 拼接后的文字始终等于 revisedText。
  */
 export function buildAdviceRevisionRuns(
   sourceText: string,
@@ -111,7 +112,7 @@ export function buildAdviceRevisionRuns(
 ): RevisionRun[] {
   const ranges = locateRevisedQuotes(revisedText, suggestions);
   if (!ranges) {
-    return buildSentenceRevisionRuns(sourceText, revisedText).map((run) => (
+    return buildSubstantiveSentenceRuns(sourceText, revisedText).map((run) => (
       run.kind === "inserted" ? { ...run, underline: "single" as const } : run
     ));
   }
@@ -131,5 +132,16 @@ export function buildAdviceRevisionRuns(
   return runs;
 }
 
+/**
+ * 修改动作口径（家奇 2026-11-08）：动作 = 学生原文 → 最终范文的实质差异。
+ * 首轮批改、结构返修、字数返修、单段重写共用，保证每次改写正文后都按原文重新核对。
+ */
+export const ADVICE_ACTIONS_RULE = [
+  "修改动作（suggestions.advice）的口径：逐句核对这一段的学生原文（归组段按 sourceParagraphStart–sourceParagraphEnd 对应的全部原文段）和本段最终 revisedText 哪里不一样，只写范文相对学生原文做了哪些实质修改：补写或扩写了什么、删去了原文哪些内容、把原文哪句改成了什么意思、调整了哪些顺序或详略、加了什么过渡或伏笔。",
+  "每条写成简短的动作短语，例如「简单解释名言并点出英语老师」「用一句伏笔点到“原先对她的印象”即可，不写具体的事件」；多条用「1. 」「2. 」分行编号。",
+  "不写：错别字、语病、标点、用词微调等基础修改；与原文意思基本相同的句子；「保留……」这类没有改动的内容；修改理由或解释；相对上一版底稿、复核意见或返修过程改了什么。advice 只描述学生原文到最终范文的差异，每次重写 revisedText 后都要按这个口径重新核对并重写 advice。",
+  "整段只有基础修改、没有实质改动时，advice 写「本段无需修改」。",
+].join("");
+
 /** 给模型的摘录规则（首轮批改、返修、单段重写共用）。 */
-export const REVISED_QUOTES_RULE = "suggestions 里同时返回 revisedQuotes 数组：按 advice 的编号顺序，每条修改动作对应一项，内容是该动作在本段 revisedText 里落实后的那一句或连续几句，必须从 revisedText 逐字复制（含标点），不得改写、缩写或拼接不相邻的句子；各项互不重叠。advice 只有一条动作时 revisedQuotes 只有一项；动作在正文里没有可定位的句子（如删除）时该项写空字符串 \"\"；advice 为「本段无需修改」时 revisedQuotes 为 []。导出时第 1 条动作的摘录划波浪线、第 2 条双横线、第 3 条单横线，未摘录的句子不划线。";
+export const REVISED_QUOTES_RULE = "suggestions 里同时返回 revisedQuotes 数组：按 advice 的编号顺序，每条修改动作对应一项，内容是该动作在本段 revisedText 里落实后的那一句或连续几句，必须从 revisedText 逐字复制（含标点），不得改写、缩写或拼接不相邻的句子；各项互不重叠。只摘实质修改落实的句子：与学生原文相同、意思基本相同或只修了错字语病标点的句子不摘。advice 只有一条动作时 revisedQuotes 只有一项；动作在正文里没有可定位的句子（如删除）时该项写空字符串 \"\"；advice 为「本段无需修改」时 revisedQuotes 为 []。导出时第 1 条动作的摘录划波浪线、第 2 条双横线、第 3 条单横线，未摘录的句子不划线。";

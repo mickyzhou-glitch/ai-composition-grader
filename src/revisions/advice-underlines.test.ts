@@ -134,6 +134,31 @@ describe("buildAdviceRevisionRuns", () => {
     expect(runs.every((run) => run.kind !== "inserted" || run.underline === "single")).toBe(true);
   });
 
+  it("本段无需修改且摘录为空时不划线，即使正文顺手改了错字标点", () => {
+    const runs = buildAdviceRevisionRuns("我以前总觉的这句话离自已很远", "我以前总觉得这句话离自己很远。", [
+      { advice: "本段无需修改", revisedQuotes: [] },
+    ]);
+    expect(runs).toEqual([{ kind: "unchanged", text: "我以前总觉得这句话离自己很远。" }]);
+  });
+
+  it("只有删除动作（摘录为空串）时可靠但无句可划，不退回整段单线", () => {
+    const runs = buildAdviceRevisionRuns("天很阴。我差点错过她的好。她笑了。", "天很阴。她笑了。", [
+      { advice: "删去原文提前揭示情感转折的一句", revisedQuotes: [""] },
+    ]);
+    expect(runs.every((run) => run.kind === "unchanged")).toBe(true);
+    expect(joined(runs)).toBe("天很阴。她笑了。");
+  });
+
+  it("退回单线时，只改错字语病标点、与原文意思基本相同的句子不划", () => {
+    const source = "法国罗丹说过生活中不是缺少美而是缺少发现美的眼晴。我以前总觉的这句话离自已很远。";
+    const revised = "法国罗丹说过：“生活中不是缺少美，而是缺少发现美的眼睛。”我以前总觉得这句话离自己很远。直到我真正注意到英语老师，我才发现，原来我对她的了解是那么少。";
+    const runs = buildAdviceRevisionRuns(source, revised, [{ advice: "简单解释和点出英语老师" }]);
+    expect(runs.filter((run) => run.kind === "inserted").map((run) => run.text)).toEqual([
+      "直到我真正注意到英语老师，我才发现，原来我对她的了解是那么少。",
+    ]);
+    expect(joined(runs)).toBe(revised);
+  });
+
   it("相同摘录出现两次时取不重叠的下一处", () => {
     const ranges = locateRevisedQuotes("好。好。", [{ advice: "1. 一\n2. 二", revisedQuotes: ["好。", "好。"] }]);
     expect(ranges?.map(({ start, end }) => [start, end])).toEqual([[0, 2], [2, 4]]);

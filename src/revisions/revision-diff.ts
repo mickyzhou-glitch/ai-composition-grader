@@ -263,6 +263,53 @@ export function buildRevisionRuns(source: string, revised: string): RevisionRun[
   return runs;
 }
 
+/** 两句去掉标点空白后逐字比对，相同字数占较长一句的比例。 */
+export function sentenceSimilarity(left: string, right: string): number {
+  const a = graphemes(left).filter((value) => !isNeutral(value));
+  const b = graphemes(right).filter((value) => !isNeutral(value));
+  const longest = Math.max(a.length, b.length);
+  if (longest === 0) return 1;
+  const common = diffArrays(a, b)
+    .filter((change) => !change.added && !change.removed)
+    .reduce((sum, change) => sum + change.value.length, 0);
+  return common / longest;
+}
+
+/** 达到这个相似度的改后句视为只做了错字、语病、标点或用词微调，不算实质修改。 */
+export const MINOR_EDIT_SIMILARITY = 0.8;
+
+/**
+ * 与 buildSentenceRevisionRuns 相同按整句比对，但与原文某句（或紧挨着被替换的那几句合起来）
+ * 基本一致的改后句记为未改动：基础修改不划线。
+ */
+export function buildSubstantiveSentenceRuns(source: string, revised: string): RevisionRun[] {
+  const sourceSentences = sentences(source);
+  const runs: RevisionRun[] = [];
+  let replaced = "";
+
+  for (const change of diffArrays(sourceSentences, sentences(revised))) {
+    if (change.removed) {
+      replaced = change.value.join("");
+      continue;
+    }
+    if (!change.added) {
+      replaced = "";
+      appendRun(runs, "unchanged", change.value.join(""));
+      continue;
+    }
+    for (const sentence of change.value) {
+      const minor = isNeutral(sentence)
+        || [replaced, ...sourceSentences].some((candidate) => (
+          candidate.length > 0 && sentenceSimilarity(candidate, sentence) >= MINOR_EDIT_SIMILARITY
+        ));
+      appendRun(runs, minor ? "unchanged" : "inserted", sentence);
+    }
+    replaced = "";
+  }
+
+  return runs;
+}
+
 export function buildSentenceRevisionRuns(source: string, revised: string): RevisionRun[] {
   const runs: RevisionRun[] = [];
 

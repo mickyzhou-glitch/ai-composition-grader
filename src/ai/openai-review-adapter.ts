@@ -14,7 +14,7 @@ import {
   type ParagraphReview,
 } from "../domain/contracts";
 import { collapseParagraphSuggestions } from "../domain/paragraph-actions";
-import { REVISED_QUOTES_RULE, sanitizeRevisedQuotes } from "../revisions/advice-underlines";
+import { ADVICE_ACTIONS_RULE, REVISED_QUOTES_RULE, sanitizeRevisedQuotes } from "../revisions/advice-underlines";
 import { validateReport } from "../domain/report-validation";
 import {
   AI_MAX_RETRIES,
@@ -332,7 +332,8 @@ function rewriteParagraphPrompt(input: RewriteParagraphInput): string {
     targetLine,
     `目标段当前未保存批改草稿：${JSON.stringify(input.current)}`,
     `教师附加要求：${JSON.stringify(input.instruction?.trim() || "换一种更具体、更自然的批改方案。")}`,
-    "这一段只返回 1 条 suggestions。advice 是这一段框里的全部修改动作：只有一处时用一两句话说明怎么改；有多处时用「1. 」「2. 」分行编号写在同一个 advice 里，不要为每一处修改再增加一条 suggestion。没有需要修改时 advice 写「本段无需修改」。不要写问题描述，也不要写修改示例。revisedText 必须是该段改后全段，包含这一段的全部修改；suggestions.advice 聚焦结构、内容、详略或过渡层面的修改动作，但 revisedText 必须顺手静默修通原句的语病、错别字、标点错误、指代不明与主语断层，确保整段语句通顺自然、前后主语连贯，被修改或新增的内容写成完整句子。",
+    "这一段只返回 1 条 suggestions。advice 是这一段框里的全部修改动作：只有一处时用一两句话说明怎么改；有多处时用「1. 」「2. 」分行编号写在同一个 advice 里，不要为每一处修改再增加一条 suggestion。没有实质修改时 advice 写「本段无需修改」。不要写问题描述，也不要写修改示例。目标段当前草稿里的 advice 只是参考，改写正文后必须对照目标段原文重写 advice，不写相对当前草稿改了什么。revisedText 必须是该段改后全段，包含这一段的全部修改；revisedText 必须顺手静默修通原句的语病、错别字、标点错误、指代不明与主语断层，确保整段语句通顺自然、前后主语连贯，被修改或新增的内容写成完整句子。",
+    ADVICE_ACTIONS_RULE,
     REVISED_QUOTES_RULE,
     `paragraphId 必须原样返回 ${JSON.stringify(input.paragraphId)}。`,
     "只返回一个 JSON 对象，不要 Markdown，不要解释：{\"paragraphId\":\"paragraph-1\",\"suggestions\":[{\"advice\":\"\",\"revisedQuotes\":[\"\"]}],\"revisedText\":\"\"}。",
@@ -347,7 +348,7 @@ function rewriteParagraphRepairPrompt(
   return [
     "将下面无效返回修复为一个完整 JSON 对象。不要 Markdown，不要解释。",
     `paragraphId 必须严格等于 ${JSON.stringify(paragraphId)}。`,
-    "suggestions 必须恰好 1 条，写非空 advice 和 revisedQuotes（按编号逐条、从 revisedText 逐字复制）。多处修改编号写在这一个 advice 里。没有修改时 advice 写「本段无需修改」。revisedText 必须是非空的改后全段。不要写问题描述或修改示例。",
+    "suggestions 必须恰好 1 条，写非空 advice 和 revisedQuotes（按编号逐条、从 revisedText 逐字复制）。多处修改编号写在这一个 advice 里；advice 只写范文相对目标段原文的实质修改，不写错字语病标点等基础修改。没有实质修改时 advice 写「本段无需修改」。revisedText 必须是非空的改后全段。不要写问题描述或修改示例。",
     `校验错误：${validationCode}`,
     `无效返回：${content}`,
   ].join("\n\n");
