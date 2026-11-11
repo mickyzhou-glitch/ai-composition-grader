@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -89,5 +89,31 @@ describe("设置页", () => {
       baseUrl: "https://content.example.com/v1",
       model: "writer-2",
     });
+  });
+
+  it("请求无响应时结束测试并恢复按钮，允许重新测试", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => response({ ok: true, data: {
+        content: { baseUrl: "https://content.example/v1", model: "gemini", keyConfigured: true },
+      } }))
+      .mockImplementationOnce((_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+      }))
+      .mockImplementationOnce(() => response({ ok: true, data: { connected: true } }));
+    render(<SettingsPage />);
+    await screen.findByDisplayValue("gemini");
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "测试作文内容模型" }));
+      expect(screen.getByRole("button", { name: "测试中…" })).toBeDisabled();
+      expect(fetchMock.mock.calls[1][1]?.signal).toBeDefined();
+      await act(async () => { await vi.advanceTimersByTimeAsync(35_000); });
+      expect(screen.getByRole("alert")).toHaveTextContent("超时");
+      expect(screen.getByRole("button", { name: "测试作文内容模型" })).toBeEnabled();
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "测试作文内容模型" })); });
+      expect(screen.getByRole("status")).toHaveTextContent("作文内容模型连接成功");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

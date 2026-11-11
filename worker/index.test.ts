@@ -514,6 +514,84 @@ describe("Cloudflare Worker", () => {
     expect(body.thinking).toEqual({ type: "disabled" });
   });
 
+  function testContentConnection() {
+    const database = authenticatedDatabase();
+    database.prepare.mockImplementation((sql: string) => {
+      const statement = {
+        bind() { return statement; },
+        first: vi.fn(async () => sql.includes("FROM sessions INNER JOIN users") ? {
+          id: "admin-1", username: "admin", role: "admin", must_change_password: 0,
+          expires_at: Date.now() + 60_000,
+        } : null),
+        all: vi.fn(async () => ({ results: [] })),
+        run: vi.fn(async () => ({ meta: { changes: 0 } })),
+      };
+      return statement;
+    });
+    return worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-3.8-flash", apiKey: "gemini-secret",
+      }),
+    }), workerEnv(() => new Response("asset"), database));
+  }
+
+  it("Gemini 测试给思考和正文预留额度，降低思考强度", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      const body = JSON.parse(init?.body as string);
+      return Response.json({ choices: [{
+        message: { content: body.max_tokens >= 2048 && body.reasoning_effort === "low" ? "OK" : "" },
+        finish_reason: "stop",
+      }] });
+    });
+    expect((await testContentConnection()).status).toBe(200);
+  });
+
+  it.each([401, 403, 404, 429, 503])("连接测试保留上游 HTTP %s 并给出可操作提示", async (status) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({
+      error: { message: "private upstream message gemini-secret" },
+    }, { status }));
+    const response = await testContentConnection();
+    const body = await response.json() as { error: { message: string } };
+    expect(body.error.message).toContain(String(status));
+    expect(body.error.message).not.toContain("gemini-secret");
+  });
+
+  it("连接成功但输出额度耗尽时明确提示，避免误报地址密钥错误", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({
+      choices: [{ message: { content: "" }, finish_reason: "length" }],
+    }));
+    const response = await testContentConnection();
+    await expect(response.json()).resolves.toMatchObject({ error: {
+      code: "AI_TEST_OUTPUT_LIMIT", message: expect.stringContaining("输出额度"),
+    } });
+  });
+
+  it.each(["headers", "body"])("上游迟迟不返回 %s 时，30 秒内结束测试", async (stage) => {
+    vi.useFakeTimers();
+    try {
+      const upstream = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+        const stalled = () => init?.signal ? new Promise<never>((_resolve, reject) => {
+          init.signal!.addEventListener("abort", () => reject(init.signal!.reason), { once: true });
+        }) : Promise.resolve({ choices: [{ message: { content: "OK" } }] });
+        if (stage === "headers" && init?.signal) return await stalled() as never;
+        return { ok: true, json: stalled } as Response;
+      });
+      const pending = testContentConnection();
+      await vi.waitFor(() => expect(upstream).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(30_000);
+      const response = await pending;
+      expect(response.status).toBe(504);
+      await expect(response.json()).resolves.toMatchObject({ error: {
+        code: "AI_CONNECTION_TIMEOUT", message: expect.stringContaining("30 秒"),
+      } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("保存作文内容模型时只更新 content 角色", async () => {
     const statements: Array<{ sql: string; bindings: unknown[] }> = [];
     const database = {

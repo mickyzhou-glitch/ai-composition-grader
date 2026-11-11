@@ -46,6 +46,8 @@ export default function SettingsPage() {
       model: settings[role].model,
       ...(apiKeys[role] ? { apiKey: apiKeys[role] } : {}),
     };
+    const controller = new AbortController();
+    const timeout = kind === "test" ? setTimeout(() => controller.abort(), 35_000) : undefined;
     try {
       const result = await apiFetch<SettingsView | { connected: true }>(
         `/api/settings/${role}${kind === "test" ? "/test" : ""}`,
@@ -53,6 +55,7 @@ export default function SettingsPage() {
           method: kind === "test" ? "POST" : "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(body),
+          signal: controller.signal,
         },
       );
       if (kind === "save") {
@@ -61,8 +64,9 @@ export default function SettingsPage() {
       }
       setSuccess(`${labels[role].title}${kind === "test" ? "连接成功" : "已保存"}`);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(controller.signal.aborted ? "模型连接测试超时，请稍后重试或检查网络连接" : errorMessage(caught));
     } finally {
+      clearTimeout(timeout);
       setBusy(null);
     }
   }

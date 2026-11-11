@@ -192,6 +192,12 @@ async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null, 
   return (role === "vision" ? env.VISION_AI_API_KEY : env.CONTENT_AI_API_KEY) || env.AI_API_KEY || null;
 }
 
+class AiConnectionTestError extends Error {
+  constructor(readonly code: string, message: string, readonly status = 502) {
+    super(message);
+  }
+}
+
 async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string; role: "vision" | "content" }): Promise<void> {
   // A 1×1 PNG verifies that the configured model accepts the same multimodal
   // request shape used by essay analysis, rather than only proving text chat.
@@ -199,22 +205,51 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
   const hostname = new URL(input.baseUrl).hostname;
   const isMiMo = hostname === "api.xiaomimimo.com";
   const isDeepSeek = hostname === "api.deepseek.com";
-  const response = await fetch(`${input.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: aiRequestHeaders(input.baseUrl, input.apiKey),
-    body: JSON.stringify({
-      model: input.model,
-      messages: input.role === "vision" ? [{ role: "user", content: [
-          { type: "image_url", image_url: { url: visionProbe } },
-          { type: "text", text: "请确认你能读取图片，只回复 OK" },
-        ] }] : [{ role: "user", content: "请只回复 OK" }],
-      ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
-      ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: 16 }),
-    }),
-  });
-  if (!response.ok) throw new Error("AI_CONNECTION_FAILED");
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
-  if (typeof payload.choices?.[0]?.message?.content !== "string" || !payload.choices[0].message.content.trim()) throw new Error("AI_CONNECTION_FAILED");
+  const isGemini = hostname === "generativelanguage.googleapis.com";
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    const response = await fetch(`${input.baseUrl}/chat/completions`, {
+      method: "POST",
+      signal: controller.signal,
+      headers: aiRequestHeaders(input.baseUrl, input.apiKey),
+      body: JSON.stringify({
+        model: input.model,
+        messages: input.role === "vision" ? [{ role: "user", content: [
+            { type: "image_url", image_url: { url: visionProbe } },
+            { type: "text", text: "请确认你能读取图片，只回复 OK" },
+          ] }] : [{ role: "user", content: "请只回复 OK" }],
+        ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
+        ...(isGemini ? { reasoning_effort: "low" } : {}),
+        ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: isGemini ? 2048 : 16 }),
+      }),
+    });
+    if (!response.ok) {
+      // Use fixed messages: upstream bodies can echo API keys or private data.
+      const hint = response.status === 401 ? "密钥认证失败，请检查 API Key"
+        : response.status === 403 ? "访问被拒绝，请检查密钥权限及服务地区限制"
+          : response.status === 404 ? "接口或模型不存在，请检查完整服务地址及模型名称"
+            : response.status === 429 ? "服务额度不足或请求过于频繁，请检查配额和计费状态，稍后重试"
+              : response.status >= 500 ? "模型服务暂时异常，请稍后重试"
+                : "请求被模型服务拒绝，请检查地址、模型和密钥配置";
+      throw new AiConnectionTestError("AI_CONNECTION_FAILED", `${hint}（HTTP ${response.status}）`);
+    }
+    const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown }; finish_reason?: string }> };
+    const choice = payload.choices?.[0];
+    if (typeof choice?.message?.content !== "string" || !choice.message.content.trim()) {
+      if (choice?.finish_reason === "length") {
+        throw new AiConnectionTestError("AI_TEST_OUTPUT_LIMIT", "模型已响应，但测试输出额度耗尽，未返回正文；请稍后重试或更换模型");
+      }
+      throw new AiConnectionTestError("AI_INVALID_RESPONSE", "模型已响应，但未返回有效正文，请检查模型是否支持聊天接口");
+    }
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new AiConnectionTestError("AI_CONNECTION_TIMEOUT", "模型连接测试超时（30 秒），请稍后重试；若持续超时，请检查模型服务或更换模型", 504);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function workerAiSettings(env: WorkerEnv) {
@@ -335,6 +370,7 @@ export default {
         return Response.json({ ok: true, data: { connected: true } });
       } catch (error) {
         if (error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE") return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
+        if (error instanceof AiConnectionTestError) return apiError(error.code, error.message, error.status);
         return apiError("AI_CONNECTION_FAILED", "AI 服务连接失败，请检查地址、模型和密钥", 502);
       }
     }
