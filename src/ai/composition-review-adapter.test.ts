@@ -157,6 +157,14 @@ async function expectInvalidTwice(value: unknown) {
 }
 
 describe("CompositionReviewAdapter", () => {
+  it("本地修复尾逗号和正文裸换行，无需重调内容模型", async () => {
+    const harness = setup();
+    const content = JSON.stringify(validResult).replace("\\n", "\n").replace(/}$/, ",}");
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content } }] });
+    const result = await harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });
+    expect(result.report.grade).toBe("A");
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
   it("api.x.ai 使用更长的客户端超时，其他地址保持三分钟", async () => {
     const xai = setup({ baseUrl: "https://api.x.ai/v1" });
     await xai.adapter.analyzeText({ config, paragraphs, studentName: "小艾" });

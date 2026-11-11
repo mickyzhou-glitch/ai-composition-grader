@@ -1,6 +1,8 @@
 import type { AiReviewEnvelope, AssignmentConfig } from "../domain/contracts";
 import type { CompositionReviewResult } from "../ai/composition-review-adapter";
 import type { VisionOcrResult } from "../ai/vision-ocr-adapter";
+import { AiAdapterError } from "../ai/openai-review-adapter";
+import { analysisFailureCode } from "../cloudflare/analysis-failure";
 import type { AnalysisToken } from "../db/review-repository";
 import { analysisModeForCheckpoint } from "../ocr/analysis-mode";
 import { mapAnnotationAnchors } from "../ocr/annotation-mapper";
@@ -111,6 +113,7 @@ export interface AnalysisWorkerOptions {
 const DEFAULT_RENEW_EVERY_MS = 60_000;
 
 function safeErrorCode(error: unknown): string {
+  if (error instanceof AiAdapterError) return analysisFailureCode(error);
   if (typeof error === "object" && error !== null && "code" in error) {
     const code = error.code;
     if (typeof code === "string") {
@@ -129,9 +132,9 @@ function safeErrorCode(error: unknown): string {
 }
 
 function isRetryable(errorCode: string): boolean {
-  // The adapter already performs its one transport retry and one structure
-  // repair request. The durable queue adds at most its configured claim cap.
-  return errorCode === "AI_REQUEST_FAILED" || errorCode === "AI_INVALID_RESPONSE";
+  // Keep the durable claim cap, but never retry a permanent upstream 4xx.
+  return /^AI_(?:REQUEST_FAILED|INVALID_RESPONSE)(?:_|$)/u.test(errorCode)
+    || /^AI_UPSTREAM_HTTP_(?:408|429|5\d{2})(?:_|$)/u.test(errorCode);
 }
 
 /**

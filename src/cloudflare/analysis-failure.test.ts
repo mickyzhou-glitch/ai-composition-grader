@@ -23,4 +23,10 @@ describe("analysis failure reasons", () => {
     const error = new AiAdapterError("AI_INVALID_RESPONSE", "无效", 502, undefined, "schema_report_unrecognized_keys");
     expect(analysisFailureCode(error)).toBe("AI_INVALID_RESPONSE_schema_report_unrecognized_keys");
   });
+
+  it("客户端超时、上游 4xx、OCR 结构失败保留独立错误码", () => {
+    expect(analysisFailureCode(new AiAdapterError("AI_REQUEST_FAILED", "超时", 502, undefined, "request_timeout"))).toBe("AI_REQUEST_FAILED_request_timeout");
+    expect(analysisFailureCode(new AiAdapterError("AI_REQUEST_FAILED", "拒绝", 502, 403, "invalid_type"))).toBe("AI_UPSTREAM_HTTP_403_invalid_type");
+    expect(analysisFailureCode(new AiAdapterError("AI_INVALID_RESPONSE", "结构", 502, undefined, "ocr_schema_pages_invalid_type"))).toBe("AI_INVALID_RESPONSE_ocr_schema_pages_invalid_type");
+  });
 });

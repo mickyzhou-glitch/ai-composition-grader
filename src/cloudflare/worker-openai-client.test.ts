@@ -1,8 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createWorkerOpenAIClient } from "./worker-openai-client";
+import { completionWithFinish } from "../ai/adapter-shared";
 
 describe("createWorkerOpenAIClient", () => {
+  it.each(["AbortError", "TimeoutError"])("读取200响应正文时的%s仍归为超时", async (name) => {
+    const response = new Response("{}", { status: 200 });
+    vi.spyOn(response, "json").mockRejectedValue(Object.assign(new Error("body interrupted"), { name }));
+    vi.stubGlobal("fetch", vi.fn(async () => response));
+    try {
+      const client = createWorkerOpenAIClient({ apiKey: "key", baseURL: "https://gateway.test/v1", timeout: 180_000, maxRetries: 1 });
+      await expect(completionWithFinish(client, {})).rejects.toMatchObject({ code: "AI_REQUEST_FAILED", upstreamCode: "request_timeout" });
+    } finally { vi.unstubAllGlobals(); }
+  });
+  it("200 响应信封损坏时返回专门错误，区别于传输故障", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("not JSON", { status: 200 })));
+    try {
+      const client = createWorkerOpenAIClient({ apiKey: "key", baseURL: "https://gateway.test/v1", timeout: 180_000, maxRetries: 1 });
+      await expect(client.chat.completions.create({})).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode: "response_envelope" });
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("只发送 OpenAI 兼容网关所需的认证与 JSON 请求头", async () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
       choices: [{ message: { content: "{}" } }],

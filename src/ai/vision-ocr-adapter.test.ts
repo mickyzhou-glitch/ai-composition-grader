@@ -68,6 +68,65 @@ async function expectInvalidResponse(response: unknown, imageCount = 1) {
 }
 
 describe("VisionOcrAdapter", () => {
+  it("忽略模型多出的元数据，缺省非正文 warnings 和 blocks", async () => {
+    const response = validSinglePageResponse();
+    const harness = setup({
+      title: "模型附带标题",
+      pages: [{ pageIndex: 0, text: response.pages[0].text, readable: true }],
+      paragraphs: [{ ...response.paragraphs[0], confidence: 0.9 }],
+    });
+    const result = await harness.adapter.recognize({ imageUrls: ["image"] });
+    expect(result.pages[0]).toMatchObject({ warnings: [], blocks: [] });
+    expect(result.paragraphs).toEqual(response.paragraphs);
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("OCR 结构无效时带原图修复一次，再完整校验", async () => {
+    const harness = setup(validSinglePageResponse());
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: '{"pages":[]}' } }] });
+    await expect(harness.adapter.recognize({ imageUrls: ["original-image"] })).resolves.toEqual(validSinglePageResponse());
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    const repair = JSON.stringify(harness.create.mock.calls[1][0]);
+    expect(repair).toContain("original-image");
+    expect(repair).toContain("ocr_schema_pages_too_small");
+    expect(repair).toContain("待处理数据");
+  });
+
+  it.each([
+    ["not json", "ocr_json_parse"],
+    ["", "ocr_empty_content"],
+    [JSON.stringify({ pages: [], paragraphs: [] }), "ocr_schema_pages_too_small"],
+    [JSON.stringify({ pages: [page(0, "一"), page(1, "二")], paragraphs: [paragraph()] }), "ocr_page_count"],
+  ])("修复仍失败时保留具体原因：%s", async (content, upstreamCode) => {
+    const harness = setup({});
+    harness.create.mockResolvedValue({ choices: [{ message: { content } }] });
+    await expect(harness.adapter.recognize({ imageUrls: ["image"] })).rejects.toMatchObject({ code: "AI_INVALID_RESPONSE", upstreamCode });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("即使 JSON 完整，finish_reason=length 也必须重新识别，不能保存半份正文", async () => {
+    const harness = setup(validSinglePageResponse());
+    harness.create.mockResolvedValue({ choices: [{ message: { content: JSON.stringify(validSinglePageResponse()) }, finish_reason: "length" }] } as never);
+    await expect(harness.adapter.recognize({ imageUrls: ["image"] })).rejects.toMatchObject({ upstreamCode: "ocr_output_truncated" });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect(harness.create.mock.calls[1][0]).toMatchObject({ max_tokens: 8192 });
+  });
+
+  it("识别请求的 4xx 透传，不触发格式修复", async () => {
+    const harness = setup({});
+    harness.create.mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { status: 403 }));
+    await expect(harness.adapter.recognize({ imageUrls: ["image"] })).rejects.toMatchObject({ code: "AI_REQUEST_FAILED", upstreamStatus: 403 });
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("修复请求的 4xx 仍透传，不伪装成 OCR 格式错误", async () => {
+    const harness = setup({});
+    harness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: "not json" } }] })
+      .mockRejectedValueOnce(Object.assign(new Error("Forbidden"), { status: 403 }));
+    await expect(harness.adapter.recognize({ imageUrls: ["image"] })).rejects.toMatchObject({ code: "AI_REQUEST_FAILED", upstreamStatus: 403 });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
   it("asks the vision model to return only composition paragraphs without review suggestions", async () => {
     const harness = setup(validSinglePageResponse());
 
@@ -202,10 +261,11 @@ describe("VisionOcrAdapter", () => {
     });
   });
 
-  it("rejects model-provided paragraph ids at the response boundary", async () => {
-    await expectInvalidResponse({
+  it("忽略模型自定 ID，由 checkpoint 根据顺序生成稳定 ID", async () => {
+    const harness = setup({
       ...validSinglePageResponse(),
       paragraphs: [{ ...paragraph(), id: "model-controlled-id" }],
     });
+    await expect(harness.adapter.recognize({ imageUrls: ["image"] })).resolves.toEqual(validSinglePageResponse());
   });
 });

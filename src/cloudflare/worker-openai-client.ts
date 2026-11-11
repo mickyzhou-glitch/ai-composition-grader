@@ -1,4 +1,5 @@
 import { redactAiSecrets } from "../ai/ai-client-options";
+import { AiAdapterError } from "../ai/openai-review-adapter";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "../ai/openai-review-adapter";
 import { aiRequestHeaders } from "./ai-request-headers";
 
@@ -14,7 +15,12 @@ function safeProviderCode(payload: unknown): string | undefined {
 }
 
 async function responsePayload(response: Response): Promise<unknown> {
-  try { return await response.json(); } catch { return undefined; }
+  try { return await response.json(); } catch (error) {
+    // Preserve a known HTTP error even without a readable error body. For a
+    // successful response, body read failures remain transport failures.
+    if (!response.ok || error instanceof SyntaxError) return undefined;
+    throw error;
+  }
 }
 
 const UPSTREAM_DETAIL_LIMIT = 500;
@@ -60,7 +66,7 @@ export const createWorkerOpenAIClient: OpenAIClientFactory = (options): OpenAICo
           });
         }
         if (typeof payload !== "object" || payload === null || !("choices" in payload) || !Array.isArray(payload.choices)) {
-          throw Object.assign(new Error("AI upstream response was invalid"), { code: "invalid_response" });
+          throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 服务返回的响应信封无效", 502, undefined, "response_envelope");
         }
         return payload as { choices: Array<{ message: { content: string | null } }> };
       },

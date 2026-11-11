@@ -573,7 +573,7 @@ export class AnalysisJobRepository {
   /** Releases a failed claim for one later attempt, or finishes it at the configured cap. */
   retry(claim: AnalysisJobClaim, errorCode: string): "queued" | "at_limit" {
     const normalizedClaim = this.assertClaim(claim);
-    if (!/^[A-Z0-9_]{1,64}$/.test(errorCode)) throw new TypeError("errorCode must be safe");
+    if (!/^[A-Za-z0-9_.-]{1,160}$/u.test(errorCode)) throw new TypeError("errorCode must be safe");
     const now = assertDate(this.now(), "now");
     const current = this.getInternal(normalizedClaim.id);
     if (!current) throw new AnalysisJobNotFoundError(normalizedClaim.id);

@@ -45,7 +45,7 @@ describe("公开的分析失败说明", () => {
     expect(sanitizeAnalysisDetail(`${ANALYSIS_JOB_METADATA_PREFIX}ordinary-bound`)).toBeNull();
   });
 
-  it("把已脱敏的上游失败说明放到详情里，400 仍使用原来的摘要", () => {
+  it("把已脱敏的上游失败说明放到详情里，400 按内容阶段展示拒绝原因", () => {
     expect(describePublicAnalysisFailure({
       errorCode: "AI_REQUEST_FAILED",
       progressStage: "generating_review",
@@ -59,12 +59,23 @@ describe("公开的分析失败说明", () => {
       progressStage: "generating_review",
       rawMessage: "AI 服务请求失败：Unknown model grok-4.7",
     })).toMatchObject({
-      summary: "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入",
+      summary: "AI 服务拒绝了内容批改请求，请联系管理员检查模型和请求配置",
       detail: "AI 服务请求失败：Unknown model grok-4.7",
     });
   });
 
   it.each([
+    ["AI_INVALID_RESPONSE_rewritten_essay_chars_1_min_500_actual_400", "AI 生成的范文未满足指定字数，请重新生成整篇批改"],
+    ["AI_INVALID_RESPONSE_ocr_schema_paragraphs_500_text_invalid_type", "作文识别结果结构或定位不符，请重新分析或重新拍摄作文"],
+    ["AI_INVALID_RESPONSE_response_envelope", "AI 服务响应缺少有效结果，请稍后重新分析"],
+    ["AI_INVALID_RESPONSE_ocr_json_parse", "作文识别结果不是合法 JSON，自动修复后仍失败，请重新分析"],
+    ["AI_INVALID_RESPONSE_ocr_schema_paragraphs_0_segments_0_width_custom", "作文识别结果结构或定位不符，请重新分析或重新拍摄作文"],
+    ["AI_INVALID_RESPONSE_ocr_page_count", "作文识别页数与上传图片不符，请重新分析"],
+    ["AI_INVALID_RESPONSE_ocr_empty_content", "识图模型返回空内容，请稍后重新分析"],
+    ["AI_INVALID_RESPONSE_ocr_output_truncated", "作文识别结果输出被截断，自动重试后仍失败，请重新分析"],
+    ["AI_REQUEST_FAILED_request_timeout", "AI 请求超时，停在「生成批改」，请稍后重新分析"],
+    ["AI_UPSTREAM_HTTP_400_json_parse", "AI 服务拒绝了内容批改请求，请联系管理员检查模型和请求配置"],
+    ["AI_UPSTREAM_HTTP_403_invalid_type", "AI 服务拒绝了内容批改请求，请联系管理员检查模型权限"],
     ["AI_INVALID_RESPONSE_output_truncated", "批改结果输出被截断（超出模型输出上限），已自动重试仍失败，请重新分析"],
     ["AI_INVALID_RESPONSE_json_parse", "批改结果不是合法 JSON（可能夹带多余文字或未转义字符），请重新分析"],
     ["AI_INVALID_RESPONSE_rewritten_essay_structure", "AI 生成的范文未满足逐段结构要求，请重新分析"],

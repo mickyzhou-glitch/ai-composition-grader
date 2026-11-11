@@ -401,6 +401,8 @@ describe("复核页", () => {
     render(<ReviewPage />);
 
     expect(await screen.findByText(/模型或代理返回 502，停在「读取图片」/)).toBeInTheDocument();
+    expect(screen.queryByText(/AI 分析：正在识别作文/)).not.toBeInTheDocument();
+    expect(screen.getByText(/模型或代理返回 502，停在「读取图片」/)).toHaveClass("error-banner");
     expect(screen.getByText("upstream 502")).not.toBeVisible();
     expect(screen.getByText("查看原始信息")).toBeInTheDocument();
   });

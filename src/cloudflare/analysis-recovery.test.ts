@@ -5,6 +5,7 @@ import { initializeSchema } from "../db/init";
 import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "./d1-analysis-jobs";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 import { CompositionReviewAdapter } from "../ai/composition-review-adapter";
+import { AiAdapterError } from "../ai/openai-review-adapter";
 import worker, { savePipelineResult } from "../../worker/index";
 
 const NOW = 1_790_000_000_000;
@@ -160,6 +161,24 @@ describe("abandoned cloud analysis recovery", () => {
     expect(f.job("fresh").status).toBe("succeeded");
     expect(f.review("fresh")).toMatchObject({ status: "ready_for_review", analysis_run_id: null, revision: 6 });
     expect(JSON.parse(String(f.review("fresh").report))).toEqual(report);
+    expect(ack).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [new AiAdapterError("AI_INVALID_RESPONSE", "格式校验失败", 502, undefined, "json_parse"), "AI_INVALID_RESPONSE_json_parse", "不是合法 JSON"],
+    [new AiAdapterError("AI_REQUEST_FAILED", "超时", 502, undefined, "request_timeout"), "AI_REQUEST_FAILED_request_timeout", "请求超时"],
+    [new AiAdapterError("AI_REQUEST_FAILED", "拒绝", 502, 403, "invalid_type"), "AI_UPSTREAM_HTTP_403_invalid_type", "模型权限"],
+  ])("queue → D1 → 公开任务视图区分失败并保留旧批改：%s", async (error, code, message) => {
+    f.seed("failed", { status: "queued", startedAt: null, createdAt: NOW });
+    f.sqlite.prepare("UPDATE analysis_jobs SET mode = 'content_only' WHERE id = 'job-failed'").run();
+    await new D1OcrCheckpointRepository(f.database).saveRecognized("owner-1", "failed", 1, recognized);
+    const before = f.review("failed");
+    vi.spyOn(CompositionReviewAdapter.prototype, "analyzeText").mockRejectedValue(error);
+    const ack = vi.fn();
+    await worker.queue({ messages: [{ body: { jobId: "job-failed" }, ack, retry: vi.fn() }] } as never, { DB: f.database } as never);
+    expect(f.job("failed")).toMatchObject({ status: "failed", error_code: code });
+    expect(f.review("failed")).toMatchObject({ report: before.report, revision: before.revision, status: "failed" });
+    expect((await new D1AnalysisJobs(f.database).latest("owner-1", "failed"))?.message).toContain(message);
     expect(ack).toHaveBeenCalledOnce();
   });
 

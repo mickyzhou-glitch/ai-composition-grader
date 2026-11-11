@@ -19,8 +19,8 @@ export function sanitizeAnalysisDetail(value: string | null | undefined): string
 }
 
 function httpStatus(errorCode: string): string | null {
-  return errorCode.match(/(?:HTTP_)(\d{3})/u)?.[1]
-    ?? errorCode.match(/(?:^|_)(5\d{2})(?:_|$)/u)?.[1]
+  return errorCode.match(/^AI_UPSTREAM_HTTP_(\d{3})(?:_|$)/u)?.[1]
+    ?? errorCode.match(/^(?:AI_REQUEST_FAILED|UPSTREAM)_(5\d{2})(?:_|$)/u)?.[1]
     ?? null;
 }
 
@@ -54,6 +54,33 @@ export function describePublicAnalysisFailure(input: {
     if (image) summary = summary.replace("，请重新分析", `，涉及第 ${image} 张图片，请重新分析`);
   } else if (errorCode === "AI_SETTINGS_INCOMPLETE") {
     summary = "请联系管理员检查 AI 服务设置后再试";
+  } else if (status?.startsWith("5")) {
+    summary = `模型或代理返回 ${status}，停在「${stage}」，请稍后重新分析`;
+  } else if (errorCode === "AI_UPSTREAM_HTTP_400" || errorCode.startsWith("AI_UPSTREAM_HTTP_400_")) {
+    summary = input.progressStage === "reading_images" || input.progressStage === "saving_ocr"
+      ? "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入"
+      : "AI 服务拒绝了内容批改请求，请联系管理员检查模型和请求配置";
+  } else if (errorCode.startsWith("AI_UPSTREAM_HTTP_402")) {
+    summary = "AI 内容批改服务额度不足，请联系管理员充值后重试";
+  } else if (errorCode === "AI_UPSTREAM_HTTP_401" || errorCode.startsWith("AI_UPSTREAM_HTTP_401_")) {
+    summary = "AI 服务拒绝了访问密钥，请在设置中重新保存并测试";
+  } else if (errorCode === "AI_UPSTREAM_HTTP_403" || errorCode.startsWith("AI_UPSTREAM_HTTP_403_")) {
+    summary = input.progressStage === "reading_images" || input.progressStage === "saving_ocr"
+      ? "AI 服务拒绝了图片批改请求，请确认当前模型已开通视觉输入权限"
+      : "AI 服务拒绝了内容批改请求，请联系管理员检查模型权限";
+  } else if (errorCode.startsWith("AI_UPSTREAM_HTTP_")) {
+    summary = `AI 服务返回 ${status ?? "错误"}，停在「${stage}」，请稍后重试`;
+  } else if (errorCode === "AI_REQUEST_FAILED_request_timeout") {
+    summary = `AI 请求超时，停在「${stage}」，请稍后重新分析`;
+  } else if (errorCode === "AI_INVALID_RESPONSE_response_envelope") {
+    summary = "AI 服务响应缺少有效结果，请稍后重新分析";
+  } else if (errorCode.startsWith("AI_INVALID_RESPONSE_ocr_")) {
+    const reason = errorCode.slice("AI_INVALID_RESPONSE_ocr_".length);
+    if (reason === "json_parse") summary = "作文识别结果不是合法 JSON，自动修复后仍失败，请重新分析";
+    else if (reason === "empty_content") summary = "识图模型返回空内容，请稍后重新分析";
+    else if (reason === "output_truncated") summary = "作文识别结果输出被截断，自动重试后仍失败，请重新分析";
+    else if (reason === "page_count") summary = "作文识别页数与上传图片不符，请重新分析";
+    else summary = "作文识别结果结构或定位不符，请重新分析或重新拍摄作文";
   } else if (errorCode.startsWith("AI_INVALID_RESPONSE_rewritten_essay_chars_")) {
     summary = "AI 生成的范文未满足指定字数，请重新生成整篇批改";
   } else if (errorCode.startsWith("AI_INVALID_RESPONSE_rewritten_essay_paragraph_count_")) {
@@ -82,18 +109,6 @@ export function describePublicAnalysisFailure(input: {
       : "图片读取失败，请重新上传后再分析";
   } else if (errorCode === "AI_INLINE_IMAGE_TOO_LARGE") {
     summary = image ? `第 ${image} 张图片过大，请重新拍摄后再分析` : "图片过大，请重新拍摄后再分析";
-  } else if (status?.startsWith("5")) {
-    summary = `模型或代理返回 ${status}，停在「${stage}」，请稍后重新分析`;
-  } else if (errorCode === "AI_UPSTREAM_HTTP_400" || errorCode.startsWith("AI_UPSTREAM_HTTP_400_")) {
-    summary = "AI 服务拒绝了图片批改请求，请检查模型是否支持视觉输入";
-  } else if (errorCode.startsWith("AI_UPSTREAM_HTTP_402")) {
-    summary = "AI 内容批改服务额度不足，请联系管理员充值后重试";
-  } else if (errorCode === "AI_UPSTREAM_HTTP_401" || errorCode.startsWith("AI_UPSTREAM_HTTP_401_")) {
-    summary = "AI 服务拒绝了访问密钥，请在设置中重新保存并测试";
-  } else if (errorCode === "AI_UPSTREAM_HTTP_403" || errorCode.startsWith("AI_UPSTREAM_HTTP_403_")) {
-    summary = "AI 服务拒绝了图片批改请求，请确认当前模型已开通视觉输入权限";
-  } else if (errorCode.startsWith("AI_UPSTREAM_HTTP_")) {
-    summary = `AI 服务返回 ${status ?? "错误"}，停在「${stage}」，请稍后重试`;
   } else if (errorCode === "AI_INVALID_RESPONSE" || errorCode.startsWith("AI_INVALID_RESPONSE_")) {
     summary = "AI 返回格式异常，请重新分析";
   } else if (errorCode) {

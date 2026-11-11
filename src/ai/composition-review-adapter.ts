@@ -13,7 +13,7 @@ import {
   paragraphAnnotationAnchorSchema,
   type ParagraphAnnotationAnchor,
 } from "../ocr/contracts";
-import { completionWithFinish, parseJsonResponse, roleClient, TruncatedOutputError } from "./adapter-shared";
+import { completionWithFinish, dropUnrecognizedKeys, parseJsonResponse, roleClient, TruncatedOutputError } from "./adapter-shared";
 
 /** Output cap used when the first answer hit the provider default limit. */
 export const CONTENT_RETRY_MAX_TOKENS = 8192;
@@ -295,48 +295,6 @@ function validationDetail(error: unknown): string {
 
 function isAnnotationIssue(error: unknown): boolean {
   return validationCode(error).startsWith("annotation_");
-}
-
-function unrecognizedKeyIssues(error: z.ZodError): Array<{ keys: string[]; path: PropertyKey[] }> {
-  return error.issues.flatMap((issue) => {
-    if (issue.code !== "unrecognized_keys" || !("keys" in issue) || !Array.isArray(issue.keys)) return [];
-    return [{ keys: issue.keys.filter((key): key is string => typeof key === "string"), path: [...issue.path] }];
-  });
-}
-
-function valueAt(root: unknown, path: PropertyKey[]): unknown {
-  let current = root;
-  for (const segment of path) {
-    if (current === null || typeof current !== "object") return undefined;
-    current = (current as Record<PropertyKey, unknown>)[segment];
-  }
-  return current;
-}
-
-/** Drop fields the model invented so a strict report schema can still parse. */
-function dropUnrecognizedKeys(value: unknown, schema: z.ZodType): unknown {
-  let current = value;
-  for (let attempt = 0; attempt < 16; attempt += 1) {
-    const parsed = schema.safeParse(current);
-    if (parsed.success) return current;
-    const issues = unrecognizedKeyIssues(parsed.error);
-    if (issues.length === 0) return current;
-    const next = structuredClone(current);
-    let removed = false;
-    for (const issue of issues) {
-      const target = valueAt(next, issue.path);
-      if (!target || typeof target !== "object") continue;
-      for (const key of issue.keys) {
-        if (Object.prototype.hasOwnProperty.call(target, key)) {
-          delete (target as Record<string, unknown>)[key];
-          removed = true;
-        }
-      }
-    }
-    if (!removed) return current;
-    current = next;
-  }
-  return current;
 }
 
 function validateParagraphInput(paragraphs: AnalyzeOcrTextInput["paragraphs"]): void {

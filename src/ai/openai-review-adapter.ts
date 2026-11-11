@@ -41,7 +41,7 @@ export interface OpenAICompatibleClient {
   chat: {
     completions: {
       create(input: unknown): Promise<{
-        choices: Array<{ message: { content: string | null } }>;
+        choices: Array<{ message: { content: string | null }; finish_reason?: string | null }>;
       }>;
     };
   };

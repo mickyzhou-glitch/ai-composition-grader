@@ -23,6 +23,7 @@ import {
   AnalysisJobUnavailableReviewError,
 } from "./analysis-job-repository";
 import { AnalysisJobService } from "./analysis-job-service";
+import { AiAdapterError } from "../ai/openai-review-adapter";
 import {
   AnalysisWorker,
   type AnalysisExecutionService,
@@ -847,6 +848,24 @@ describe("AnalysisJobService", () => {
     expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "queued", attempt: 1 });
   });
 
+  it.each([
+    new AiAdapterError("AI_REQUEST_FAILED", "超时", 502, undefined, "request_timeout"),
+    new AiAdapterError("AI_INVALID_RESPONSE", "结构", 502, undefined, "ocr_schema_paragraphs_0_segments_0_pageIndex_invalid_type"),
+  ])("真实仓储支持细分码重试直到上限：%s", async (error) => {
+    service.enqueue(ownerA, "review-a");
+    const errorCode = `${error.code}_${error.upstreamCode}`;
+    const worker = new AnalysisWorker(repository, {
+      prepare: async () => { throw error; },
+      analyze: async () => { throw new Error("unreachable"); },
+      save: async () => { throw new Error("unreachable"); },
+      fail: async () => { throw new Error("unreachable"); },
+    });
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "retrying", errorCode });
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "queued", errorCode, attempt: 1 });
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "failed", errorCode });
+    expect(repository.getById(ownerA, "job-1")).toMatchObject({ status: "failed", errorCode, attempt: 2 });
+  });
+
   it("retry 到达上限而变为 failed 时，Worker 只清理作文状态而不重复转换任务", async () => {
     service.enqueue(ownerA, "review-a");
     const claimed = repository.claimNext()!;
@@ -895,6 +914,32 @@ describe("AnalysisJobService", () => {
 
     await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "failed", errorCode: "IMAGES_REQUIRED" });
     expect(transitions).toEqual([{ status: "failed", code: "IMAGES_REQUIRED" }]);
+  });
+
+  it.each([
+    [new AiAdapterError("AI_INVALID_RESPONSE", "识别结构错误", 502, undefined, "ocr_schema_pages_invalid_type"), "AI_INVALID_RESPONSE_ocr_schema_pages_invalid_type", true],
+    [new AiAdapterError("AI_REQUEST_FAILED", "超时", 502, undefined, "request_timeout"), "AI_REQUEST_FAILED_request_timeout", true],
+    [new AiAdapterError("AI_REQUEST_FAILED", "拒绝", 502, 403, "invalid_type"), "AI_UPSTREAM_HTTP_403_invalid_type", false],
+  ])("本机 Worker 保留 adapter 细分错误码并按类型重试：%s", async (error, errorCode, retryable) => {
+    service.enqueue(ownerA, "review-a");
+    const claimed = repository.claimNext()!;
+    const retry = vi.fn(() => "at_limit" as const);
+    const transition = vi.fn();
+    const worker = new AnalysisWorker({
+      claimNext: () => claimed,
+      updateProgress: (job, stage) => ({ ...job, progressStage: stage } as never),
+      transition,
+      renewLease: () => null,
+      retry,
+    }, {
+      prepare: async () => { throw error; },
+      analyze: async () => { throw new Error("unreachable"); },
+      save: async () => { throw new Error("unreachable"); },
+      fail: async () => { throw new Error("unreachable"); },
+    });
+    await expect(worker.runOnce()).resolves.toMatchObject({ outcome: "failed", errorCode });
+    expect(retry).toHaveBeenCalledTimes(retryable ? 1 : 0);
+    expect(transition).toHaveBeenCalledWith(claimed, "failed", { errorCode, message: null });
   });
 
   it("教师编辑导致保存冲突时取消旧任务，保留编辑并继续处理下一项", async () => {
