@@ -3,7 +3,7 @@ import { D1LoginChallengeRepository } from "../src/cloudflare/d1-login-challenge
 import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-repository";
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
-import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
+import { D1ReviewWriter, SavedAssignmentTitleConflictError } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "../src/cloudflare/d1-analysis-jobs";
 import {
   D1Reanalysis,
@@ -21,6 +21,7 @@ import { ANALYSIS_JOB_METADATA_PREFIX } from "../src/jobs/analysis-job-metadata"
 import { sanitizeAnalysisDetail } from "../src/jobs/public-analysis-failure";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
+import { fetchAiUpstream } from "../src/cloudflare/ai-upstream-fetch";
 import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
@@ -196,9 +197,10 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
   const hostname = new URL(input.baseUrl).hostname;
   const isMiMo = hostname === "api.xiaomimimo.com";
   const isDeepSeek = hostname === "api.deepseek.com";
-  const response = await fetch(`${input.baseUrl}/chat/completions`, {
+  const response = await fetchAiUpstream(`${input.baseUrl}/chat/completions`, {
     method: "POST",
     headers: aiRequestHeaders(input.baseUrl, input.apiKey),
+    signal: AbortSignal.timeout(30_000),
     body: JSON.stringify({
       model: input.model,
       messages: input.role === "vision" ? [{ role: "user", content: [
@@ -209,9 +211,37 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
       ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: 16 }),
     }),
   });
-  if (!response.ok) throw new Error("AI_CONNECTION_FAILED");
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
-  if (typeof payload.choices?.[0]?.message?.content !== "string" || !payload.choices[0].message.content.trim()) throw new Error("AI_CONNECTION_FAILED");
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = undefined;
+  }
+  if (!response.ok) {
+    const providerError = typeof payload === "object" && payload !== null && "error" in payload ? payload.error : payload;
+    const providerMessage = typeof providerError === "object" && providerError !== null && "message" in providerError && typeof providerError.message === "string"
+      ? providerError.message.slice(0, 240)
+      : typeof providerError === "string" ? providerError.slice(0, 240) : undefined;
+    throw Object.assign(new Error("AI_CONNECTION_FAILED"), { upstreamStatus: response.status, providerMessage });
+  }
+  const completionPayload = payload as { choices?: Array<{ message?: { content?: unknown } }> };
+  if (typeof completionPayload.choices?.[0]?.message?.content !== "string" || !completionPayload.choices[0].message.content.trim()) throw new Error("AI_CONNECTION_FAILED");
+}
+
+function aiConnectionMessage(error: unknown, baseUrl: string): string {
+  const status = typeof error === "object" && error !== null && "upstreamStatus" in error && typeof error.upstreamStatus === "number"
+    ? error.upstreamStatus
+    : null;
+  const providerMessage = typeof error === "object" && error !== null && "providerMessage" in error && typeof error.providerMessage === "string"
+    ? error.providerMessage
+    : null;
+  if (status === 401) return "API Key 无效或已失效，请确认使用的是 Grok API 密钥（xai- 开头）";
+  if (status === 403) return "API Key 没有当前团队或模型的调用权限，请检查 xAI 团队权限";
+  if (status === 404) return "找不到模型或接口，请检查服务地址和模型名称";
+  if (status === 429) return "API 请求被限流，请检查 xAI 的 Usage、Billing 和速率限制";
+  if (status === 400) return providerMessage ? `xAI 拒绝了请求：${providerMessage}` : "xAI 拒绝了请求，请检查模型名称和请求参数";
+  if (status !== null) return `AI 服务返回错误（HTTP ${status}）`;
+  try { return `无法连接 ${new URL(baseUrl).hostname}，请检查服务地址和网络`; } catch { return "AI 服务连接失败，请检查地址、模型和密钥"; }
 }
 
 function workerAiSettings(env: WorkerEnv) {
@@ -322,9 +352,11 @@ export default {
     const settingTestMatch = /^\/api\/settings\/(vision|content)\/test$/u.exec(url.pathname);
     if (settingTestMatch && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let candidateBaseUrl = "";
       try {
         const role = settingTestMatch[1] as "vision" | "content";
         const candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown });
+        candidateBaseUrl = candidate.baseUrl;
         const stored = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ encrypted_api_key: string | null }>();
         const apiKey = candidate.apiKey ?? await configuredApiKey(env, stored?.encrypted_api_key ?? null, role);
         if (!apiKey) return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
@@ -332,7 +364,7 @@ export default {
         return Response.json({ ok: true, data: { connected: true } });
       } catch (error) {
         if (error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE") return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
-        return apiError("AI_CONNECTION_FAILED", "AI 服务连接失败，请检查地址、模型和密钥", 502);
+        return apiError("AI_CONNECTION_FAILED", aiConnectionMessage(error, candidateBaseUrl), 502);
       }
     }
     if (url.pathname === "/api/assignment-guidance" && request.method === "POST") {
@@ -448,7 +480,34 @@ export default {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).savedAssignments(user.id) }, { headers: { "cache-control": "no-store" } });
     }
+    if (url.pathname === "/api/saved-assignments" && request.method === "POST") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const { config } = z.object({ config: assignmentConfigSchema }).strict().parse(await request.json());
+        if (config.templateType !== "custom") return apiError("VALIDATION_ERROR", "仅自定义题目可以保存", 400);
+        const saved = await new D1ReviewWriter(env.DB).saveCustomAssignment(user.id, config);
+        return Response.json({ ok: true, data: saved }, { status: 201, headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        if (error instanceof ZodError || error instanceof SyntaxError || error instanceof TypeError) return apiError("VALIDATION_ERROR", "题目要求不完整或格式无效", 400);
+        throw error;
+      }
+    }
     const savedAssignmentMatch = /^\/api\/saved-assignments\/([^/]+)$/u.exec(url.pathname);
+    if (savedAssignmentMatch && request.method === "PUT") {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      try {
+        const { config } = z.object({ config: assignmentConfigSchema }).strict().parse(await request.json());
+        if (config.templateType !== "custom") return apiError("VALIDATION_ERROR", "仅自定义题目可以保存", 400);
+        const saved = await new D1ReviewWriter(env.DB).saveCustomAssignment(user.id, config, decodeURIComponent(savedAssignmentMatch[1]));
+        return saved
+          ? Response.json({ ok: true, data: saved }, { headers: { "cache-control": "no-store" } })
+          : apiError("NOT_FOUND", "常用题目不存在", 404);
+      } catch (error) {
+        if (error instanceof SavedAssignmentTitleConflictError) return apiError("TITLE_CONFLICT", "已有同名常用题目，请修改题目名称", 409);
+        if (error instanceof ZodError || error instanceof SyntaxError || error instanceof TypeError) return apiError("VALIDATION_ERROR", "题目要求不完整或格式无效", 400);
+        throw error;
+      }
+    }
     if (savedAssignmentMatch && request.method === "DELETE") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       const deleted = await new D1ReviewWriter(env.DB).deleteSavedAssignment(user.id, decodeURIComponent(savedAssignmentMatch[1]));

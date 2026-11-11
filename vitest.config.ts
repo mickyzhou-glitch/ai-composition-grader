@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname),
+      "cloudflare:sockets": path.resolve(__dirname, "test/cloudflare-sockets-stub.ts"),
     },
   },
   test: {

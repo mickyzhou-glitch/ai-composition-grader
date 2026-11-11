@@ -5,6 +5,7 @@ import { deliveryReadiness } from "../delivery/readiness";
 import {
   annotationSchema,
   assignmentConfigSchema,
+  type AssignmentConfig,
   evaluationReportSchema,
   isParagraphEvaluationReport,
   studentNameSchema,
@@ -12,6 +13,8 @@ import {
 } from "../domain/contracts";
 import { validateReport } from "../domain/report-validation";
 import { ocrCheckpointSchema } from "../ocr/contracts";
+
+export class SavedAssignmentTitleConflictError extends Error {}
 
 export class D1ReviewWriter {
   constructor(private readonly database: D1Database) {}
@@ -42,6 +45,37 @@ export class D1ReviewWriter {
   async deleteSavedAssignment(ownerId: string, id: string): Promise<boolean> {
     const result = await this.database.prepare("DELETE FROM saved_assignments WHERE id = ? AND owner_id = ?").bind(id, ownerId).run();
     return result.meta.changes > 0;
+  }
+
+  async saveCustomAssignment(ownerId: string, input: unknown, id?: string): Promise<{ id: string; config: AssignmentConfig; createdAt: string; updatedAt: string } | null> {
+    const config = assignmentConfigSchema.parse(input);
+    if (config.templateType !== "custom") throw new TypeError("only custom assignments can be saved");
+    const now = Date.now();
+    if (id) {
+      const existing = await this.database.prepare("SELECT id FROM saved_assignments WHERE id = ? AND owner_id = ?")
+        .bind(id, ownerId).first<{ id: string }>();
+      if (!existing) return null;
+      const titleOwner = await this.database.prepare("SELECT id FROM saved_assignments WHERE owner_id = ? AND title = ?")
+        .bind(ownerId, config.title).first<{ id: string }>();
+      if (titleOwner && titleOwner.id !== id) throw new SavedAssignmentTitleConflictError("已有同名常用题目");
+      await this.database.prepare("UPDATE saved_assignments SET title = ?, config = ?, updated_at = ? WHERE id = ? AND owner_id = ?")
+        .bind(config.title, JSON.stringify(config), now, id, ownerId).run();
+    } else {
+      await this.database.prepare(`
+        INSERT INTO saved_assignments (id, owner_id, title, config, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(owner_id, title) DO UPDATE SET config = excluded.config, updated_at = excluded.updated_at
+      `).bind(crypto.randomUUID(), ownerId, config.title, JSON.stringify(config), now, now).run();
+    }
+    const row = await this.database.prepare("SELECT id, config, created_at, updated_at FROM saved_assignments WHERE owner_id = ? AND title = ?")
+      .bind(ownerId, config.title).first<{ id: string; config: string; created_at: number; updated_at: number }>();
+    if (!row) throw new Error("saved assignment was not found after saving");
+    return {
+      id: row.id,
+      config: assignmentConfigSchema.parse(JSON.parse(row.config)),
+      createdAt: new Date(row.created_at).toISOString(),
+      updatedAt: new Date(row.updated_at).toISOString(),
+    };
   }
 
   async update(ownerId: string, reviewId: string, input: unknown): Promise<{ revision: number } | null> {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { D1ReviewWriter } from "./d1-review-writer";
+import { D1ReviewWriter, SavedAssignmentTitleConflictError } from "./d1-review-writer";
 
 const config = {
   title: "自定义题目", grade: "六年级", writingRequirements: "叙事", targetCharacters: 600,
@@ -101,6 +101,39 @@ describe("D1ReviewWriter", () => {
 
     await expect(new D1ReviewWriter(database).deleteSavedAssignment("teacher-1", "assignment-1")).resolves.toBe(true);
     expect(database.prepare).toHaveBeenCalledWith(expect.stringContaining("owner_id"));
+  });
+
+  it("updates the selected saved assignment without creating another one", async () => {
+    const queries: Array<{ sql: string; values: unknown[] }> = [];
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: (...values: unknown[]) => {
+          queries.push({ sql, values });
+          return {
+            first: async () => sql.includes("WHERE id = ? AND owner_id = ?")
+              ? { id: "saved-1" }
+              : sql.includes("SELECT id FROM saved_assignments WHERE owner_id = ? AND title = ?")
+                ? { id: "saved-1" }
+                : { id: "saved-1", config: JSON.stringify(config), created_at: 1000, updated_at: 2000 },
+            run: async () => ({ meta: { changes: 1 } }),
+          };
+        },
+      })),
+    } as unknown as D1Database;
+    const saved = await new D1ReviewWriter(database).saveCustomAssignment("teacher-1", config, "saved-1");
+    expect(saved?.id).toBe("saved-1");
+    expect(queries.some(({ sql, values }) => sql.includes("UPDATE saved_assignments") && values.includes("saved-1") && values.includes("teacher-1"))).toBe(true);
+    expect(queries.some(({ sql }) => sql.includes("INSERT INTO saved_assignments"))).toBe(false);
+  });
+
+  it("rejects renaming a saved assignment to another saved title", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: () => ({ first: async () => sql.includes("WHERE id = ? AND owner_id = ?") ? { id: "saved-1" } : { id: "saved-2" } }),
+      })),
+    } as unknown as D1Database;
+    await expect(new D1ReviewWriter(database).saveCustomAssignment("teacher-1", config, "saved-1"))
+      .rejects.toBeInstanceOf(SavedAssignmentTitleConflictError);
   });
 
   it("uses the expected revision when editing a review", async () => {

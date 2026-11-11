@@ -823,6 +823,7 @@ describe("CompositionReviewAdapter", () => {
     const prompt = requestAt(harness.create).messages[0].content;
     expect(prompt).toContain("suggestions 必须恰好 1 项");
     expect(prompt).toContain("本段无需修改");
+    expect(prompt).toContain("不要提出或展示改错别字、改病句");
     expect(prompt).not.toContain("1 至 4");
   });
 });

@@ -1,23 +1,19 @@
 import {
   AlignmentType,
-  BorderStyle,
   convertMillimetersToTwip,
   Document,
   ImageRun,
-  PageBreak,
+  LineRuleType,
   PageOrientation,
   Packer,
   Paragraph,
-  ShadingType,
-  Table,
-  TableCell,
-  TableLayoutType,
-  TableRow,
   TextRun,
   UnderlineType,
-  VerticalAlignTable,
-  WidthType,
-  type IBorderOptions,
+  WpsShapeRun,
+  HorizontalPositionRelativeFrom,
+  VerticalPositionRelativeFrom,
+  TextWrappingType,
+  VerticalAnchor,
 } from "docx";
 import JSZip from "jszip";
 
@@ -48,14 +44,20 @@ export const BOX_FILL_HEX = "E7D4A8";
  * 底色 × 0.4 + 白 × 0.6 = E7D4A8。
  */
 export const ACCENT3_BASE_HEX = "C39426";
-/** Word「浅色 60%」写进 themeTint / themeFillTint 的值：(1 - 0.6) × 255 = 0x66。 */
-export const ACCENT3_LIGHTER_60_TINT = "66";
 
 const PAGE_SHORT_MM = 210;
 const PAGE_LONG_MM = 297;
 const MARGIN_MM = 12;
-const MAX_BOX_HALF_POINTS = 21;
-const MIN_BOX_HALF_POINTS = 16;
+// 小四为 12 磅；Word 字号在 OOXML 中以半磅计。
+const BODY_HALF_POINTS = 24;
+const BOX_LINE_TWIP = 360; // 固定 18 磅，与文本框高度计算使用同一单位。
+const BOX_VERTICAL_INSET = 60;
+const BOX_HORIZONTAL_INSET = 80;
+const BOX_PARAGRAPH_BEFORE = 20;
+const BOX_PARAGRAPH_AFTER = 40;
+// WPS 对浮动文本框的最后一行会额外使用少量下沉空间；120 twip 会让末行贴边并被裁切。
+// 预留 360 twip（18 磅）让楷体小四的字面和下划线都落在框内。
+const BOX_HEIGHT_RESERVE = 360;
 const graphemeSegmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
 
 const pageWidthTwip = convertMillimetersToTwip(PAGE_LONG_MM);
@@ -65,31 +67,30 @@ const contentWidthTwip = pageWidthTwip - marginTwip * 2;
 const contentHeightTwip = pageHeightTwip - marginTwip * 2;
 const leftColumnTwip = Math.round(contentWidthTwip * 0.46);
 const rightColumnTwip = contentWidthTwip - leftColumnTwip;
-const boxInnerWidthTwip = rightColumnTwip - 200;
 
-const noBorder: IBorderOptions = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
-const noBorders = {
-  top: noBorder,
-  bottom: noBorder,
-  left: noBorder,
-  right: noBorder,
-  insideHorizontal: noBorder,
-  insideVertical: noBorder,
-};
-const boxBorder: IBorderOptions = { style: BorderStyle.SINGLE, size: 8, color: ACCENT3_BASE_HEX };
-const boxBorders = {
-  top: boxBorder,
-  bottom: boxBorder,
-  left: boxBorder,
-  right: boxBorder,
-};
+const twipToEmu = (twip: number) => Math.round(twip * 635);
+
+function floatingAt(x: number, y: number) {
+  return {
+    horizontalPosition: { relative: HorizontalPositionRelativeFrom.MARGIN, offset: twipToEmu(x) },
+    verticalPosition: { relative: VerticalPositionRelativeFrom.MARGIN, offset: twipToEmu(y) },
+    allowOverlap: true,
+    lockAnchor: false,
+    layoutInCell: false,
+    wrap: { type: TextWrappingType.NONE },
+  };
+}
 
 function points(value: number): number {
   return value * 2;
 }
 
-function pageBreakParagraph() {
-  return new Paragraph({ children: [new PageBreak()] });
+function nextPageAnchor() {
+  return new Paragraph({
+    pageBreakBefore: true,
+    spacing: { before: 0, after: 0, line: 1 },
+    children: [new TextRun({ text: "", size: 1 })],
+  });
 }
 
 function imageKind(bytes: Uint8Array, mimeType?: string): "png" | "jpg" | "gif" | "bmp" {
@@ -113,7 +114,8 @@ function fittedImageSize(image: ExportImage) {
     throw new Error("作文照片尺寸无效，无法生成 Word");
   }
   const maxWidth = twipToPx(leftColumnTwip - 120);
-  const maxHeight = twipToPx(contentHeightTwip - 80);
+  // Leave room below the floating photo for WPS page layout and the next page anchor.
+  const maxHeight = twipToPx(contentHeightTwip - 800);
   const scale = Math.min(maxWidth / image.width, maxHeight / image.height);
   return {
     width: Math.max(1, Math.round(image.width * scale)),
@@ -132,7 +134,7 @@ function runOptions(style: ExportRunStyle): {
   color: string;
   underline?: { type: (typeof UnderlineType)["SINGLE"]; color: string };
 } {
-  if (style === "suggestion") return { bold: true, color: "C00000" };
+  if (style === "suggestion") return { bold: false, color: "C00000" };
   if (style === "demonstration") return { bold: true, color: "000000" };
   if (style === "changed") {
     return {
@@ -155,6 +157,7 @@ function textRuns(text: string, style: ExportRunStyle, halfPoints: number) {
     underline: options.underline,
     font: KAITI_FONT,
     size: halfPoints,
+    snapToGrid: false,
   }));
 }
 
@@ -162,116 +165,114 @@ function graphemeCount(value: string) {
   return Array.from(graphemeSegmenter.segment(value), () => 1).length;
 }
 
-function estimateBoxesHeight(paragraphs: ExportParagraph[], halfPoints: number, columnWidthTwip: number) {
-  const emTwip = halfPoints * 10;
-  const charsPerLine = Math.max(1, Math.floor((columnWidthTwip - 200) / emTwip));
-  const lineTwip = emTwip * 1.45;
-  return paragraphs.reduce((height, paragraph) => {
-    const text = exportParagraphRuns(paragraph).map((run) => run.text).join("");
-    const lines = text.split("\n").reduce((count, line) => (
-      count + Math.max(1, Math.ceil(graphemeCount(line) / charsPerLine))
-    ), 0);
-    return height + lines * lineTwip + 220;
-  }, 0);
+type BoxRun = ReturnType<typeof exportParagraphRuns>[number];
+
+function boxRunGroups(runs: BoxRun[]) {
+  return [runs.filter((run) => run.style === "suggestion"), runs.filter((run) => run.style !== "suggestion")]
+    .filter((group) => group.length > 0);
 }
 
-export function chooseBoxHalfPoints(
-  paragraphs: ExportParagraph[],
-  columnWidthTwip = boxInnerWidthTwip,
-  availableHeightTwip = contentHeightTwip,
-) {
-  if (paragraphs.length === 0) return MAX_BOX_HALF_POINTS;
-  for (let half = MAX_BOX_HALF_POINTS; half > MIN_BOX_HALF_POINTS; half -= 1) {
-    if (estimateBoxesHeight(paragraphs, half, columnWidthTwip) <= availableHeightTwip) return half;
+function boxCharsPerLine(width: number, halfPoints: number) {
+  // 在内边距之外预留少量行宽，兼容 Word/WPS 的中文禁则和字体替换。
+  return Math.max(1, Math.floor((width - BOX_HORIZONTAL_INSET * 2 - 120) / (halfPoints * 10)));
+}
+
+// 原生浮动文本框不能跨页；超长段落按可容纳的行数拆成续框，保留全部文字和样式。
+function splitBoxRuns(paragraph: ExportParagraph, width: number, halfPoints: number): BoxRun[][] {
+  const charsPerLine = boxCharsPerLine(width, halfPoints);
+  const overhead = BOX_VERTICAL_INSET * 2 + BOX_HEIGHT_RESERVE
+    + (BOX_PARAGRAPH_BEFORE + BOX_PARAGRAPH_AFTER) * 2;
+  // 为建议/正文的独立段落边界和末尾空行再保留两行。
+  const maxLines = Math.max(1, Math.floor((contentHeightTwip - overhead) / BOX_LINE_TWIP) - 2);
+  const chunks: BoxRun[][] = [[]];
+  let line = 1;
+  let column = 0;
+  for (const run of exportParagraphRuns(paragraph)) {
+    const text = run.style === "changed" || run.style === "plain"
+      ? run.text.replace(/[\r\n\u2028\u2029]+/gu, "") : run.text;
+    for (const { segment } of graphemeSegmenter.segment(text)) {
+      if (segment !== "\n" && column >= charsPerLine) { line += 1; column = 0; }
+      if (line > maxLines) { chunks.push([]); line = 1; column = 0; }
+      const chunk = chunks[chunks.length - 1];
+      const last = chunk[chunk.length - 1];
+      if (last?.style === run.style) last.text += segment;
+      else chunk.push({ ...run, text: segment });
+      if (segment === "\n") { line += 1; column = 0; }
+      else column += 1;
+    }
   }
-  return MIN_BOX_HALF_POINTS;
+  return chunks;
 }
 
-function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: number) {
-  const runs = exportParagraphRuns(paragraph);
-  const [suggestion, ...remainder] = runs;
-  const line = Math.round(halfPoints * 13.5);
-  const children = suggestion
-    ? [
-      new Paragraph({
-        spacing: { before: 40, after: 40, line },
-        children: textRuns(suggestion.text, suggestion.style, halfPoints),
-      }),
-      new Paragraph({
-        spacing: { before: 20, after: 40, line },
-        // 「改后全段」是一个自然段：只保留标签行自带的换行，正文里的换行去掉。
-        children: remainder.flatMap((run) => textRuns(
-          run.style === "changed" || run.style === "plain" ? run.text.replace(/[\r\n\u2028\u2029]+/gu, "") : run.text,
-          run.style,
-          halfPoints,
-        )),
-      }),
-    ]
-    : [new Paragraph({})];
-  return new Table({
-    width: { size: width, type: WidthType.DXA },
-    columnWidths: [width],
-    layout: TableLayoutType.FIXED,
-    borders: boxBorders,
-    rows: [new TableRow({
-      cantSplit: false,
-      children: [new TableCell({
-        width: { size: width, type: WidthType.DXA },
-        shading: { type: ShadingType.CLEAR, fill: BOX_FILL_HEX },
-        margins: { top: 60, bottom: 60, left: 80, right: 80 },
-        borders: boxBorders,
-        children,
-      })],
-    })],
+function boxHeight(runs: BoxRun[], width: number, halfPoints: number) {
+  const charsPerLine = boxCharsPerLine(width, halfPoints);
+  const paragraphsHeight = boxRunGroups(runs).reduce((height, group) => {
+    // 与 textRuns 的实际输出一致：每个 run 末尾的换行不写入文档。
+    const text = group.map((run) => run.text.endsWith("\n") ? run.text.slice(0, -1) : run.text).join("");
+    const lines = text.split("\n").reduce((count, line) => count + Math.max(1, Math.ceil(graphemeCount(line) / charsPerLine)), 0);
+    return height + lines * BOX_LINE_TWIP + BOX_PARAGRAPH_BEFORE + BOX_PARAGRAPH_AFTER;
+  }, 0);
+  return paragraphsHeight + BOX_VERTICAL_INSET * 2 + BOX_HEIGHT_RESERVE;
+}
+
+function paragraphBox(runs: BoxRun[], width: number, height: number, y: number, halfPoints: number, name: string) {
+  const children = boxRunGroups(runs).map((group) => new Paragraph({
+    alignment: AlignmentType.LEFT,
+    run: { font: KAITI_FONT, size: halfPoints, snapToGrid: false },
+    spacing: { before: BOX_PARAGRAPH_BEFORE, after: BOX_PARAGRAPH_AFTER, line: BOX_LINE_TWIP, lineRule: LineRuleType.EXACT },
+    children: group.flatMap((run) => textRuns(run.text, run.style, halfPoints)),
+  }));
+  return new WpsShapeRun({
+    type: "wps",
+    transformation: { width: twipToPx(width), height: twipToPx(height) },
+    floating: floatingAt(leftColumnTwip + 80, y),
+    altText: { name, title: name, description: name },
+    solidFill: { type: "rgb", value: BOX_FILL_HEX },
+    outline: { type: "solidFill", solidFillType: "rgb", value: ACCENT3_BASE_HEX, width: 12700 },
+    bodyProperties: {
+      verticalAnchor: VerticalAnchor.TOP,
+      noAutoFit: true,
+      margins: {
+        top: twipToEmu(BOX_VERTICAL_INSET), bottom: twipToEmu(BOX_VERTICAL_INSET),
+        left: twipToEmu(BOX_HORIZONTAL_INSET), right: twipToEmu(BOX_HORIZONTAL_INSET),
+      },
+    },
+    children,
   });
 }
 
-function imageParagraph(bytes: Uint8Array, image: ExportImage) {
-  const alt = `第 ${image.position + 1} 页作文原图`;
-  return new Paragraph({
-    alignment: AlignmentType.CENTER,
-    spacing: { before: 0, after: 0 },
-    children: [new ImageRun({
-      type: imageKind(bytes, image.mimeType),
-      data: bytes,
-      transformation: fittedImageSize(image),
-      altText: { name: alt, title: alt, description: alt },
-    })],
-  });
-}
-
-function photoTable(bytes: Uint8Array, page: ExportReportPage) {
-  const halfPoints = chooseBoxHalfPoints(page.paragraphs);
+function photoPages(bytes: Uint8Array, page: ExportReportPage) {
+  const halfPoints = BODY_HALF_POINTS;
   const boxWidth = rightColumnTwip - 160;
-  const boxes = page.paragraphs.flatMap((paragraph, index) => [
-    ...(index === 0 ? [] : [new Paragraph({ spacing: { before: 80 } })]),
-    paragraphBox(paragraph, boxWidth, halfPoints),
-  ]);
-  return new Table({
-    width: { size: contentWidthTwip, type: WidthType.DXA },
-    columnWidths: [leftColumnTwip, rightColumnTwip],
-    layout: TableLayoutType.FIXED,
-    borders: noBorders,
-    rows: [new TableRow({
-      cantSplit: false,
-      children: [
-        new TableCell({
-          width: { size: leftColumnTwip, type: WidthType.DXA },
-          verticalAlign: VerticalAlignTable.TOP,
-          borders: noBorders,
-          margins: { top: 0, bottom: 0, left: 0, right: 80 },
-          children: [imageParagraph(bytes, page.image)],
-        }),
-        new TableCell({
-          width: { size: rightColumnTwip, type: WidthType.DXA },
-          verticalAlign: VerticalAlignTable.TOP,
-          borders: noBorders,
-          margins: { top: 0, bottom: 0, left: 80, right: 0 },
-          children: boxes.length > 0 ? boxes : [new Paragraph({})],
-        }),
-      ],
-    })],
+  const pages: Paragraph[] = [];
+  let y = 0;
+  let drawings: Array<ImageRun | WpsShapeRun> = [];
+  const startPage = () => {
+    const alt = `第 ${page.image.position + 1} 页作文原图`;
+    drawings = [new ImageRun({
+      type: imageKind(bytes, page.image.mimeType),
+      data: bytes,
+      transformation: fittedImageSize(page.image),
+      floating: floatingAt(0, 0),
+      altText: { name: alt, title: alt, description: alt },
+    })];
+    y = 0;
+  };
+  const finishPage = () => pages.push(new Paragraph({
+    spacing: { before: 0, after: 0, line: 20 },
+    children: drawings,
+  }));
+  startPage();
+  page.paragraphs.forEach((paragraph, index) => {
+    splitBoxRuns(paragraph, boxWidth, halfPoints).forEach((runs, part) => {
+      const height = boxHeight(runs, boxWidth, halfPoints);
+      if (y > 0 && y + height > contentHeightTwip) { finishPage(); startPage(); }
+      drawings.push(paragraphBox(runs, boxWidth, height, y, halfPoints, `第 ${index + 1} 段批注${part > 0 ? "（续）" : ""}`));
+      y += height + 80;
+    });
   });
+  finishPage();
+  return pages.flatMap((paragraph, index) => index === 0 ? [paragraph] : [nextPageAnchor(), paragraph]);
 }
 
 /** 段内文字去掉换行，避免 Word/WPS 里出现硬换行。 */
@@ -283,9 +284,10 @@ export function singleLineParagraphText(text: string): string {
  * 完整范文：每个自然段一个 w:p，段内不插换行，首行缩进两字，由 Word/WPS 自动折行和分页。
  * 不复用 PDF 的按宽度折行结果（那会把每一行写成独立段落，行尾单字另起一行）。
  */
-function essayBlocks(paragraphs: readonly string[]) {
+function essayBlocks(paragraphs: readonly string[], startsNewPage: boolean) {
   return [
     new Paragraph({
+      pageBreakBefore: startsNewPage,
       spacing: { before: 200, after: 160 },
       children: [new TextRun({
         text: rewrittenEssayHeading(false),
@@ -296,13 +298,14 @@ function essayBlocks(paragraphs: readonly string[]) {
       })],
     }),
     ...paragraphs.map(singleLineParagraphText).filter((text) => text.length > 0).map((text) => new Paragraph({
-      spacing: { before: 0, after: 80, line: 360 },
+      spacing: { before: 0, after: 80, line: BOX_LINE_TWIP, lineRule: LineRuleType.EXACT },
+      run: { font: KAITI_FONT, size: BODY_HALF_POINTS, snapToGrid: false },
       indent: { firstLineChars: 200 },
       children: [new TextRun({
         text,
         color: "000000",
         font: KAITI_FONT,
-        size: points(14),
+        size: BODY_HALF_POINTS,
       })],
     })),
   ];
@@ -311,20 +314,14 @@ function essayBlocks(paragraphs: readonly string[]) {
 async function documentChildren(review: ExportReviewSource, content: ExportReportContent) {
   const images = await Promise.all(content.pages.map((page) => loadOriginalImage(review.id, page.image)));
   const children = content.pages.flatMap((page, index) => [
-    ...(index === 0 ? [] : [pageBreakParagraph()]),
-    photoTable(images[index], page),
+    ...(index === 0 ? [] : [nextPageAnchor()]),
+    ...photoPages(images[index], page),
   ]);
   if (content.rewrittenEssay.length === 0) return children;
   return [
     ...children,
-    ...(children.length > 0 ? [pageBreakParagraph()] : []),
-    ...essayBlocks(content.rewrittenEssay),
+    ...essayBlocks(content.rewrittenEssay, children.length > 0),
   ];
-}
-
-function chocolateBoxShading(tag: string) {
-  if (!tag.includes(`w:fill="${BOX_FILL_HEX}"`)) return tag;
-  return `<w:shd w:val="clear" w:color="auto" w:fill="${BOX_FILL_HEX}" w:themeColor="accent3" w:themeTint="${ACCENT3_LIGHTER_60_TINT}" w:themeFill="accent3" w:themeFillTint="${ACCENT3_LIGHTER_60_TINT}"/>`;
 }
 
 function themeXml() {
@@ -393,10 +390,21 @@ async function applyChocolateTheme(blob: Blob): Promise<Blob> {
   if (!documentFile || !relsFile || !typesFile) {
     throw new Error("当前浏览器不支持生成 Word");
   }
+  let drawingId = 0;
   const documentXml = (await documentFile.async("string")).replace(
-    /<w:shd\b[^>]*\/>/g,
-    chocolateBoxShading,
-  );
+    new RegExp(`<a:srgbClr val="${BOX_FILL_HEX}"\\s*/>`, "g"),
+    `<a:schemeClr val="accent3"><a:tint val="60000"/></a:schemeClr>`,
+  )
+    // docx 9.7 的形状输出把填充放在线条之后，并重复使用对象 ID；在打包前规范化。
+    .replace(/<wps:spPr([^>]*)>([\s\S]*?)<\/wps:spPr>/g, (_, attrs: string, body: string) => {
+      const fill = body.match(/<a:solidFill>(?:(?!<a:solidFill>)[\s\S])*?<\/a:solidFill>$/)?.[0];
+      if (!fill) return `<wps:spPr${attrs}>${body}</wps:spPr>`;
+      const normalized = body.replace("<a:noFill/>", "").replace(fill, "");
+      return `<wps:spPr${attrs}>${normalized.replace("<a:ln", `${fill}<a:ln`)}</wps:spPr>`;
+    })
+    .replace(/<wp:anchor\b[\s\S]*?<\/wp:anchor>/g, (anchor) => anchor.includes("<wps:wsp>")
+      ? anchor.replace('noChangeAspect="1"', 'noChangeAspect="0"') : anchor)
+    .replace(/<wp:docPr\s+id="\d+"/g, () => `<wp:docPr id="${++drawingId}"`);
   zip.file("word/document.xml", documentXml);
   zip.file("word/theme/theme1.xml", themeXml());
 
@@ -426,6 +434,7 @@ export async function createReviewDocx(review: ExportReviewSource): Promise<Blob
     creator: "AI 作业批改助手",
     title: content.documentTitle,
     subject: "作文逐段批改",
+    styles: { default: { document: { run: { font: KAITI_FONT, size: BODY_HALF_POINTS } } } },
     sections: [{
       properties: {
         page: {

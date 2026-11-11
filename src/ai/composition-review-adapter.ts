@@ -245,6 +245,7 @@ function contentPrompt(input: AnalyzeOcrTextInput): string {
     "根据作文实际内容生成优点和修改项：personalizedComment 中的优点用换行分隔；painPoints 返回修改项数组。每条只写一个具体要点，不加序号。commonIssues 和 revisionSuggestions 必须返回空数组。",
     paragraphArrayRule(input),
     "每个结构段或自然段只对应一个框。suggestions 必须恰好 1 项，只写 advice。一段里有多处修改时，全部写进这一个 advice，用「1. 」「2. 」分行编号，绝不能按修改处数再增加 suggestion 或 paragraphReviews。不要写问题描述，也不要写修改示例。",
+    "修改动作只写题目要求、内容补充、细节、结构和前后衔接等有教学价值的调整。不要提出或展示改错别字、改病句、标点、书写及普通字词润色这类基础问题；即使原文中有这些问题，也不要把它们混进编号动作。若一段只存在这类基础问题，advice 写「本段无需修改」。",
     "没有需要修改的段也要保留这个框：advice 写「本段无需修改」。未归组时 revisedText 与该段原文逐字相同；已按结构段归组时 revisedText 仍与 rewrittenEssay 的对应段逐字相同。",
     revisedTextRule(input),
     "parentFeedbacks 必须按固定顺序生成恰好三份：第一份 style=warm、title=亲切详细；第二份 style=professional、title=专业清晰；第三份 style=concise、title=简短微信版。每份 content 都要包含一个具体优点、一个具体问题和修改方法。",

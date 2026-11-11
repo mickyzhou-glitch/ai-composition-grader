@@ -4,6 +4,8 @@ import worker, { savePipelineResult, saveUnreadableResult } from "./index";
 import { D1AnalysisJobs } from "../src/cloudflare/d1-analysis-jobs";
 import { D1Reanalysis, D1ReanalysisBatchError } from "../src/cloudflare/d1-reanalysis";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
+import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
+import type { AssignmentConfig } from "../src/domain/contracts";
 import { OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
 import { AiAdapterError } from "../src/ai/openai-review-adapter";
 import { AssignmentGuidanceAdapter } from "../src/ai/assignment-guidance-adapter";
@@ -139,6 +141,26 @@ describe("Cloudflare Worker", () => {
     }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ ok: true, data: [] });
+  });
+
+  it("保存题目要求后可按原题目 ID 更新", async () => {
+    const save = vi.spyOn(D1ReviewWriter.prototype, "saveCustomAssignment").mockResolvedValue({
+      id: "saved-1", config: reviewConfig as AssignmentConfig, createdAt: new Date(1000).toISOString(), updatedAt: new Date(2000).toISOString(),
+    });
+    for (const [path, method, expectedId] of [
+      ["/api/saved-assignments", "POST", undefined],
+      ["/api/saved-assignments/saved-1", "PUT", "saved-1"],
+    ] as const) {
+      const response = await worker.fetch(new Request(`https://grader.workers.dev${path}`, {
+        method, headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+        body: JSON.stringify({ config: reviewConfig }),
+      }), workerEnv(() => new Response("asset"), authenticatedDatabase()));
+      expect(response.status).toBe(method === "POST" ? 201 : 200);
+      await expect(response.json()).resolves.toMatchObject({ ok: true, data: { id: "saved-1" } });
+      expect(save).toHaveBeenLastCalledWith(
+        "teacher-1", expect.objectContaining({ title: "为自己鼓掌" }), ...(expectedId ? [expectedId] : []),
+      );
+    }
   });
 
   it("课本导入拒绝无效图片并返回 400", async () => {
@@ -490,6 +512,36 @@ describe("Cloudflare Worker", () => {
     expect(response.status).toBe(200);
     const body = JSON.parse((upstream.mock.calls.at(-1)?.[1] as RequestInit).body as string);
     expect(body.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("模型连接测试返回上游的具体错误类别", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "admin-1", username: "admin", role: "admin", must_change_password: 0, expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM settings") ? { encrypted_api_key: null } : null),
+        })),
+      })),
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+      error: { message: "Your team is not authorized to use this model" },
+    }), { status: 403, headers: { "content-type": "application/json" } }));
+
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({ baseUrl: "https://api.x.ai/v1", model: "grok-4.7" }),
+    }), {
+      ASSETS: { fetch: async () => new Response("asset") },
+      DB: database,
+      CONTENT_AI_API_KEY: "content-secret",
+    } as never);
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "AI_CONNECTION_FAILED", message: "API Key 没有当前团队或模型的调用权限，请检查 xAI 团队权限" },
+    });
   });
 
   it("保存作文内容模型时只更新 content 角色", async () => {
