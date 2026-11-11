@@ -21,6 +21,7 @@ export const settings = sqliteTable("settings", {
 export const reviews = sqliteTable("reviews", {
   id: text("id").primaryKey(),
   status: text("status").$type<ReviewStatus>().notNull(),
+  studentName: text("student_name").notNull().default(""),
   config: text("config", { mode: "json" }).$type<AssignmentConfig>().notNull(),
   report: text("report", { mode: "json" }).$type<EvaluationReport>(),
   revision: integer("revision").notNull().default(0),

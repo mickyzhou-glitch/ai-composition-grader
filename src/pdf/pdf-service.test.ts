@@ -13,6 +13,7 @@ function review(overrides: Partial<ReviewRecord> = {}): ReviewRecord {
   return {
     id: "review-1",
     status: "ready_for_review",
+    studentName: "",
     revision: 7,
     analysisRunId: null,
     pdfFilename: null,

@@ -6,6 +6,7 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   evaluationReportSchema,
+  studentNameSchema,
 } from "../domain/contracts";
 import type { ImageService } from "../images/image-service";
 import type { PdfService } from "../pdf/pdf-service";
@@ -62,6 +63,7 @@ function reviewImageDto(image: {
 function reviewDto(review: {
   id: string;
   status: unknown;
+  studentName: string;
   config: unknown;
   report: unknown;
   revision: number;
@@ -83,6 +85,7 @@ function reviewDto(review: {
   return {
     id: review.id,
     status: review.status,
+    studentName: review.studentName,
     config: review.config,
     report: review.report,
     revision: review.revision,
@@ -283,6 +286,7 @@ const createReviewSchema = z.object({ config: assignmentConfigSchema }).strict()
 const updateReviewSchema = z
   .object({
     expectedRevision: z.number().int().nonnegative(),
+    studentName: studentNameSchema.optional(),
     config: assignmentConfigSchema.optional(),
     report: evaluationReportSchema.optional(),
     annotations: z.array(annotationSchema).optional(),
@@ -291,6 +295,7 @@ const updateReviewSchema = z
   .refine(
     (input) =>
       input.config !== undefined ||
+      input.studentName !== undefined ||
       input.report !== undefined ||
       input.annotations !== undefined,
     {

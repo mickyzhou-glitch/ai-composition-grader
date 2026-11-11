@@ -12,6 +12,7 @@ const review = {
   id: "review-1",
   status: "ready_for_review",
   revision: 1,
+  studentName: "",
   config: { title: "为自己鼓掌", templateType: "custom" },
   images: [{ id: 1, position: 0, originalName: "作文.jpg", mimeType: "image/jpeg", width: 100, height: 100, rotation: 0, crop: null }],
   annotations: [],
@@ -43,8 +44,8 @@ function deferred<T>() {
 describe("复核页", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
-    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
   });
 
   function mockBrowserDownload() {
@@ -90,6 +91,29 @@ describe("复核页", () => {
     expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toMatchObject({
       expectedRevision: 7,
     });
+  });
+
+  it("支持填写并保存学生姓名", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(review))
+      .mockImplementationOnce(() => json({
+        ...review,
+        revision: 2,
+        studentName: "张小明",
+      }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    const input = await screen.findByRole("textbox", { name: "学生姓名" });
+    await user.type(input, "张小明");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 1,
+      studentName: "张小明",
+    });
+    expect(input).toHaveValue("张小明");
   });
 
   it("保存进行时禁用保存、分析和替换，避免同页写入重叠", async () => {

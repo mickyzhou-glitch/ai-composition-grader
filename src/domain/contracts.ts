@@ -27,6 +27,8 @@ export const reviewStatusSchema = z.enum([
 ]);
 export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
 
+export const studentNameSchema = z.string().trim().max(50);
+
 export const annotationCategorySchema = z.enum([
   "typo",
   "punctuation",

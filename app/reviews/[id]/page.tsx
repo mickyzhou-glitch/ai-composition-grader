@@ -24,6 +24,7 @@ export default function ReviewPage() {
   const { id } = useParams<{ id: string }>();
   const reviewId = String(id);
   const [review, setReview] = useState<ReviewView | null>(null);
+  const [studentName, setStudentName] = useState("");
   const [report, setReport] = useState<EvaluationReport | null>(null);
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [activePage, setActivePage] = useState(0);
@@ -44,6 +45,7 @@ export default function ReviewPage() {
 
   const applyReview = useCallback((loaded: ReviewView) => {
     setReview(loaded);
+    setStudentName(loaded.studentName);
     setReport(loaded.report);
     setAnnotations(loaded.annotations ?? []);
     setActivePage((current) => Math.min(current, Math.max(0, loaded.images.length - 1)));
@@ -168,6 +170,13 @@ export default function ReviewPage() {
     setNotice("");
   }
 
+  function changeStudentName(next: string) {
+    invalidateLoad();
+    setStudentName(next);
+    setDirty(true);
+    setNotice("");
+  }
+
   async function save() {
     if (!report || !review || busy) return;
     setBusy("save");
@@ -176,7 +185,12 @@ export default function ReviewPage() {
       const saved = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ expectedRevision: review.revision, report, annotations }),
+        body: JSON.stringify({
+          expectedRevision: review.revision,
+          studentName,
+          report,
+          annotations,
+        }),
       });
       applyReview(saved);
       setDirty(false);
@@ -292,7 +306,22 @@ export default function ReviewPage() {
       <AppHeader compact />
       <main className="review-page">
         <header className="review-heading">
-          <div><div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div><h1>{review.config.title}</h1><p>左侧核对落笔位置，右侧完善批注与最终评语。</p></div>
+          <div className="review-title-block">
+            <div className="history-meta"><StatusBadge status={review.status} /><span>{review.config.grade}</span></div>
+            <h1>{review.config.title}</h1>
+            <label className="student-name-field">
+              <span>学生姓名</span>
+              <input
+                aria-label="学生姓名"
+                maxLength={50}
+                placeholder="请输入学生姓名"
+                value={studentName}
+                disabled={busy !== null}
+                onChange={(event) => changeStudentName(event.target.value)}
+              />
+            </label>
+            <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
+          </div>
           <div className="review-actions">
             <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="AI 正在细读…" disabled={busy !== null} onClick={() => void analyze()}>重新分析</AsyncButton>
             {review.status !== "needs_better_images" ? replacementControl() : null}

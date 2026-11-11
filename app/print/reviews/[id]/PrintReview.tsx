@@ -17,8 +17,14 @@ const scoreRows = [
   ["writingConventions", "书写规范", 4],
 ] as const;
 
-function safeImageUrl(reviewId: string, imageId: number): string {
-  return `/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${imageId}&variant=annotation`;
+function originalImageUrl(reviewId: string, imageId: number): string {
+  return `/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${imageId}&variant=original`;
+}
+
+function summaryDensityClass(textLength: number): string {
+  if (textLength > 900) return styles.summaryDense;
+  if (textLength > 480) return styles.summaryCompact;
+  return "";
 }
 
 function orderedAnnotations(annotations: Annotation[]) {
@@ -59,6 +65,13 @@ export function PrintReview({ review }: { review: ReviewRecord }) {
 
   const report = review.report;
   const numbered = orderedAnnotations(review.annotations);
+  const summaryTextLength = Array.from([
+    review.config.title,
+    review.config.grade,
+    review.config.writingRequirements,
+    review.config.structureRequirements,
+    report.personalizedComment,
+  ].join("")).length;
 
   return (
     <article className={styles.document} data-print-ready="true">
@@ -67,9 +80,16 @@ export function PrintReview({ review }: { review: ReviewRecord }) {
         <b>{review.config.title}</b>
       </header>
       <section
-        className={`${styles.sheet} ${styles.summary}`}
+        className={`${styles.sheet} ${styles.summary} ${summaryDensityClass(summaryTextLength)}`}
         data-page-kind="summary"
         data-print-section="summary"
+        data-summary-density={
+          summaryTextLength > 900
+            ? "dense"
+            : summaryTextLength > 480
+              ? "compact"
+              : "normal"
+        }
       >
         <p className={styles.eyebrow}>作文批改报告</p>
         <h1>{review.config.title}</h1>
@@ -113,36 +133,8 @@ export function PrintReview({ review }: { review: ReviewRecord }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   alt={`第 ${imageIndex + 1} 页原作文`}
-                  src={safeImageUrl(review.id, image.id)}
+                  src={originalImageUrl(review.id, image.id)}
                 />
-                <svg
-                  aria-hidden="true"
-                  className={styles.annotationOverlay}
-                  preserveAspectRatio="none"
-                  viewBox="0 0 100 100"
-                >
-                  {pageAnnotations.map(({ annotation, number }) => (
-                    <g key={`anchor-${number}`}>
-                      <line
-                        data-anchor-line="true"
-                        x1={annotation.x * 100}
-                        x2="100"
-                        y1={annotation.y * 100}
-                        y2={annotation.y * 100}
-                      />
-                      <circle
-                        cx={annotation.x * 100}
-                        cy={annotation.y * 100}
-                        data-anchor-point="true"
-                        r="1.8"
-                      />
-                      <text
-                        x={annotation.x * 100}
-                        y={annotation.y * 100}
-                      >{number}</text>
-                    </g>
-                  ))}
-                </svg>
               </figure>
               <aside className={styles.annotationNotes} aria-label={`第 ${imageIndex + 1} 页批注`}>
                 {pageAnnotations.length ? (

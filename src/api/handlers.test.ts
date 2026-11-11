@@ -302,6 +302,7 @@ describe("review route handlers", () => {
     const teacherReview = await item.PATCH(
       jsonRequest("http://localhost/api/reviews/review-1", "PATCH", {
         expectedRevision: 1,
+        studentName: "张小明",
         report,
         annotations: [
           {
@@ -319,6 +320,7 @@ describe("review route handlers", () => {
     );
     expect(teacherReview.status).toBe(200);
     expect(repository.getById("review-1")).toMatchObject({
+      studentName: "张小明",
       status: "ready_for_review",
       report,
       annotations: [{ category: "sentence" }],

@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS reviews (
       'failed'
     )
   ),
+  student_name TEXT NOT NULL DEFAULT '',
   config TEXT NOT NULL,
   report TEXT,
   revision INTEGER NOT NULL DEFAULT 0,
@@ -92,6 +93,9 @@ function migrateReviewAnalysisState(database: Database.Database): void {
   }
   if (!columns.has("analysis_run_id")) {
     database.exec("ALTER TABLE reviews ADD COLUMN analysis_run_id TEXT");
+  }
+  if (!columns.has("student_name")) {
+    database.exec("ALTER TABLE reviews ADD COLUMN student_name TEXT NOT NULL DEFAULT ''");
   }
   const pdfColumns: Array<[string, string]> = [
     ["pdf_filename", "TEXT"],

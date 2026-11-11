@@ -121,6 +121,19 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .history-card h3 { margin: 8px 0 5px; font-size: 1.16rem; }
 .history-card h3 a:hover { color: var(--red); }
 .history-card p { margin-bottom: 0; font-size: .88rem; }
+.review-title-block { min-width: min(100%, 420px); }
+.student-name-field {
+  display: flex;
+  max-width: 320px;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 8px;
+  color: var(--muted);
+  font-size: .86rem;
+  font-weight: 700;
+}
+.student-name-field > span { flex: 0 0 auto; }
+.student-name-field input { min-height: 38px; padding: 7px 10px; }
 .status-badge { display: inline-flex; padding: 3px 9px; border-radius: 999px; font-size: .74rem; font-weight: 800; }
 .status-badge--draft, .status-badge--analyzing { background: var(--gold-soft); color: var(--gold); }
 .status-badge--ready_for_review, .status-badge--exported { background: var(--green-soft); color: var(--green); }

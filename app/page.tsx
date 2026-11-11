@@ -117,7 +117,11 @@ export default function Home() {
             {reviews.map((review) => (
               <article className="history-card" key={review.id}>
                 <div className="history-main">
-                  <div className="history-meta"><StatusBadge status={review.status} /><time>{reviewDate(review.updatedAt ?? review.createdAt)}</time></div>
+                  <div className="history-meta">
+                    <StatusBadge status={review.status} />
+                    <span>学生：{review.studentName || "未填写"}</span>
+                    <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
+                  </div>
                   <h3><Link href={`/reviews/${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
                   <p>{review.report ? `${review.report.scores.total} 分 · ${review.report.scores.level}` : "尚未生成评分"}</p>
                 </div>

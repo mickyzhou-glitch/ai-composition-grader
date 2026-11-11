@@ -7,8 +7,13 @@ import { PrintReview } from "./PrintReview";
 const review: ReviewRecord = {
   id: "review-1",
   status: "ready_for_review",
+  studentName: "",
   revision: 4,
   analysisRunId: null,
+  pdfFilename: null,
+  pdfPath: null,
+  pdfRevision: null,
+  exportedAt: null,
   config: {
     title: "为自己鼓掌",
     grade: "上海五四学制六年级",
@@ -107,27 +112,46 @@ describe("A4 打印稿", () => {
     expect(screen.getByText("细节真实，情感自然。")).toBeInTheDocument();
   });
 
-  it("图片只使用 imageId 安全接口，批注按 pageIndex 和 y 排序并绘制红色引线", () => {
+  it("原文页使用无圈注原图，批注按 pageIndex 和 y 排序显示在侧栏", () => {
     const { container } = render(<PrintReview review={review} />);
     const images = screen.getAllByRole("img");
 
     expect(images[0]).toHaveAttribute(
       "src",
-      "/api/reviews/review-1/files?imageId=10&variant=annotation",
+      "/api/reviews/review-1/files?imageId=10&variant=original",
     );
-    expect(images[0].getAttribute("src")).not.toContain("private-annotation");
+    expect(images[0].getAttribute("src")).not.toContain("private-original");
     expect(images[1]).toHaveAttribute(
       "src",
-      "/api/reviews/review-1/files?imageId=11&variant=annotation",
+      "/api/reviews/review-1/files?imageId=11&variant=original",
     );
     expect(
       Array.from(container.querySelectorAll("[data-annotation-number]")).map(
         (node) => node.getAttribute("data-annotation-number"),
       ),
     ).toEqual(["1", "2", "3"]);
-    expect(container.querySelectorAll("line[data-anchor-line]")).toHaveLength(3);
-    expect(container.querySelectorAll("circle[data-anchor-point]")).toHaveLength(3);
+    expect(container.querySelector("svg")).toBeNull();
     expect(screen.getByText("第一条").closest("li")).toHaveTextContent("第一处");
+  });
+
+  it("总评文字较多时使用紧凑字号并保持为独立单页", () => {
+    const longReview: ReviewRecord = {
+      ...review,
+      config: {
+        ...review.config,
+        writingRequirements: "写清事情经过和感受。".repeat(45),
+      },
+      report: {
+        ...review.report!,
+        personalizedComment: "观察细致，叙事完整，继续保持。".repeat(45),
+      },
+    };
+
+    const { container } = render(<PrintReview review={longReview} />);
+    const summary = container.querySelector('[data-page-kind="summary"]');
+
+    expect(summary).toHaveAttribute("data-summary-density", "dense");
+    expect(summary?.className).toContain("summaryDense");
   });
 
   it("每个结构化示范段落后紧跟红色修改建议", () => {

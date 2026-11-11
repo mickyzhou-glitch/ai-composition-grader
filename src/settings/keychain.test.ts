@@ -11,7 +11,7 @@ import {
 } from "./keychain";
 
 describe("MacOSKeychain", () => {
-  it("使用 execFile runner 的独立参数保存密钥", async () => {
+  it("将密钥作为 security 的 -w 参数保存，避免等待交互式输入", async () => {
     const runner = vi.fn<KeychainRunner>().mockResolvedValue({ stdout: "" });
     const keychain = new MacOSKeychain({ runner, platform: "darwin" });
 
@@ -27,8 +27,8 @@ describe("MacOSKeychain", () => {
         "-a",
         KEYCHAIN_ACCOUNT,
         "-w",
+        "sk-not-for-logs",
       ],
-      "sk-not-for-logs\n",
     );
   });
 

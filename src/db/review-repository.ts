@@ -5,6 +5,7 @@ import {
   annotationSchema,
   assignmentConfigSchema,
   reviewStatusSchema,
+  studentNameSchema,
   type Annotation,
   type AiReviewEnvelope,
   type AssignmentConfig,
@@ -38,6 +39,7 @@ export interface ReviewImage extends ReviewImageInput {
 export interface ReviewRecord {
   id: string;
   status: ReviewStatus;
+  studentName: string;
   config: AssignmentConfig;
   report: EvaluationReport | null;
   revision: number;
@@ -61,6 +63,7 @@ export interface CreateReviewInput {
 
 export interface TeacherReviewEdits {
   expectedRevision: number;
+  studentName?: string;
   config?: AssignmentConfig;
   report?: EvaluationReport;
   annotations?: Annotation[];
@@ -172,6 +175,7 @@ export class ReviewRepository {
     this.database.transaction((transaction) => {
       transaction.insert(reviews).values({
         id: input.id,
+        studentName: "",
         config,
         status,
         report: null,
@@ -211,6 +215,7 @@ export class ReviewRepository {
       .select({
         id: reviews.id,
         status: reviews.status,
+        studentName: reviews.studentName,
         revision: reviews.revision,
         analysisRunId: reviews.analysisRunId,
         pdfFilename: reviews.pdfFilename,
@@ -420,6 +425,10 @@ export class ReviewRepository {
 
   updateTeacherEdits(id: string, input: TeacherReviewEdits): ReviewRecord {
     const current = this.requireById(id);
+    const studentName =
+      input.studentName !== undefined
+        ? studentNameSchema.parse(input.studentName)
+        : current.studentName;
     const config = input.config
       ? assignmentConfigSchema.parse(input.config)
       : current.config;
@@ -453,6 +462,7 @@ export class ReviewRepository {
       const update = transaction
         .update(reviews)
         .set({
+          studentName,
           config,
           report,
           status,

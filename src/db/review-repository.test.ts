@@ -87,6 +87,32 @@ describe("ReviewRepository", () => {
 
   afterEach(() => sqlite.close());
 
+  it("旧数据库启动时补充学生姓名列并默认为空", () => {
+    const legacy = new Database(":memory:");
+    legacy.exec(`
+      CREATE TABLE reviews (
+        id TEXT PRIMARY KEY NOT NULL,
+        status TEXT NOT NULL,
+        config TEXT NOT NULL,
+        report TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+
+    initializeSchema(legacy);
+
+    const columns = legacy.prepare("PRAGMA table_info(reviews)").all() as Array<{
+      name: string;
+      dflt_value: string | null;
+    }>;
+    expect(columns).toContainEqual(expect.objectContaining({
+      name: "student_name",
+      dflt_value: "''",
+    }));
+    legacy.close();
+  });
+
   it("创建并按 id 读取强类型配置和图片", () => {
     repository.create({
       id: "review-1",
@@ -574,6 +600,27 @@ describe("ReviewRepository", () => {
         annotations: [annotation],
       }),
     ).toMatchObject({ status: "ready_for_review", report });
+  });
+
+  it("保存学生姓名且不清空已有报告和批注", () => {
+    repository.create({ id: "review-1", config });
+    const analyzed = repository.updateTeacherEdits("review-1", {
+      expectedRevision: 0,
+      report,
+      annotations: [annotation],
+    });
+
+    const named = repository.updateTeacherEdits("review-1", {
+      expectedRevision: analyzed.revision,
+      studentName: "  张小明  ",
+    });
+
+    expect(named).toMatchObject({
+      studentName: "张小明",
+      status: "ready_for_review",
+      report,
+      annotations: [annotation],
+    });
   });
 
   it("删除 review 并级联删除图片和批注记录", () => {

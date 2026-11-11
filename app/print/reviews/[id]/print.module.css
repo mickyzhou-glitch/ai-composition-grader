@@ -35,7 +35,16 @@
 .runningHeader { top: -8mm; justify-content: space-between; border-bottom: .2mm solid var(--line); }
 
 .sheet { min-height: 273mm; break-after: page; }
-.summary { display: grid; align-content: center; padding: 8mm; }
+.summary {
+  display: grid;
+  height: 273mm;
+  min-height: 273mm;
+  max-height: 273mm;
+  align-content: center;
+  padding: 8mm;
+  overflow: hidden;
+  break-inside: avoid-page;
+}
 .eyebrow { margin-bottom: 2mm; color: var(--red); font-size: 8pt; font-weight: 800; letter-spacing: .14em; }
 .summary > h1 { margin-bottom: 14mm; font: 700 28pt/1.15 STKaiti, KaiTi, "Kaiti SC", serif; }
 .summaryGrid { display: grid; grid-template-columns: 44mm 1fr; gap: 8mm; margin-bottom: 12mm; }
@@ -55,6 +64,32 @@
 .assignmentInfo > div { padding: 4mm 5mm; border-bottom: .2mm solid var(--line); }
 .assignmentInfo dt { color: var(--muted); font-size: 8pt; }
 .assignmentInfo dd { margin: 1mm 0 0; }
+.summaryCompact {
+  font-size: 9pt;
+  line-height: 1.45;
+}
+.summaryCompact > h1 { margin-bottom: 9mm; font-size: 23pt; }
+.summaryCompact .summaryGrid { gap: 6mm; margin-bottom: 8mm; }
+.summaryCompact .overallComment { padding: 5mm; }
+.summaryCompact .overallComment p { font-size: 10.5pt; }
+.summaryCompact .assignmentInfo > div { padding: 3mm 4mm; }
+.summaryDense {
+  align-content: start;
+  padding: 5mm;
+  font-size: 7pt;
+  line-height: 1.3;
+}
+.summaryDense > h1 { margin-bottom: 5mm; font-size: 18pt; }
+.summaryDense .summaryGrid { grid-template-columns: 34mm 1fr; gap: 4mm; margin-bottom: 5mm; }
+.summaryDense .totalScore { min-height: 34mm; padding: 4mm; }
+.summaryDense .totalScore strong { font-size: 29pt; }
+.summaryDense .overallComment { padding: 4mm; }
+.summaryDense .overallComment h2 { margin-bottom: 1.5mm; }
+.summaryDense .overallComment p { font-size: 8pt; }
+.summaryDense .assignmentInfo { grid-template-columns: 1fr; }
+.summaryDense .assignmentInfo > div { padding: 2mm 3mm; }
+.summaryDense .assignmentInfo dt { font-size: 6.5pt; }
+.summaryDense .assignmentInfo dd { margin-top: .5mm; }
 
 .annotationPage { display: grid; grid-template-rows: auto 1fr; padding-top: 2mm; }
 .pageHeading { margin-bottom: 4mm; }
@@ -62,10 +97,6 @@
 .annotationLayout { display: grid; min-height: 0; grid-template-columns: minmax(0, 7fr) minmax(0, 3fr); gap: 5mm; align-items: start; }
 .imageFigure { position: relative; width: 100%; max-height: 247mm; margin: 0; overflow: hidden; border: .25mm solid var(--line); background: #f4eee5; }
 .imageFigure img { display: block; width: 100%; max-height: 247mm; object-fit: contain; }
-.annotationOverlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.annotationOverlay line { stroke: var(--red); stroke-width: .45; vector-effect: non-scaling-stroke; }
-.annotationOverlay circle { fill: var(--red); stroke: white; stroke-width: .55; vector-effect: non-scaling-stroke; }
-.annotationOverlay text { fill: white; font-size: 2.2px; font-weight: 800; dominant-baseline: central; text-anchor: middle; }
 .annotationNotes { min-width: 0; }
 .annotationNotes ol { display: grid; gap: 3mm; margin: 0; padding: 0; list-style: none; }
 .annotationNotes li { display: grid; grid-template-columns: 7mm minmax(0, 1fr); gap: 2mm; padding-bottom: 3mm; border-bottom: .2mm solid #ebc9c5; break-inside: avoid; }

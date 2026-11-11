@@ -7,6 +7,7 @@ import Home from "./page";
 const review = {
   id: "review-1",
   status: "ready_for_review",
+  studentName: "张小明",
   config: { title: "为自己鼓掌" },
   report: { scores: { total: 36, level: "优秀作文" } },
   createdAt: "2026-07-20T08:00:00.000Z",
@@ -27,8 +28,8 @@ function json(data: unknown, ok = true) {
 describe("历史首页", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete (URL as typeof URL & { createObjectURL?: unknown }).createObjectURL;
-    delete (URL as typeof URL & { revokeObjectURL?: unknown }).revokeObjectURL;
+    Reflect.deleteProperty(URL, "createObjectURL");
+    Reflect.deleteProperty(URL, "revokeObjectURL");
   });
 
   function mockBrowserDownload() {
@@ -54,6 +55,7 @@ describe("历史首页", () => {
     render(<Home />);
 
     expect(await screen.findByRole("heading", { name: "为自己鼓掌" })).toBeInTheDocument();
+    expect(screen.getByText("学生：张小明")).toBeInTheDocument();
     expect(screen.getByText("待复核", { selector: "dt" })).toBeInTheDocument();
     expect(screen.getByText("36 分 · 优秀作文")).toBeInTheDocument();
 
