@@ -2,6 +2,7 @@ import type { LoginChallengeRepository } from "../auth/login-challenge-repositor
 import { createLoginProof, fromBase64Url, toBase64Url } from "../auth/password-proof";
 import { sealPasswordVerifier, verifyLoginProof } from "../auth/password-proof-worker";
 
+import { LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS, type LoginAttemptGuard } from "./d1-login-attempts";
 import type { D1PasswordProofRepository } from "./d1-password-proof-repository";
 import type { D1SessionRepository } from "./d1-session-repository";
 
@@ -13,6 +14,7 @@ interface WorkerAuthDependencies {
   proofs: Pick<D1PasswordProofRepository, "findByUsername"> & Partial<Pick<D1PasswordProofRepository, "findLoginCandidateByUsername" | "findLegacyByUsername" | "save" | "saveIfMissing" | "clearMustChangePassword">>;
   challenges: LoginChallengeRepository;
   sessions?: Pick<D1SessionRepository, "create" | "findActiveByTokenHash" | "revokeByTokenHash">;
+  attempts?: LoginAttemptGuard;
   proofEncryptionKey?: string;
   randomNonce?: () => string;
 }
@@ -148,8 +150,17 @@ export async function authenticatedWorkerUser(
   return (await sessions.findActiveByTokenHash(await hashSessionToken(token), new Date()))?.user ?? null;
 }
 
-function jsonError(code: string, message: string, status: number): Response {
-  return Response.json({ ok: false, error: { code, message } }, { status, headers: { "cache-control": "no-store" } });
+function jsonError(code: string, message: string, status: number, extraHeaders?: Record<string, string>): Response {
+  return Response.json(
+    { ok: false, error: { code, message } },
+    { status, headers: { "cache-control": "no-store", ...extraHeaders } },
+  );
+}
+
+function rateLimitedError(): Response {
+  return jsonError("LOGIN_RATE_LIMITED", "登录尝试过于频繁，请 15 分钟后再试", 429, {
+    "retry-after": String(LOGIN_RATE_LIMIT_RETRY_AFTER_SECONDS),
+  });
 }
 
 function sameOrigin(request: Request, origin: string): boolean {
@@ -206,18 +217,31 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
     }
     const challenge = await dependencies.challenges.consumeIfActive(body.challengeId);
     if (!challenge) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+    if (dependencies.attempts && await dependencies.attempts.isRateLimited(challenge.normalizedUsername, ipHash)) {
+      return rateLimitedError();
+    }
     const proof = await dependencies.proofs.findByUsername(challenge.normalizedUsername);
     const valid = proof !== null && proof.disabledAt === null && await verifyLoginProof({
       sealed: proof.sealed, challengeId: challenge.id, nonce: challenge.nonce, proof: body.proof,
       encryptionKey: fromBase64Url(dependencies.proofEncryptionKey),
     });
-    if (!valid) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+    if (!valid) {
+      await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, false);
+      return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+    }
+    await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, true);
     const rawToken = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
     const now = new Date();
     await dependencies.sessions.create({ id: crypto.randomUUID(), userId: proof.user.id, tokenHash: await hashSessionToken(rawToken), expiresAt: new Date(now.getTime() + 12 * 60 * 60_000), now });
     return Response.json({ ok: true, data: proof.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });
   }
   const normalizedUsername = normalizeUsername(body.username);
+  if (dependencies.attempts && (
+    await dependencies.attempts.isChallengeFlooded(ipHash)
+    || await dependencies.attempts.isRateLimited(normalizedUsername, ipHash)
+  )) {
+    return rateLimitedError();
+  }
   const { proof, legacy } = await findLoginCandidate(dependencies, normalizedUsername);
   const legacyParameters = proof === null
     ? (legacy && legacy.disabledAt === null ? legacyPasswordParameters(legacy.passwordHash) : null)
@@ -262,6 +286,12 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
   }
   if (new URL(request.url).pathname === "/api/auth/login/legacy/challenge") {
     const username = normalizeUsername(body.username);
+    if (dependencies.attempts && (
+      await dependencies.attempts.isChallengeFlooded(ipHash)
+      || await dependencies.attempts.isRateLimited(username, ipHash)
+    )) {
+      return rateLimitedError();
+    }
     const { proof: modern, legacy } = await findLoginCandidate(dependencies, username);
     const parameters = !modern && legacy && legacy.disabledAt === null ? legacyPasswordParameters(legacy.passwordHash) : null;
     const fallbackSalt = parameters
@@ -285,8 +315,12 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
   }
   const challenge = await dependencies.challenges.consumeIfActive(body.challengeId);
   if (!challenge) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+  if (dependencies.attempts && await dependencies.attempts.isRateLimited(challenge.normalizedUsername, ipHash)) {
+    return rateLimitedError();
+  }
   const { proof: modern, legacy } = await findLoginCandidate(dependencies, challenge.normalizedUsername);
   if (modern) {
+    await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, false);
     return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
   }
   const digest = legacy && legacy.disabledAt === null ? legacyDigest(legacy.passwordHash) : null;
@@ -296,10 +330,12 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
     verifier = fromBase64Url(body.verifier);
     suppliedProof = fromBase64Url(body.proof);
   } catch {
+    await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, false);
     return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
   }
   const expected = digest ? fromBase64Url(await createLoginProof(digest, challenge.id, challenge.nonce)) : new Uint8Array();
   if (!legacy || !digest || verifier.length !== 32 || !constantTimeEqual(expected, suppliedProof)) {
+    await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, false);
     return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
   }
   const now = new Date();
@@ -309,7 +345,11 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
     await sealPasswordVerifier(verifier, fromBase64Url(dependencies.proofEncryptionKey)),
     now,
   );
-  if (!inserted) return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+  if (!inserted) {
+    await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, false);
+    return jsonError("INVALID_CREDENTIALS", "用户名或密码错误", 401);
+  }
+  await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, true);
   const rawToken = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   await dependencies.sessions.create({ id: crypto.randomUUID(), userId: legacy.user.id, tokenHash: await hashSessionToken(rawToken), expiresAt: new Date(now.getTime() + 12 * 60 * 60_000), now });
   return Response.json({ ok: true, data: legacy.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });

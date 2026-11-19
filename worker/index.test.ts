@@ -1440,4 +1440,37 @@ describe("Cloudflare Worker", () => {
     ]);
     replace.mockRestore();
   });
+
+  it("跨站 Origin 或 Sec-Fetch-Site=cross-site 的业务写请求被 403 拦截，且所有 API 响应统一带 nosniff 与 no-store", async () => {
+    const database = authenticatedDatabase();
+    const env = workerEnv(() => new Response("asset"), database);
+
+    const badOrigin = await worker.fetch(new Request("https://grader.workers.dev/api/reviews", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        origin: "https://evil.example",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    }), env as never);
+    expect(badOrigin.status).toBe(403);
+    expect(badOrigin.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(badOrigin.headers.get("cache-control")).toBe("no-store");
+    await expect(badOrigin.json()).resolves.toMatchObject({ ok: false, error: { code: "UNTRUSTED_ORIGIN" } });
+
+    const badFetchSite = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/r1", {
+      method: "DELETE",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "sec-fetch-site": "cross-site",
+      },
+    }), env as never);
+    expect(badFetchSite.status).toBe(403);
+
+    const health = await worker.fetch(new Request("https://grader.workers.dev/api/health"), env as never);
+    expect(health.status).toBe(200);
+    expect(health.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(health.headers.get("cache-control")).toBe("no-store");
+  });
 });

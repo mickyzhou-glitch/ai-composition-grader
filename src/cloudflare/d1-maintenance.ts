@@ -1,11 +1,13 @@
 export const EMPTY_DRAFT_TTL_MS = 24 * 60 * 60_000;
 export const EXPIRED_SESSION_RETENTION_MS = 24 * 60 * 60_000;
 export const CONSUMED_CHALLENGE_RETENTION_MS = 60 * 60_000;
+export const LOGIN_ATTEMPTS_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 export interface CloudMaintenanceResult {
   emptyDraftsDeleted: number;
   loginChallengesDeleted: number;
   sessionsDeleted: number;
+  loginAttemptsDeleted: number;
 }
 
 /**
@@ -13,6 +15,7 @@ export interface CloudMaintenanceResult {
  * - Removes empty drafts untouched for >= 24h (never touching reviews with images, OCR, reports, or active jobs).
  * - Removes expired or stale consumed login challenges.
  * - Removes expired or long-revoked sessions.
+ * - Removes login_attempts older than 7 days.
  */
 export async function runCloudMaintenance(
   database: D1Database,
@@ -21,8 +24,9 @@ export async function runCloudMaintenance(
   const draftCutoff = now - EMPTY_DRAFT_TTL_MS;
   const consumedChallengeCutoff = now - CONSUMED_CHALLENGE_RETENTION_MS;
   const sessionCutoff = now - EXPIRED_SESSION_RETENTION_MS;
+  const attemptsCutoff = now - LOGIN_ATTEMPTS_RETENTION_MS;
 
-  const [drafts, challenges, sessions] = await database.batch([
+  const [drafts, challenges, sessions, attempts] = await database.batch([
     database.prepare(`
       DELETE FROM reviews
       WHERE status = 'draft'
@@ -45,11 +49,16 @@ export async function runCloudMaintenance(
       DELETE FROM sessions
       WHERE expires_at <= ? OR (revoked_at IS NOT NULL AND revoked_at <= ?)
     `).bind(sessionCutoff, sessionCutoff),
+    database.prepare(`
+      DELETE FROM login_attempts
+      WHERE attempted_at <= ?
+    `).bind(attemptsCutoff),
   ]);
 
   return {
     emptyDraftsDeleted: drafts?.meta.changes ?? 0,
     loginChallengesDeleted: challenges?.meta.changes ?? 0,
     sessionsDeleted: sessions?.meta.changes ?? 0,
+    loginAttemptsDeleted: attempts?.meta.changes ?? 0,
   };
 }

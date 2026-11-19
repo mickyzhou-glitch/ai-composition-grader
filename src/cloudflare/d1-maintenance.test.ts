@@ -6,6 +6,7 @@ import {
   CONSUMED_CHALLENGE_RETENTION_MS,
   EMPTY_DRAFT_TTL_MS,
   EXPIRED_SESSION_RETENTION_MS,
+  LOGIN_ATTEMPTS_RETENTION_MS,
   runCloudMaintenance,
 } from "./d1-maintenance";
 
@@ -66,11 +67,18 @@ describe("runCloudMaintenance", () => {
       insertSession.run("sess-active", "tok-3", NOW, NOW + 60_000, NOW - 1_000, null);
       insertSession.run("sess-recent-revoked", "tok-4", NOW, NOW + 60_000, NOW - 1_000, NOW - 1_000);
 
+      // Login attempts
+      sqlite.prepare("INSERT INTO login_attempts (normalized_username, ip_hash, succeeded, attempted_at) VALUES ('teacher-1', 'iphash', 0, ?)")
+        .run(NOW - LOGIN_ATTEMPTS_RETENTION_MS - 1);
+      sqlite.prepare("INSERT INTO login_attempts (normalized_username, ip_hash, succeeded, attempted_at) VALUES ('teacher-1', 'iphash', 0, ?)")
+        .run(NOW - 60_000);
+
       const result = await runCloudMaintenance(db, NOW);
       expect(result).toEqual({
         emptyDraftsDeleted: 1,
         loginChallengesDeleted: 2,
         sessionsDeleted: 2,
+        loginAttemptsDeleted: 1,
       });
 
       const remainingReviews = sqlite.prepare("SELECT id FROM reviews ORDER BY id").all() as Array<{ id: string }>;

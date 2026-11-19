@@ -1,6 +1,7 @@
 import { composeReviewGuidance } from "../src/grading-opinions/review-guidance";
 import { listD1EssayOpinions, listD1StandingOpinions } from "../src/cloudflare/d1-grading-opinions";
 import type { WorkerEnv } from "../src/cloudflare/env";
+import { D1LoginAttemptRepository } from "../src/cloudflare/d1-login-attempts";
 import { D1LoginChallengeRepository } from "../src/cloudflare/d1-login-challenge-repository";
 import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-repository";
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
@@ -253,8 +254,23 @@ function runInBackground(ctx: ExecutionContext | undefined, task: Promise<void>)
   return task;
 }
 
-const worker = {
-  async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
+function secureApiResponse(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set("x-content-type-options", "nosniff");
+  if (!headers.has("cache-control")) {
+    headers.set("cache-control", "no-store");
+  }
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function isCrossSiteMutation(request: Request, url: URL): boolean {
+  if (!["POST", "PUT", "PATCH", "DELETE"].includes(request.method)) return false;
+  const origin = request.headers.get("origin");
+  if (origin !== null && origin !== url.origin) return true;
+  return request.headers.get("sec-fetch-site") === "cross-site";
+}
+
+async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/_next/static/")) {
       return secureResponse(await env.ASSETS.fetch(request), url.pathname);
@@ -265,6 +281,7 @@ const worker = {
       proofs: new D1PasswordProofRepository(env.DB),
       challenges: new D1LoginChallengeRepository(env.DB),
       sessions: new D1SessionRepository(env.DB),
+      attempts: new D1LoginAttemptRepository(env.DB),
       proofEncryptionKey: env.AUTH_PROOF_ENCRYPTION_KEY,
     });
     if (authResponse) return authResponse;
@@ -285,6 +302,9 @@ const worker = {
     }
     if (!url.pathname.startsWith("/api/") && url.pathname !== "/") {
       return secureResponse(await env.ASSETS.fetch(request), url.pathname);
+    }
+    if (url.pathname.startsWith("/api/") && isCrossSiteMutation(request, url)) {
+      return apiError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
     }
     const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);
@@ -863,6 +883,15 @@ const worker = {
       return Response.json({ ok: false, error: { code: "NOT_FOUND", message: "接口不存在" } }, { status: 404 });
     }
     return secureResponse(await env.ASSETS.fetch(request), url.pathname);
+}
+
+const worker = {
+  async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
+    const response = await handleFetch(request, env, ctx);
+    if (new URL(request.url).pathname.startsWith("/api/")) {
+      return secureApiResponse(response);
+    }
+    return response;
   },
   async scheduled(_controller: ScheduledController, env: WorkerEnv): Promise<void> {
     const recovered = await new D1AnalysisJobs(env.DB).recoverExpired();
@@ -875,7 +904,12 @@ const worker = {
     }
     try {
       const cleaned = await runCloudMaintenance(env.DB);
-      if (cleaned.emptyDraftsDeleted > 0 || cleaned.loginChallengesDeleted > 0 || cleaned.sessionsDeleted > 0) {
+      if (
+        cleaned.emptyDraftsDeleted > 0
+        || cleaned.loginChallengesDeleted > 0
+        || cleaned.sessionsDeleted > 0
+        || cleaned.loginAttemptsDeleted > 0
+      ) {
         console.info(JSON.stringify({ event: "cloud_maintenance_cleanup", ...cleaned }));
       }
     } catch (error) {
