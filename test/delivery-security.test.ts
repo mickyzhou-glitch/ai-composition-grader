@@ -150,7 +150,7 @@ describe("最终交付的本机安全默认值", () => {
     expect(readme).toContain("同一 revision 已存在的旧版 PDF 可原样下载");
     expect(readme).toContain("内容模型只接收自然段文字");
     expect(readme).toContain("单篇和批量均支持 PDF 与 Word");
-    expect(readme).toContain("下载后不会自动重算红黑差异");
+    expect(readme).toContain("手动修改文字后需要自行同步调整下划线");
     expect(readme).toContain("导出失败不会标记为已导出");
     expect(readme).toContain("重新生成批改");
     expect(readme).toContain("VISION_AI_API_KEY");
@@ -222,9 +222,10 @@ describe("最终交付的本机安全默认值", () => {
   });
 
   it("内容模型运行时请求递归扫描不到图片、链接、定位和 OCR 内部结构", async () => {
-    const create = vi.fn(async (_input: unknown) => ({
-      choices: [{ message: { content: "{}" } }],
-    }));
+    const create = vi.fn(async (input: unknown) => {
+      void input;
+      return { choices: [{ message: { content: "{}" } }] };
+    });
     const adapter = new CompositionReviewAdapter({
       getRuntimeConfig: vi.fn(async () => ({
         baseUrl: "https://content.example/v1",

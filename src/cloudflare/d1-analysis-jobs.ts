@@ -12,6 +12,10 @@ import type { AnalysisJobMode } from "./cloud-analysis-pipeline";
 // before the platform stops the consumer can still be saved, and so the
 // scheduled recovery does not fail a run that is still executing.
 export const MAX_CLOUD_ANALYSIS_RUN_MS = 16 * 60_000;
+// A healthy batch of essays can wait in the queue while earlier essays finish.
+// Only recover queued jobs that have been waiting far past normal batch latency
+// (e.g. a dropped or never-dispatched queue message).
+export const MAX_CLOUD_ANALYSIS_QUEUE_WAIT_MS = 2 * 60 * 60_000;
 
 const stages = new Set(["queued", "reading_images", "saving_ocr", "generating_review", "mapping_annotations", "validating_result", "saving_result"]);
 const statuses = new Set(["queued", "running", "succeeded", "failed", "canceled"]);
@@ -72,10 +76,16 @@ export class D1AnalysisJobs {
     now = Date.now(),
     scope?: { ownerId: string; reviewId: string },
   ): Promise<number> {
-    const expired = `analysis_jobs.status = 'running'
-      AND COALESCE(analysis_jobs.started_at, analysis_jobs.created_at) <= ?
+    const expired = `(
+        (analysis_jobs.status = 'running' AND COALESCE(analysis_jobs.started_at, analysis_jobs.created_at) <= ?)
+        OR (analysis_jobs.status = 'queued' AND analysis_jobs.created_at <= ?)
+      )
       ${scope ? "AND analysis_jobs.owner_id = ? AND analysis_jobs.review_id = ?" : ""}`;
-    const bindings = [now - MAX_CLOUD_ANALYSIS_RUN_MS, ...(scope ? [scope.ownerId, scope.reviewId] : [])];
+    const bindings = [
+      now - MAX_CLOUD_ANALYSIS_RUN_MS,
+      now - MAX_CLOUD_ANALYSIS_QUEUE_WAIT_MS,
+      ...(scope ? [scope.ownerId, scope.reviewId] : []),
+    ];
     // D1 batch is atomic. Only release the review still owned by this job;
     // reports, OCR, annotations, and review revisions stay untouched.
     const results = await this.database.batch([
@@ -241,8 +251,14 @@ export class D1AnalysisJobs {
 }
 
 function isExpired(row: JobRow): boolean {
-  return row.status === "running"
-    && (row.started_at ?? row.created_at) <= Date.now() - MAX_CLOUD_ANALYSIS_RUN_MS;
+  const now = Date.now();
+  if (row.status === "running") {
+    return (row.started_at ?? row.created_at) <= now - MAX_CLOUD_ANALYSIS_RUN_MS;
+  }
+  if (row.status === "queued") {
+    return row.created_at <= now - MAX_CLOUD_ANALYSIS_QUEUE_WAIT_MS;
+  }
+  return false;
 }
 
 function normalizeEnqueueInput(input: unknown): { mode: AnalysisJobMode; teacherGuidance: string | null } {

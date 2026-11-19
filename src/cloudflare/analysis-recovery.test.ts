@@ -2,7 +2,7 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { initializeSchema } from "../db/init";
-import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "./d1-analysis-jobs";
+import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_QUEUE_WAIT_MS, MAX_CLOUD_ANALYSIS_RUN_MS } from "./d1-analysis-jobs";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
 import { CompositionReviewAdapter } from "../ai/composition-review-adapter";
 import worker, { savePipelineResult } from "../../worker/index";
@@ -68,11 +68,14 @@ describe("abandoned cloud analysis recovery", () => {
     f.seed("stale");
     f.seed("healthy", { startedAt: NOW - TIMEOUT + 1 });
     f.seed("queued", { status: "queued", startedAt: null });
+    f.seed("stale-queued", { status: "queued", startedAt: null, createdAt: NOW - MAX_CLOUD_ANALYSIS_QUEUE_WAIT_MS - 1 });
     f.seed("done", { status: "succeeded" });
     const before = f.review("stale");
     await worker.scheduled({} as ScheduledController, { DB: f.database } as never);
     expect(f.job("stale")).toMatchObject({ status: "failed", error_code: "ANALYSIS_TIMEOUT", finished_at: NOW });
     expect(f.review("stale")).toEqual({ ...before, status: "failed", analysis_run_id: null, updated_at: NOW });
+    expect(f.job("stale-queued")).toMatchObject({ status: "failed", error_code: "ANALYSIS_TIMEOUT", finished_at: NOW });
+    expect(f.review("stale-queued")).toMatchObject({ status: "failed", analysis_run_id: null });
     expect(f.job("healthy").status).toBe("running");
     expect(f.job("queued").status).toBe("queued");
     expect(f.job("done").status).toBe("succeeded");

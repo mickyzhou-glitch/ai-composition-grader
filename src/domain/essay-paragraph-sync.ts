@@ -207,8 +207,9 @@ export function syncEssayFromParagraphReviews<T extends ParagraphEvaluationRepor
  */
 export function syncEssayBeforeApproval<T extends EvaluationReport>(
   report: T,
-  _ocr?: object | null,
+  ocr?: object | null,
 ): T {
+  void ocr;
   if (!isParagraphEvaluationReport(report) || !report.rewrittenEssay?.length) return report;
   assertEssayDraftResolved(report);
   return syncEssayFromParagraphReviews(report) as T;

@@ -7,6 +7,7 @@ import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
 import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "../src/cloudflare/d1-analysis-jobs";
+import { runCloudMaintenance } from "../src/cloudflare/d1-maintenance";
 import {
   D1Reanalysis,
   D1ReanalysisBatchError,
@@ -80,7 +81,7 @@ function apiError(code: string, message: string, status: number, details?: unkno
   return Response.json({
     ok: false,
     error: { code, message, ...(details === undefined ? {} : { details }) },
-  }, { status, headers: { "cache-control": "no-store" } });
+  }, { status, headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 
 const reanalysisRouteIdPattern = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/u;
@@ -192,6 +193,8 @@ async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null, 
   return (role === "vision" ? env.VISION_AI_API_KEY : env.CONTENT_AI_API_KEY) || env.AI_API_KEY || null;
 }
 
+const AI_CONNECTION_TEST_TIMEOUT_MS = 30_000;
+
 async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string; role: "vision" | "content" }): Promise<void> {
   // A 1×1 PNG verifies that the configured model accepts the same multimodal
   // request shape used by essay analysis, rather than only proving text chat.
@@ -211,6 +214,7 @@ async function testAiConnection(input: { baseUrl: string; model: string; apiKey:
       ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
       ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: 16 }),
     }),
+    signal: AbortSignal.timeout(AI_CONNECTION_TEST_TIMEOUT_MS),
   });
   if (!response.ok) throw new Error("AI_CONNECTION_FAILED");
   const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
@@ -249,7 +253,7 @@ function runInBackground(ctx: ExecutionContext | undefined, task: Promise<void>)
   return task;
 }
 
-export default {
+const worker = {
   async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/_next/static/")) {
@@ -646,7 +650,28 @@ export default {
         await Promise.all(prepared.map((image, index) => env.FILES.put(keys[index], image.data, { httpMetadata: { contentType: image.mimeType } })));
         try {
           const saved = await new D1ImageWriter(env.DB).replace(user.id, reviewId, expectedRevision, prepared, form.get("privacyConfirmed") === "true" && form.get("privacyNoticeVersion") === "2026-07-22");
-          return Response.json({ ok: true, data: saved }, { headers: { "cache-control": "no-store" } });
+          const newKeySet = new Set(keys);
+          const obsoleteKeys = saved.replacedPaths
+            .filter((path) => /^images\/[^/\\\0]+$/u.test(path))
+            .map((path) => `users/${user.id}/reviews/${reviewId}/${path}`)
+            .filter((key) => !newKeySet.has(key));
+          if (obsoleteKeys.length > 0) {
+            await runInBackground(ctx, Promise.resolve(env.FILES.delete(obsoleteKeys)).then(
+              () => undefined,
+              (cleanupError) => {
+                console.warn(JSON.stringify({
+                  event: "replaced_images_cleanup_failed",
+                  reviewId,
+                  count: obsoleteKeys.length,
+                  error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+                }));
+              },
+            ));
+          }
+          return Response.json(
+            { ok: true, data: { images: saved.images, revision: saved.revision } },
+            { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
+          );
         } catch (error) {
           await env.FILES.delete(keys);
           const code = error instanceof Error ? error.message : "VALIDATION_ERROR";
@@ -707,7 +732,14 @@ export default {
           : undefined;
         const result = await new D1AnalysisJobs(env.DB).enqueue(user.id, reviewId, input);
         if (!result.job) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
-        if (result.newlyQueued) await env.ANALYSIS_QUEUE.send({ jobId: (result.job as { id: string }).id });
+        if (result.newlyQueued) {
+          const jobId = (result.job as { id: string }).id;
+          try {
+            await env.ANALYSIS_QUEUE.send({ jobId });
+          } catch {
+            return compensateQueueDispatch(new D1Reanalysis(env.DB), user.id, [jobId]);
+          }
+        }
         return Response.json({ ok: true, data: result.job }, { status: 202, headers: { "cache-control": "no-store" } });
       } catch (error) {
         const errorCode = typeof error === "object" && error !== null && "code" in error
@@ -838,7 +870,18 @@ export default {
       console.info(JSON.stringify({
         event: "analysis_timeout_recovery",
         recovered,
-        reason: `运行超过 ${MAX_CLOUD_ANALYSIS_RUN_MS / 60_000} 分钟仍未结束，已标记为超时`,
+        reason: `运行超过 ${MAX_CLOUD_ANALYSIS_RUN_MS / 60_000} 分钟仍未结束或长时间滞留队列，已标记为超时`,
+      }));
+    }
+    try {
+      const cleaned = await runCloudMaintenance(env.DB);
+      if (cleaned.emptyDraftsDeleted > 0 || cleaned.loginChallengesDeleted > 0 || cleaned.sessionsDeleted > 0) {
+        console.info(JSON.stringify({ event: "cloud_maintenance_cleanup", ...cleaned }));
+      }
+    } catch (error) {
+      console.warn(JSON.stringify({
+        event: "cloud_maintenance_cleanup_failed",
+        error: error instanceof Error ? error.message : String(error),
       }));
     }
   },
@@ -983,6 +1026,8 @@ export default {
     }
   },
 };
+
+export default worker;
 
 export async function savePipelineResult(
   database: D1Database,

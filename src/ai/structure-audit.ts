@@ -82,6 +82,14 @@ export function extractTaskElements(task: string): string[] {
   return unique.length > 0 ? unique : [task.trim()];
 }
 
+/** 普通词汇里的「抑」（如压抑、抑制、抑郁），不应误触发「欲扬先抑」首段规则。 */
+const SUPPRESSION_FALSE_POSITIVE = /压抑|抑制|抑郁|抑或|平抑|抑止/gu;
+
+function hasSuppressionStage(task: string): boolean {
+  const cleaned = task.replace(SUPPRESSION_FALSE_POSITIVE, "");
+  return /先抑|欲扬先抑|[“「『"']抑[”」』"']|抑的|写抑|突出抑|铺垫抑|(?:^|[：:，,、。\s])抑(?:$|[：:，,、。\s])/u.test(cleaned);
+}
+
 /**
  * 解析教师结构要求为逐段任务。支持「第一段：…」「第1段：…」「开头段/结尾段」
  * （标题与要求可分行，也可同一行连写），以及与段数相同的「1. … 2. …」编号。
@@ -93,7 +101,7 @@ export function parseStructureTasks(structureRequirements: string, paragraphCoun
       return numbered && numbered.length === paragraphCount && paragraphCount >= 2 ? numbered : null;
     })();
   if (!plan) return null;
-  const suppressionLater = plan.slice(1).some((task) => task.includes("抑"));
+  const suppressionLater = plan.slice(1).some(hasSuppressionStage);
   return plan.map((task, index) => {
     const systemRules: string[] = [];
     let elements = extractTaskElements(task);

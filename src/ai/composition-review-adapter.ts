@@ -18,8 +18,11 @@ import {
 } from "../ocr/contracts";
 import { completionJsonWithFinish, parseJsonResponse, roleClient, TruncatedOutputError } from "./adapter-shared";
 
-/** Output cap used when the first answer hit the provider default limit. */
+/** Initial output cap; stays within DeepSeek's 8192 hard limit. */
 export const CONTENT_RETRY_MAX_TOKENS = 8192;
+/** Raised output cap when a non-DeepSeek provider truncates at 8192. */
+export const CONTENT_TRUNCATION_RETRY_MAX_TOKENS = 16384;
+const TRUNCATION_CONCISE_REMINDER = "上一次输出因超出长度限制被截断，请精简修改动作与批注措辞、省略非必需冗余字段，确保输出完整闭合的 JSON。";
 import {
   AiAdapterError,
   type AiSettingsSource,
@@ -771,8 +774,35 @@ export class CompositionReviewAdapter {
     const first = await completionJsonWithFinish(client, { ...requestOptions, messages });
     let content = first.content;
     if (first.truncated) {
-      // 输出被截断：调高输出上限重试一次。
-      const retry = await completionJsonWithFinish(client, { ...requestOptions, max_tokens: CONTENT_RETRY_MAX_TOKENS, messages });
+      // 输出被截断：非 DeepSeek 尝试调高到 16384；若上游 400（不支持 >8192）或本身为 DeepSeek，
+      // 则保持 8192 并附精简提示重试一次，避免同参白耗请求。
+      const conciseMessages = [...messages, { role: "user", content: TRUNCATION_CONCISE_REMINDER }];
+      let retry: { content: string; truncated: boolean };
+      if (isDeepSeek) {
+        retry = await completionJsonWithFinish(client, {
+          ...requestOptions,
+          max_tokens: CONTENT_RETRY_MAX_TOKENS,
+          messages: conciseMessages,
+        });
+      } else {
+        try {
+          retry = await completionJsonWithFinish(client, {
+            ...requestOptions,
+            max_tokens: CONTENT_TRUNCATION_RETRY_MAX_TOKENS,
+            messages,
+          });
+        } catch (error) {
+          if (error instanceof AiAdapterError && error.upstreamStatus === 400) {
+            retry = await completionJsonWithFinish(client, {
+              ...requestOptions,
+              max_tokens: CONTENT_RETRY_MAX_TOKENS,
+              messages: conciseMessages,
+            });
+          } else {
+            throw error;
+          }
+        }
+      }
       if (retry.truncated) {
         throw new AiAdapterError("AI_INVALID_RESPONSE", "作文内容模型输出被截断", 502, undefined, "output_truncated");
       }

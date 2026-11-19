@@ -125,7 +125,9 @@ describe("annotationSchema", () => {
 
 describe("evaluationReportSchema", () => {
   it("区分旧示范报告与 version 2 逐段批改报告", () => {
-    const { sampleParagraphs: _sampleParagraphs, ...baseReport } = validReport;
+    const baseReport = Object.fromEntries(
+      Object.entries(validReport).filter(([key]) => key !== "sampleParagraphs"),
+    );
     const paragraphReport = {
       ...baseReport,
       version: 2 as const,

@@ -106,7 +106,7 @@ describe("D1ReviewReader", () => {
   });
 
   it("returns a lightweight oldest-first queue scoped to unreviewed ready reports", async () => {
-    const prepare = vi.fn((query: string) => ({
+    const prepare = vi.fn(() => ({
       bind: vi.fn(() => ({
         all: vi.fn().mockResolvedValue({ results: [{
           id: "ready-1",
@@ -198,7 +198,7 @@ describe("D1ReviewReader", () => {
   });
 
   it("requires every requested revision to be current and teacher reviewed before export", async () => {
-    const prepare = vi.fn((query: string) => ({
+    const prepare = vi.fn(() => ({
       bind: vi.fn(() => ({
         all: vi.fn().mockResolvedValue({ results: [{ id: "ready-1", revision: 3 }] }),
       })),
@@ -229,6 +229,127 @@ describe("D1ReviewReader", () => {
     await expect(new D1ReviewReader({ prepare } as unknown as D1Database).checkExportable(
       "teacher-1",
       [{ id: "ready-1", revision: 3 }],
+    )).resolves.toBe(true);
+    expect(prepare).toHaveBeenCalledTimes(2);
+  });
+
+  it("batches images, annotations, and failure queries in list() instead of N+1 queries per review", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        all: vi.fn().mockImplementation(async () => {
+          if (query.includes("FROM reviews WHERE owner_id")) {
+            return {
+              results: [
+                {
+                  id: "r1", status: "draft", student_name: "小明", class_name: "六1", config, report: null, revision: 1,
+                  image_revision: 1, ocr_checkpoint: null, report_ocr_revision: null,
+                  pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null,
+                  teacher_reviewed_at: null, rejection_reason: null, rejection_change_request: null, expires_at: null,
+                  created_at: 1_700_000_000_000, updated_at: 1_700_000_200_000,
+                },
+                {
+                  id: "r2", status: "failed", student_name: "小红", class_name: "六1", config, report: null, revision: 2,
+                  image_revision: 1, ocr_checkpoint: null, report_ocr_revision: null,
+                  pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null,
+                  teacher_reviewed_at: null, rejection_reason: null, rejection_change_request: null, expires_at: null,
+                  created_at: 1_700_000_000_000, updated_at: 1_700_000_100_000,
+                },
+                {
+                  id: "r3", status: "ready_for_review", student_name: "小刚", class_name: "六2", config, report: paragraphReport, revision: 3,
+                  image_revision: 3, ocr_checkpoint: checkpointV2, report_ocr_revision: 1,
+                  pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null,
+                  teacher_reviewed_at: null, rejection_reason: null, rejection_change_request: null, expires_at: null,
+                  created_at: 1_700_000_000_000, updated_at: 1_700_000_050_000,
+                },
+              ],
+            };
+          }
+          if (query.includes("FROM review_images")) {
+            return {
+              results: [
+                {
+                  id: 11, review_id: "r1", position: 0, original_name: "a.jpg", mime_type: "image/jpeg",
+                  original_path: "images/a.jpg", annotation_path: "images/a.jpg", ai_path: "images/a.jpg",
+                  width: 100, height: 200, rotation: 0, crop: null,
+                },
+                {
+                  id: 12, review_id: "r3", position: 0, original_name: "c.jpg", mime_type: "image/jpeg",
+                  original_path: "images/c.jpg", annotation_path: "images/c.jpg", ai_path: "images/c.jpg",
+                  width: 100, height: 200, rotation: 0, crop: null,
+                },
+              ],
+            };
+          }
+          if (query.includes("FROM annotations")) {
+            return {
+              results: [
+                {
+                  review_id: "r3", position: 0, page_index: 0, x: 0.2, y: 0.3,
+                  category: "highlight", anchor_text: "好句", comment: "生动", is_highlight: 1,
+                },
+              ],
+            };
+          }
+          if (query.includes("FROM analysis_jobs")) {
+            return {
+              results: [
+                { review_id: "r2", error_code: "ANALYSIS_TIMEOUT", progress_stage: "generating_review", message: null },
+                { review_id: "r2", error_code: "AI_REQUEST_FAILED", progress_stage: "reading_images", message: null },
+              ],
+            };
+          }
+          return { results: [] };
+        }),
+      })),
+    }));
+
+    const list = await new D1ReviewReader({ prepare } as unknown as D1Database).list("teacher-1") as Array<Record<string, unknown>>;
+    expect(list).toHaveLength(3);
+    // 1 reviews query + 1 batched images query + 1 batched annotations query + 1 batched failures query = 4 total (not 1 + 3*2 + 1 = 8)
+    expect(prepare).toHaveBeenCalledTimes(4);
+    expect(list[0]).toMatchObject({ id: "r1", images: [expect.objectContaining({ id: 11 })], annotations: [] });
+    expect(list[1]).toMatchObject({
+      id: "r2",
+      images: [],
+      analysisFailure: expect.objectContaining({ summary: expect.stringContaining("超时") }),
+    });
+    expect(list[2]).toMatchObject({
+      id: "r3",
+      images: [expect.objectContaining({ id: 12 })],
+      annotations: [expect.objectContaining({ anchorText: "好句" })],
+    });
+  });
+
+  it("batches image lookups in checkExportable across multiple reviews", async () => {
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn(() => ({
+        all: vi.fn().mockResolvedValue(query.includes("FROM review_images")
+          ? {
+              results: [
+                { review_id: "ready-1", position: 0, width: 1000, height: 1500 },
+                { review_id: "ready-2", position: 0, width: 1000, height: 1500 },
+              ],
+            }
+          : {
+              results: [
+                {
+                  id: "ready-1", revision: 3, report: paragraphReport,
+                  image_revision: 3, ocr_checkpoint: checkpointV2, report_ocr_revision: 1,
+                  teacher_reviewed_at: Date.parse("2026-08-27T09:00:00.000Z"),
+                },
+                {
+                  id: "ready-2", revision: 4, report: paragraphReport,
+                  image_revision: 3, ocr_checkpoint: checkpointV2, report_ocr_revision: 1,
+                  teacher_reviewed_at: Date.parse("2026-08-27T09:00:00.000Z"),
+                },
+              ],
+            }),
+      })),
+    }));
+
+    await expect(new D1ReviewReader({ prepare } as unknown as D1Database).checkExportable(
+      "teacher-1",
+      [{ id: "ready-1", revision: 3 }, { id: "ready-2", revision: 4 }],
     )).resolves.toBe(true);
     expect(prepare).toHaveBeenCalledTimes(2);
   });

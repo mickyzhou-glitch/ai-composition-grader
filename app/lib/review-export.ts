@@ -1,7 +1,6 @@
 import { isLegacyEvaluationReport } from "@/src/domain/contracts";
 
 import { apiFetch } from "./api";
-import { createReviewDocx } from "./docx-download";
 import {
   createReviewPdf,
   markReviewExported,
@@ -87,6 +86,7 @@ async function assertReviewsExportable(reviews: ReviewView[]): Promise<void> {
 
 async function createExportFile(review: ReviewView, format: ExportFormat): Promise<Blob> {
   if (format === "pdf") return createReviewPdf(review);
+  const { createReviewDocx } = await import("./docx-download");
   return createReviewDocx(review);
 }
 

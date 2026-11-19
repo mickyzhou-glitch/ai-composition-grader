@@ -53,6 +53,7 @@ interface ImageRow {
 }
 
 interface AnnotationRow {
+  review_id?: string;
   position: number;
   page_index: number;
   x: number;
@@ -61,6 +62,23 @@ interface AnnotationRow {
   anchor_text: string;
   comment: string;
   is_highlight: number;
+}
+
+interface FailureRow {
+  review_id?: string;
+  error_code: string | null;
+  progress_stage: string;
+  message: string | null;
+}
+
+const D1_IN_CLAUSE_CHUNK_SIZE = 80;
+
+function chunkItems<T>(items: readonly T[], size = D1_IN_CLAUSE_CHUNK_SIZE): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function date(value: number | null): string | null {
@@ -83,7 +101,19 @@ export class D1ReviewReader {
       SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
       FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
     `).bind(ownerId).all<ReviewRow>();
-    return Promise.all(results.map((review) => this.hydrate(ownerId, review)));
+    if (results.length === 0) return [];
+    const reviewIds = results.map((review) => review.id);
+    const failedReviewIds = results.filter((review) => review.status === "failed").map((review) => review.id);
+    const [imagesByReview, annotationsByReview, failuresByReview] = await Promise.all([
+      this.batchImages(reviewIds),
+      this.batchAnnotations(reviewIds),
+      failedReviewIds.length > 0 ? this.batchLatestFailures(ownerId, failedReviewIds) : Promise.resolve(new Map<string, ReturnType<typeof describePublicAnalysisFailure>>()),
+    ]);
+    return Promise.all(results.map((review) => this.hydrate(ownerId, review, false, {
+      images: imagesByReview.get(review.id) ?? [],
+      annotations: annotationsByReview.get(review.id) ?? [],
+      analysisFailure: failuresByReview.get(review.id) ?? null,
+    })));
   }
 
   async queue(ownerId: string): Promise<unknown[]> {
@@ -138,19 +168,30 @@ export class D1ReviewReader {
       || !entries.every(({ id, revision }) => found.has(`${id}:${revision}`))
     ) return false;
     try {
-      const readiness = await Promise.all(results.map(async (review) => {
+      const reviewIds = results.map(({ id }) => id);
+      const placeholders = reviewIds.map(() => "?").join(", ");
+      const { results: imageRows = [] } = await this.database.prepare(`
+        SELECT review_id, position, width, height FROM review_images
+        WHERE review_id IN (${placeholders}) AND EXISTS (
+          SELECT 1 FROM reviews WHERE id = review_images.review_id AND owner_id = ? AND deleting_at IS NULL
+        ) ORDER BY position, id
+      `).bind(...reviewIds, ownerId).all<{
+        review_id?: string;
+        position: number;
+        width: number;
+        height: number;
+      }>();
+      const imagesByReview = new Map<string, Array<{ position: number; width: number; height: number }>>();
+      for (const row of imageRows) {
+        const key = row.review_id ?? (reviewIds.length === 1 ? reviewIds[0]! : "");
+        if (!key) continue;
+        const list = imagesByReview.get(key) ?? [];
+        list.push({ position: row.position, width: row.width, height: row.height });
+        imagesByReview.set(key, list);
+      }
+      return results.every((review) => {
         const report = review.report === null ? null : JSON.parse(review.report);
         const checkpoint = readStoredOcrCheckpoint(review.ocr_checkpoint, review.image_revision);
-        const { results: images = [] } = await this.database.prepare(`
-          SELECT position, width, height FROM review_images
-          WHERE review_id = ? AND EXISTS (
-            SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
-          ) ORDER BY position, id
-        `).bind(review.id, review.id, ownerId).all<{
-          position: number;
-          width: number;
-          height: number;
-        }>();
         return deliveryReadiness({
           report,
           teacherReviewedAt: date(review.teacher_reviewed_at),
@@ -160,10 +201,9 @@ export class D1ReviewReader {
           ),
           reportOcrRevision: review.report_ocr_revision,
           ocr: checkpoint,
-          images,
+          images: imagesByReview.get(review.id) ?? [],
         }).ready;
-      }));
-      return readiness.every(Boolean);
+      });
     } catch {
       return false;
     }
@@ -220,16 +260,98 @@ export class D1ReviewReader {
     }));
   }
 
-  private async hydrate(ownerId: string, review: ReviewRow, includeGuidance = false): Promise<unknown> {
-    const [imagesResult, annotationsResult] = await Promise.all([
-      this.database.prepare(`SELECT id, review_id, position, original_name, mime_type, original_path, annotation_path, ai_path, width, height, rotation, crop FROM review_images WHERE review_id = ? ORDER BY position, id`).bind(review.id).all<ImageRow>(),
-      this.database.prepare(`SELECT position, page_index, x, y, category, anchor_text, comment, is_highlight FROM annotations WHERE review_id = ? ORDER BY position`).bind(review.id).all<AnnotationRow>(),
-    ]);
-    const images = (imagesResult.results ?? []).map((image) => ({
+  private async batchImages(reviewIds: readonly string[]): Promise<Map<string, ImageRow[]>> {
+    const grouped = new Map<string, ImageRow[]>();
+    for (const chunk of chunkItems(reviewIds)) {
+      const placeholders = chunk.map(() => "?").join(", ");
+      const { results = [] } = await this.database.prepare(`
+        SELECT id, review_id, position, original_name, mime_type, original_path, annotation_path, ai_path, width, height, rotation, crop
+        FROM review_images WHERE review_id IN (${placeholders}) ORDER BY position, id
+      `).bind(...chunk).all<ImageRow>();
+      for (const row of results) {
+        const key = row.review_id ?? (chunk.length === 1 ? chunk[0]! : "");
+        if (!key) continue;
+        const list = grouped.get(key) ?? [];
+        list.push(row);
+        grouped.set(key, list);
+      }
+    }
+    return grouped;
+  }
+
+  private async batchAnnotations(reviewIds: readonly string[]): Promise<Map<string, AnnotationRow[]>> {
+    const grouped = new Map<string, AnnotationRow[]>();
+    for (const chunk of chunkItems(reviewIds)) {
+      const placeholders = chunk.map(() => "?").join(", ");
+      const { results = [] } = await this.database.prepare(`
+        SELECT review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight
+        FROM annotations WHERE review_id IN (${placeholders}) ORDER BY position
+      `).bind(...chunk).all<AnnotationRow>();
+      for (const row of results) {
+        const key = row.review_id ?? (chunk.length === 1 ? chunk[0]! : "");
+        if (!key) continue;
+        const list = grouped.get(key) ?? [];
+        list.push(row);
+        grouped.set(key, list);
+      }
+    }
+    return grouped;
+  }
+
+  private async batchLatestFailures(
+    ownerId: string,
+    reviewIds: readonly string[],
+  ): Promise<Map<string, ReturnType<typeof describePublicAnalysisFailure>>> {
+    const latestByReview = new Map<string, ReturnType<typeof describePublicAnalysisFailure>>();
+    for (const chunk of chunkItems(reviewIds)) {
+      const placeholders = chunk.map(() => "?").join(", ");
+      const { results = [] } = await this.database.prepare(`
+        SELECT review_id, error_code, progress_stage, message
+        FROM analysis_jobs
+        WHERE owner_id = ? AND status = 'failed' AND review_id IN (${placeholders})
+        ORDER BY COALESCE(finished_at, created_at) DESC, created_at DESC
+      `).bind(ownerId, ...chunk).all<FailureRow>();
+      for (const row of results) {
+        const key = row.review_id ?? (chunk.length === 1 ? chunk[0]! : "");
+        if (!key || latestByReview.has(key)) continue;
+        latestByReview.set(key, describePublicAnalysisFailure({
+          errorCode: row.error_code,
+          progressStage: row.progress_stage,
+          rawMessage: row.message,
+        }));
+      }
+    }
+    return latestByReview;
+  }
+
+  private async hydrate(
+    ownerId: string,
+    review: ReviewRow,
+    includeGuidance = false,
+    preloaded?: {
+      images: ImageRow[];
+      annotations: AnnotationRow[];
+      analysisFailure: ReturnType<typeof describePublicAnalysisFailure> | null;
+    },
+  ): Promise<unknown> {
+    let imageRows: ImageRow[];
+    let annotationRows: AnnotationRow[];
+    if (preloaded) {
+      imageRows = preloaded.images;
+      annotationRows = preloaded.annotations;
+    } else {
+      const [imagesResult, annotationsResult] = await Promise.all([
+        this.database.prepare(`SELECT id, review_id, position, original_name, mime_type, original_path, annotation_path, ai_path, width, height, rotation, crop FROM review_images WHERE review_id = ? ORDER BY position, id`).bind(review.id).all<ImageRow>(),
+        this.database.prepare(`SELECT position, page_index, x, y, category, anchor_text, comment, is_highlight FROM annotations WHERE review_id = ? ORDER BY position`).bind(review.id).all<AnnotationRow>(),
+      ]);
+      imageRows = imagesResult.results ?? [];
+      annotationRows = annotationsResult.results ?? [];
+    }
+    const images = imageRows.map((image) => ({
       id: image.id, position: image.position, originalName: image.original_name, mimeType: image.mime_type,
       width: image.width, height: image.height, rotation: image.rotation, crop: image.crop === null ? null : JSON.parse(image.crop),
     })).map((image) => ({ ...image, rotation: normalizedRotation(image.rotation), crop: image.crop === null ? null : normalizedCropSchema.parse(image.crop) }));
-    const annotations = (annotationsResult.results ?? []).map((annotation) => annotationSchema.parse({
+    const annotations = annotationRows.map((annotation) => annotationSchema.parse({
       pageIndex: annotation.page_index, x: annotation.x, y: annotation.y, category: annotation.category,
       anchorText: annotation.anchor_text, comment: annotation.comment, isHighlight: annotation.is_highlight === 1,
     }));
@@ -242,7 +364,9 @@ export class D1ReviewReader {
       || review.report_ocr_revision !== currentCheckpoint.ocrRevision
     );
     const hasPdf = review.pdf_filename !== null && review.pdf_path === `pdf/${review.pdf_filename}` && review.pdf_revision === review.revision && review.exported_at !== null;
-    const analysisFailure = review.status === "failed" ? await this.latestFailure(ownerId, review.id) : null;
+    const analysisFailure = preloaded
+      ? preloaded.analysisFailure
+      : (review.status === "failed" ? await this.latestFailure(ownerId, review.id) : null);
     const layers = readReviewGuidance(review.teacher_guidance);
     const teacherGuidance = report && isParagraphEvaluationReport(report) && report.teacherGuidanceDraft !== undefined
       ? report.teacherGuidanceDraft : layers.current;

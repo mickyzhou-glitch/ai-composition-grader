@@ -1377,4 +1377,67 @@ describe("Cloudflare Worker", () => {
     commitBatch.mockRestore();
     markDispatchFailed.mockRestore();
   });
+
+  it("单篇 analyze 投递 Queue 失败时补偿释放任务并返回 503", async () => {
+    const database = authenticatedDatabase();
+    const jobs = { send: vi.fn().mockRejectedValue(new Error("queue down")), sendBatch: vi.fn() };
+    const enqueue = vi.spyOn(D1AnalysisJobs.prototype, "enqueue").mockResolvedValue({
+      job: { id: "job-single-1", reviewId: "review-1", status: "queued" },
+      newlyQueued: true,
+    });
+    const markDispatchFailed = vi.spyOn(D1Reanalysis.prototype, "markDispatchFailed").mockResolvedValue();
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/analyze", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({}),
+    }), Object.assign(workerEnv(() => new Response("asset"), database), { ANALYSIS_QUEUE: jobs }) as never);
+
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      ok: false,
+      error: { code: "QUEUE_DISPATCH_FAILED" },
+    });
+    expect(markDispatchFailed).toHaveBeenCalledWith("teacher-1", ["job-single-1"]);
+    enqueue.mockRestore();
+    markDispatchFailed.mockRestore();
+  });
+
+  it("替换上传图片成功后清理 R2 中的旧图且不影响返回结构", async () => {
+    const database = authenticatedDatabase();
+    const files = { put: vi.fn().mockResolvedValue(undefined), delete: vi.fn().mockResolvedValue(undefined) };
+    const { D1ImageWriter } = await import("../src/cloudflare/d1-image-writer");
+    const replace = vi.spyOn(D1ImageWriter.prototype, "replace").mockResolvedValue({
+      images: [{ id: 10, position: 0 }],
+      revision: 3,
+      replacedPaths: ["images/old-1.jpg", "images/old-2.jpg"],
+    });
+    const form = new FormData();
+    form.set("expectedRevision", "2");
+    form.set("privacyConfirmed", "true");
+    form.set("privacyNoticeVersion", "2026-07-22");
+    form.set("imageMeta", JSON.stringify([{ width: 800, height: 1000 }]));
+    form.append("images", new File([new Uint8Array([0xff, 0xd8, 0xff])], "page1.jpg", { type: "image/jpeg" }));
+
+    const request = new Request("https://grader.workers.dev/api/reviews/review-1/images", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    });
+    vi.spyOn(request, "formData").mockResolvedValue(form);
+
+    const response = await worker.fetch(request, Object.assign(workerEnv(() => new Response("asset"), database), { FILES: files }) as never);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      ok: true,
+      data: { images: [{ id: 10, position: 0 }], revision: 3 },
+    });
+    expect(files.delete).toHaveBeenCalledWith([
+      "users/teacher-1/reviews/review-1/images/old-1.jpg",
+      "users/teacher-1/reviews/review-1/images/old-2.jpg",
+    ]);
+    replace.mockRestore();
+  });
 });

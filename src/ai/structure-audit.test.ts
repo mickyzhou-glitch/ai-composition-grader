@@ -108,6 +108,16 @@ describe("第一段口径（家奇订正）", () => {
     expect(plain[0]!.systemRules).toEqual([NO_LEAK_ELEMENT]);
   });
 
+  it.each([
+    "第一段：用名言引入。\n第二段：描写考场压抑的氛围。\n第三段：走出考场写感悟。",
+    "第一段：开头点题。\n第二段：获奖后抑制不住内心的激动。\n第三段：总结收获。",
+    "第一段：引入人物。\n第二段：写出他一度抑郁失落的心情。\n第三段：重拾信心。",
+  ])("普通词汇中的「压抑/抑制/抑郁」不误触发欲扬先抑首段规则：%s", (requirements) => {
+    const tasks = parseStructureTasks(requirements, 3)!;
+    expect(tasks[0]!.elements).not.toContain(OPENING_NO_SUPPRESSION_ELEMENT);
+    expect(tasks[0]!.elements).not.toContain(OPENING_FUNCTION_ELEMENT);
+  });
+
   it("复核提示词写明第一段判定口径", () => {
     const prompt = structureAuditPrompt(tasks, "", false);
     expect(prompt).toContain("第一段只写名人名言、简单解释名言、点出人物，最多一句过渡");

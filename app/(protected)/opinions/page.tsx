@@ -179,7 +179,6 @@ export default function GradingOpinionsPage() {
         void loadCandidates();
       });
     return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const standing = opinions.filter((opinion) => opinion.scope === "standing");

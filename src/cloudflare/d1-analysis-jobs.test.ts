@@ -82,7 +82,7 @@ describe("D1AnalysisJobs", () => {
       prepare: vi.fn((query: string) => ({
         bind: vi.fn(() => ({
           first: vi.fn().mockResolvedValue(query.includes("FROM reviews") ? { id: "review-1", revision: 2, expires_at: null, image_count: 1 } : {
-            id: "job-1", review_id: "review-1", status: "queued", progress_stage: "queued", error_code: null, created_at: 1_700_000_000_000, finished_at: null,
+            id: "job-1", review_id: "review-1", status: "queued", progress_stage: "queued", error_code: null, created_at: Date.now(), finished_at: null,
           }),
         })),
       })),

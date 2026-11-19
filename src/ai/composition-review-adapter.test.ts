@@ -116,11 +116,14 @@ function completion(value: unknown) {
 }
 
 function setup(options: { baseUrl?: string; response?: unknown } = {}) {
-  const create = vi.fn(async (_input: unknown) =>
-    completion(options.response ?? validResult));
-  const factory = vi.fn((_options: Parameters<OpenAIClientFactory>[0]): OpenAICompatibleClient => ({
-    chat: { completions: { create } },
-  }));
+  const create = vi.fn(async (input: unknown) => {
+    void input;
+    return completion(options.response ?? validResult);
+  });
+  const factory = vi.fn((clientOptions: Parameters<OpenAIClientFactory>[0]): OpenAICompatibleClient => {
+    void clientOptions;
+    return { chat: { completions: { create } } };
+  });
   const settings = {
     getRuntimeConfig: vi.fn(async () => ({
       baseUrl: options.baseUrl ?? "https://content.example/v1",
@@ -603,14 +606,14 @@ describe("CompositionReviewAdapter", () => {
   });
 
   it("模型漏掉 annotationAnchors 时按无批注处理，不判失败", async () => {
-    const { annotationAnchors: _omit, ...withoutAnchors } = validResult;
+    const withoutAnchors = { report: validResult.report };
     const harness = setup({ response: withoutAnchors });
     await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
       .resolves.toMatchObject({ annotationAnchors: [] });
     expect(harness.create).toHaveBeenCalledTimes(1);
   });
 
-  it("首次调用与截断重试都显式传入 max_tokens: 8192", async () => {
+  it("非 DeepSeek 截断重试时提高 max_tokens 到 16384，遇 400 回退到 8192 并附精简提示", async () => {
     const harness = setup();
     const text = JSON.stringify(validResult);
     harness.create.mockResolvedValueOnce({ choices: [{ message: { content: text.slice(0, 200) }, finish_reason: "length" }] } as never);
@@ -618,7 +621,30 @@ describe("CompositionReviewAdapter", () => {
       .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
     expect(harness.create).toHaveBeenCalledTimes(2);
     expect((harness.create.mock.calls[0][0] as { max_tokens?: number }).max_tokens).toBe(8192);
+    expect((harness.create.mock.calls[1][0] as { max_tokens?: number }).max_tokens).toBe(16384);
+
+    const cappedHarness = setup();
+    cappedHarness.create
+      .mockResolvedValueOnce({ choices: [{ message: { content: text.slice(0, 200) }, finish_reason: "length" }] } as never)
+      .mockRejectedValueOnce(Object.assign(new Error("max_tokens must be <= 8192"), { status: 400 }));
+    await expect(cappedHarness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(cappedHarness.create).toHaveBeenCalledTimes(3);
+    expect((cappedHarness.create.mock.calls[1][0] as { max_tokens?: number }).max_tokens).toBe(16384);
+    expect((cappedHarness.create.mock.calls[2][0] as { max_tokens?: number }).max_tokens).toBe(8192);
+    expect(JSON.stringify(cappedHarness.create.mock.calls[2][0])).toContain("超出长度限制被截断");
+  });
+
+  it("DeepSeek 截断重试保持 max_tokens: 8192 并附精简提示", async () => {
+    const harness = setup({ baseUrl: "https://api.deepseek.com/v1" });
+    const text = JSON.stringify(validResult);
+    harness.create.mockResolvedValueOnce({ choices: [{ message: { content: text.slice(0, 200) }, finish_reason: "length" }] } as never);
+    await expect(harness.adapter.analyzeText({ config, paragraphs, studentName: "小艾" }))
+      .resolves.toMatchObject({ annotationAnchors: validResult.annotationAnchors });
+    expect(harness.create).toHaveBeenCalledTimes(2);
+    expect((harness.create.mock.calls[0][0] as { max_tokens?: number }).max_tokens).toBe(8192);
     expect((harness.create.mock.calls[1][0] as { max_tokens?: number }).max_tokens).toBe(8192);
+    expect(JSON.stringify(harness.create.mock.calls[1][0])).toContain("超出长度限制被截断");
   });
 
   it("重试后仍被截断时报 output_truncated", async () => {
