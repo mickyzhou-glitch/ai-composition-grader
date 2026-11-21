@@ -1,7 +1,10 @@
 const SESSION_TOUCH_INTERVAL_MS = 60_000;
 
 export class D1SessionRepository {
-  constructor(private readonly database: D1Database) {}
+  constructor(
+    private readonly database: D1Database,
+    private readonly scheduleBackground?: (task: Promise<unknown>) => void,
+  ) {}
 
   async create(input: { id: string; userId: string; tokenHash: string; expiresAt: Date; now: Date }): Promise<void> {
     await this.database.prepare(`
@@ -33,9 +36,14 @@ export class D1SessionRepository {
     }>();
     if (!row) return null;
     if (row.session_id && typeof row.last_seen_at === "number" && nowMs - row.last_seen_at >= SESSION_TOUCH_INTERVAL_MS) {
-      await this.database.prepare(
+      const touch = this.database.prepare(
         "UPDATE sessions SET last_seen_at = ? WHERE id = ? AND revoked_at IS NULL",
       ).bind(nowMs, row.session_id).run().catch(() => undefined);
+      if (this.scheduleBackground) {
+        this.scheduleBackground(touch);
+      } else {
+        await touch;
+      }
     }
     return {
       user: {

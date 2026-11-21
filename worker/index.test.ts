@@ -1633,4 +1633,102 @@ describe("Cloudflare Worker", () => {
     recoverSpy.mockRestore();
     maintenanceSpy.mockRestore();
   });
+
+  it("授权图片接口返回私有 immutable 缓存与 ETag，命中 If-None-Match 时返回 304 且免读 R2", async () => {
+    const database = authenticatedDatabase();
+    const imageKey = vi.spyOn(D1ReviewReader.prototype, "imageObjectKey").mockResolvedValue({
+      key: "users/teacher-1/reviews/review-1/images/page-uuid-1.jpg",
+      contentType: "image/jpeg",
+    });
+    const filesGet = vi.fn().mockResolvedValue({
+      body: "jpeg-bytes",
+      httpMetadata: { contentType: "image/jpeg" },
+    });
+    const env = Object.assign(workerEnv(() => new Response("asset"), database), { FILES: { get: filesGet } });
+
+    const first = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/files?imageId=1&variant=original", {
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    }), env as never);
+    expect(first.status).toBe(200);
+    expect(first.headers.get("cache-control")).toBe("private, max-age=3600, immutable");
+    expect(first.headers.get("vary")).toBe("Cookie");
+    const etag = first.headers.get("etag");
+    expect(etag).toBe("\"page-uuid-1.jpg\"");
+    expect(filesGet).toHaveBeenCalledTimes(1);
+
+    const cached = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/review-1/files?imageId=1&variant=original", {
+      headers: { cookie: "__Host-zuowen_session=session-token", "if-none-match": etag! },
+    }), env as never);
+    expect(cached.status).toBe(304);
+    expect(cached.headers.get("cache-control")).toBe("private, max-age=3600, immutable");
+    expect(filesGet).toHaveBeenCalledTimes(1);
+    imageKey.mockRestore();
+  });
+
+  it("GET /api/reviews?ids=... 支持按指定 ID 点查并拒绝非法参数，POST /exported 免除冗余详情重查，且会话活跃更新走 waitUntil", async () => {
+    const waitUntil = vi.fn();
+    const touchRun = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+    const database = {
+      prepare: vi.fn((sql: string) => {
+        const statement = {
+          bind() { return statement; },
+          first: vi.fn(async () => sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-1",
+            username: "teacher",
+            role: "teacher",
+            must_change_password: 0,
+            session_id: "sess-1",
+            last_seen_at: Date.now() - 120_000,
+            expires_at: Date.now() + 60_000,
+          } : null),
+          all: vi.fn(async () => ({ results: [] })),
+          run: touchRun,
+        };
+        return statement;
+      }),
+      batch: vi.fn(async () => []),
+    };
+    const env = workerEnv(() => new Response("asset"), database);
+    const listSpy = vi.spyOn(D1ReviewReader.prototype, "list").mockResolvedValue([{ id: "review-a" }]);
+
+    const filtered = await worker.fetch(
+      new Request("https://grader.workers.dev/api/reviews?ids=review-a,review-b,review-a", {
+        headers: { cookie: "__Host-zuowen_session=session-token" },
+      }),
+      env as never,
+      { waitUntil, passThroughOnException: vi.fn() } as unknown as ExecutionContext,
+    );
+    expect(filtered.status).toBe(200);
+    expect(listSpy).toHaveBeenCalledWith("teacher-1", { ids: ["review-a", "review-b"] });
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+
+    const invalidIds = await worker.fetch(
+      new Request("https://grader.workers.dev/api/reviews?ids=../bad", {
+        headers: { cookie: "__Host-zuowen_session=session-token" },
+      }),
+      env as never,
+    );
+    expect(invalidIds.status).toBe(400);
+
+    const { D1ReviewWriter } = await import("../src/cloudflare/d1-review-writer");
+    const markSpy = vi.spyOn(D1ReviewWriter.prototype, "markExported").mockResolvedValue(true);
+    const getSpy = vi.spyOn(D1ReviewReader.prototype, "get");
+    const exportedRes = await worker.fetch(
+      new Request("https://grader.workers.dev/api/reviews/review-a/exported", {
+        method: "POST",
+        headers: { cookie: "__Host-zuowen_session=session-token" },
+      }),
+      env as never,
+    );
+    expect(exportedRes.status).toBe(200);
+    await expect(exportedRes.json()).resolves.toEqual({
+      ok: true,
+      data: { id: "review-a", status: "exported" },
+    });
+    expect(getSpy).not.toHaveBeenCalled();
+
+    listSpy.mockRestore();
+    markSpy.mockRestore();
+    getSpy.mockRestore();
+  });
 });

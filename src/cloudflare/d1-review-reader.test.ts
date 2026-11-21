@@ -353,4 +353,37 @@ describe("D1ReviewReader", () => {
     )).resolves.toBe(true);
     expect(prepare).toHaveBeenCalledTimes(2);
   });
+
+  it("queries only requested review IDs when list() receives an ids filter", async () => {
+    const boundArgs: unknown[][] = [];
+    const prepare = vi.fn((query: string) => ({
+      bind: vi.fn((...args: unknown[]) => {
+        boundArgs.push([query, ...args]);
+        return {
+          all: vi.fn().mockImplementation(async () => {
+            if (query.includes("FROM reviews WHERE owner_id") && query.includes("id IN (")) {
+              return {
+                results: [{
+                  id: "r-analyzing", status: "ready_for_review", student_name: "小林", class_name: "六1", config, report: paragraphReport, revision: 2,
+                  image_revision: 3, ocr_checkpoint: checkpointV2, report_ocr_revision: 1,
+                  pdf_filename: null, pdf_path: null, pdf_revision: null, exported_at: null,
+                  teacher_reviewed_at: null, rejection_reason: null, rejection_change_request: null, expires_at: null,
+                  created_at: 1_700_000_000_000, updated_at: 1_700_000_300_000,
+                }],
+              };
+            }
+            return { results: [] };
+          }),
+        };
+      }),
+    }));
+
+    const reader = new D1ReviewReader({ prepare } as unknown as D1Database);
+    await expect(reader.list("teacher-1", { ids: [] })).resolves.toEqual([]);
+    expect(prepare).not.toHaveBeenCalled();
+
+    const items = await reader.list("teacher-1", { ids: ["r-analyzing", "r-analyzing"] }) as Array<{ id: string; status: string }>;
+    expect(items).toMatchObject([{ id: "r-analyzing", status: "ready_for_review" }]);
+    expect(boundArgs[0]?.slice(1)).toEqual(["teacher-1", "r-analyzing"]);
+  });
 });

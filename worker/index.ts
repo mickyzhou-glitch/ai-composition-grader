@@ -328,17 +328,29 @@ function isCrossSiteMutation(request: Request, url: URL): boolean {
   return request.headers.get("sec-fetch-site") === "cross-site";
 }
 
+function matchesIfNoneMatch(header: string | null, etag: string): boolean {
+  if (!header) return false;
+  const normalizedTarget = etag.replace(/^W\//u, "");
+  return header.split(",").some((part) => {
+    const candidate = part.trim();
+    if (candidate === "*") return true;
+    return candidate.replace(/^W\//u, "") === normalizedTarget;
+  });
+}
+
 async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/_next/static/")) {
       return secureResponse(await env.ASSETS.fetch(request), url.pathname);
     }
+    const scheduleBackground = ctx ? (task: Promise<unknown>) => { ctx.waitUntil(task); } : undefined;
+    const sessions = new D1SessionRepository(env.DB, scheduleBackground);
     const authResponse = await handleWorkerAuth(request, {
       appOrigin: url.origin,
       ipHmacSecret: env.AUTH_IP_HMAC_SECRET,
       proofs: new D1PasswordProofRepository(env.DB),
       challenges: new D1LoginChallengeRepository(env.DB),
-      sessions: new D1SessionRepository(env.DB),
+      sessions,
       attempts: new D1LoginAttemptRepository(env.DB),
       securityEvents: new D1SecurityEvents(env.DB),
       proofEncryptionKey: env.AUTH_PROOF_ENCRYPTION_KEY,
@@ -365,7 +377,6 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
     if (url.pathname.startsWith("/api/") && isCrossSiteMutation(request, url)) {
       return apiError("UNTRUSTED_ORIGIN", "请求来源不受信任", 403);
     }
-    const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);
     if (request.method === "GET" && url.pathname === "/" && request.headers.get("accept")?.includes("text/html")) {
       if (!user) {
@@ -519,6 +530,17 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
     }
     if (url.pathname === "/api/reviews" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const rawIds = url.searchParams.get("ids");
+      if (rawIds !== null) {
+        const ids = [...new Set(rawIds.split(",").map((id) => id.trim()).filter(Boolean))];
+        if (ids.length === 0 || ids.length > 50 || ids.some((id) => !reanalysisRouteIdPattern.test(id))) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        return Response.json(
+          { ok: true, data: await new D1ReviewReader(env.DB).list(user.id, { ids }) },
+          { headers: { "cache-control": "no-store" } },
+        );
+      }
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).list(user.id) }, { headers: { "cache-control": "no-store" } });
     }
     if (url.pathname === "/api/reviews" && request.method === "POST") {
@@ -575,8 +597,7 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       const reviewId = decodeURIComponent(reviewExportMatch[1]);
       const exported = await new D1ReviewWriter(env.DB).markExported(user.id, reviewId);
       if (!exported) return apiError("EXPORT_NOT_AVAILABLE", "仅已完成且未变更的批改记录可以标记为已导出", 422);
-      const review = await new D1ReviewReader(env.DB).get(user.id, reviewId);
-      return Response.json({ ok: true, data: review }, { headers: { "cache-control": "no-store" } });
+      return Response.json({ ok: true, data: { id: reviewId, status: "exported" } }, { headers: { "cache-control": "no-store" } });
     }
     const teacherReviewMatch = /^\/api\/reviews\/([^/]+)\/teacher-review$/u.exec(url.pathname);
     if (teacherReviewMatch && request.method === "POST") {
@@ -825,9 +846,24 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       }
       const file = await new D1ReviewReader(env.DB).imageObjectKey(user.id, decodeURIComponent(fileMatch[1]), imageId, variant as "original" | "annotation" | "ai");
       if (!file) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
+      const etag = `"${file.key.split("/").pop() ?? `${imageId}-${variant}`}"`;
+      const cacheHeaders = {
+        "cache-control": "private, max-age=3600, immutable",
+        etag,
+        vary: "Cookie",
+        "x-content-type-options": "nosniff",
+      };
+      if (matchesIfNoneMatch(request.headers.get("if-none-match"), etag)) {
+        return new Response(null, { status: 304, headers: cacheHeaders });
+      }
       const object = await env.FILES.get(file.key);
       if (!object) return apiError("FILE_NOT_FOUND", "图片不存在", 404);
-      return new Response(object.body, { headers: { "content-type": object.httpMetadata?.contentType ?? file.contentType, "cache-control": "private, no-store", "x-content-type-options": "nosniff" } });
+      return new Response(object.body, {
+        headers: {
+          "content-type": object.httpMetadata?.contentType ?? file.contentType,
+          ...cacheHeaders,
+        },
+      });
     }
     const ocrMatch = /^\/api\/reviews\/([^/]+)\/ocr$/u.exec(url.pathname);
     if (ocrMatch && request.method === "PATCH") {
@@ -933,6 +969,10 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
           );
         }
         if (!current) return apiError("PARAGRAPH_NOT_FOUND", "自然段批改不存在", 404);
+        const [standingOpinions, essayOpinions] = await Promise.all([
+          listD1StandingOpinions(env.DB, user.id, review.config.title),
+          listD1EssayOpinions(env.DB, user.id, review.id),
+        ]);
         const rewritten = await new OpenAIReviewAdapter(
           workerAiSettings(env),
           { clientFactory: createWorkerOpenAIClient },
@@ -945,8 +985,8 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
           paragraphReviews: body.paragraphReviews,
           teacherGuidance: composeReviewGuidance(
             body.teacherGuidance ?? review.teacherGuidance,
-            await listD1StandingOpinions(env.DB, user.id, review.config.title),
-            await listD1EssayOpinions(env.DB, user.id, review.id),
+            standingOpinions,
+            essayOpinions,
           ) ?? undefined,
         });
         return Response.json(

@@ -149,10 +149,11 @@ export async function downloadReviewArchive(
       archive.file(
         uniqueArchiveEntry(reviewFilename(review, format), archiveEntries),
         await createExportFile(review, format),
+        { compression: "STORE" },
       );
     }
     const filename = archiveFilename(format);
-    const blob = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
+    const blob = await archive.generateAsync({ type: "blob", compression: "STORE" });
     const { triggerFileDownload, markReviewExported } = await loadPdfDownloadModule();
     triggerFileDownload(blob, filename);
     const markOutcomes = await mapWithConcurrency(

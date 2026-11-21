@@ -35,15 +35,44 @@ interface PreviewInputSnapshot {
   segments: Segment[];
 }
 
+const MAX_CACHED_PAGE_BLOBS = 16;
+const PAGE_BLOB_CACHE_TTL_MS = 5 * 60_000;
+const cachedPageBlobs = new Map<string, { blob: Blob; cachedAt: number }>();
 const inflightPageBlobs = new Map<string, Promise<Blob>>();
 
+export function clearParagraphCropPageCache(): void {
+  cachedPageBlobs.clear();
+  inflightPageBlobs.clear();
+}
+
+function rememberPageBlob(url: string, blob: Blob): void {
+  cachedPageBlobs.delete(url);
+  cachedPageBlobs.set(url, { blob, cachedAt: Date.now() });
+  while (cachedPageBlobs.size > MAX_CACHED_PAGE_BLOBS) {
+    const oldestKey = cachedPageBlobs.keys().next().value;
+    if (oldestKey === undefined) break;
+    cachedPageBlobs.delete(oldestKey);
+  }
+}
+
 function fetchPageBlob(url: string, errorMessage: string): Promise<Blob> {
+  const cached = cachedPageBlobs.get(url);
+  if (cached) {
+    if (Date.now() - cached.cachedAt <= PAGE_BLOB_CACHE_TTL_MS) {
+      cachedPageBlobs.delete(url);
+      cachedPageBlobs.set(url, cached);
+      return Promise.resolve(cached.blob);
+    }
+    cachedPageBlobs.delete(url);
+  }
   const existing = inflightPageBlobs.get(url);
   if (existing) return existing;
   const request = fetch(url)
-    .then((response) => {
+    .then(async (response) => {
       if (!response.ok) throw new Error(errorMessage);
-      return response.blob();
+      const blob = await response.blob();
+      rememberPageBlob(url, blob);
+      return blob;
     })
     .finally(() => {
       inflightPageBlobs.delete(url);

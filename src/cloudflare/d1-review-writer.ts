@@ -272,17 +272,29 @@ export class D1ReviewWriter {
   }
 
   async markExported(ownerId: string, reviewId: string): Promise<boolean> {
-    const current = await this.database.prepare(`
-      SELECT revision, report, image_revision, ocr_checkpoint, report_ocr_revision, teacher_reviewed_at
-      FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
-    `).bind(reviewId, ownerId).first<{
-      revision: number;
-      report: string | null;
-      image_revision: number;
-      ocr_checkpoint: string | null;
-      report_ocr_revision: number | null;
-      teacher_reviewed_at: number | null;
-    }>();
+    const [current, imageResult] = await Promise.all([
+      this.database.prepare(`
+        SELECT revision, report, image_revision, ocr_checkpoint, report_ocr_revision, teacher_reviewed_at
+        FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+      `).bind(reviewId, ownerId).first<{
+        revision: number;
+        report: string | null;
+        image_revision: number;
+        ocr_checkpoint: string | null;
+        report_ocr_revision: number | null;
+        teacher_reviewed_at: number | null;
+      }>(),
+      this.database.prepare(`
+        SELECT position, width, height FROM review_images
+        WHERE review_id = ? AND EXISTS (
+          SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+        ) ORDER BY position, id
+      `).bind(reviewId, reviewId, ownerId).all<{
+        position: number;
+        width: number;
+        height: number;
+      }>(),
+    ]);
     if (!current) return false;
     try {
       const report = current.report === null ? null : JSON.parse(current.report);
@@ -292,16 +304,7 @@ export class D1ReviewWriter {
       const checkpoint = parsedCheckpoint?.sourceRevision === current.image_revision
         ? parsedCheckpoint
         : null;
-      const { results: images = [] } = await this.database.prepare(`
-        SELECT position, width, height FROM review_images
-        WHERE review_id = ? AND EXISTS (
-          SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
-        ) ORDER BY position, id
-      `).bind(reviewId, reviewId, ownerId).all<{
-        position: number;
-        width: number;
-        height: number;
-      }>();
+      const images = imageResult.results ?? [];
       const readiness = deliveryReadiness({
         report,
         teacherReviewedAt: current.teacher_reviewed_at === null
@@ -331,11 +334,13 @@ export class D1ReviewWriter {
   }
 
   async deleteReview(ownerId: string, reviewId: string): Promise<string[] | null> {
-    const images = await this.database.prepare(`
-      SELECT original_path, annotation_path, ai_path FROM review_images
-      WHERE review_id = ? AND EXISTS (SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL)
-    `).bind(reviewId, reviewId, ownerId).all<{ original_path: string; annotation_path: string; ai_path: string }>();
-    const exists = await this.database.prepare("SELECT id FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ id: string }>();
+    const [images, exists] = await Promise.all([
+      this.database.prepare(`
+        SELECT original_path, annotation_path, ai_path FROM review_images
+        WHERE review_id = ? AND EXISTS (SELECT 1 FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL)
+      `).bind(reviewId, reviewId, ownerId).all<{ original_path: string; annotation_path: string; ai_path: string }>(),
+      this.database.prepare("SELECT id FROM reviews WHERE id = ? AND owner_id = ? AND deleting_at IS NULL").bind(reviewId, ownerId).first<{ id: string }>(),
+    ]);
     if (!exists) return null;
     await this.database.batch([
       this.database.prepare("DELETE FROM annotations WHERE review_id = ?").bind(reviewId),

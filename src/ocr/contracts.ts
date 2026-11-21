@@ -270,8 +270,15 @@ export function readStoredOcrCheckpoint(
       return null;
     }
   }
+  if (
+    typeof candidate !== "object"
+    || candidate === null
+    || (candidate as { sourceRevision?: unknown }).sourceRevision !== imageRevision
+  ) {
+    return null;
+  }
   const parsed = ocrCheckpointSchema.safeParse(candidate);
-  if (!parsed.success || parsed.data.sourceRevision !== imageRevision) return null;
+  if (!parsed.success) return null;
   return parsed.data;
 }
 

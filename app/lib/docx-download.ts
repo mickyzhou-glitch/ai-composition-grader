@@ -537,12 +537,13 @@ async function applyChocolateTheme(blob: Blob): Promise<Blob> {
   if (!documentFile || !relsFile || !typesFile) {
     throw new Error("当前浏览器不支持生成 Word");
   }
+  const xmlOptions = { compression: "DEFLATE" as const };
   const documentXml = (await documentFile.async("string")).replace(
     /<w:shd\b[^>]*\/>/g,
     chocolateBoxShading,
   );
-  zip.file("word/document.xml", documentXml);
-  zip.file("word/theme/theme1.xml", themeXml());
+  zip.file("word/document.xml", documentXml, xmlOptions);
+  zip.file("word/theme/theme1.xml", themeXml(), xmlOptions);
 
   const rels = await relsFile.async("string");
   if (!rels.includes("/theme")) {
@@ -551,16 +552,21 @@ async function applyChocolateTheme(blob: Blob): Promise<Blob> {
     zip.file("word/_rels/document.xml.rels", rels.replace(
       "</Relationships>",
       `<Relationship Id="${relationshipId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>`,
-    ));
+    ), xmlOptions);
   }
   const types = await typesFile.async("string");
   if (!types.includes("/word/theme/theme1.xml")) {
     zip.file("[Content_Types].xml", types.replace(
       "</Types>",
       `<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>`,
-    ));
+    ), xmlOptions);
   }
-  const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  zip.forEach((relativePath, entry) => {
+    if (!entry.dir && relativePath.startsWith("word/media/")) {
+      entry.options.compression = "STORE";
+    }
+  });
+  const bytes = await zip.generateAsync({ type: "uint8array" });
   const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
     ? (bytes.buffer as ArrayBuffer)
     : (bytes.slice().buffer as ArrayBuffer);

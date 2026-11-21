@@ -120,19 +120,37 @@ export default function Home() {
     };
   }, []);
 
-  const hasAnalyzingReviews = useMemo(
-    () => reviews.some(({ status }) => status === "analyzing"),
+  const analyzingIds = useMemo(
+    () => reviews.filter(({ status }) => status === "analyzing").map(({ id }) => id),
     [reviews],
   );
+  const hasAnalyzingReviews = analyzingIds.length > 0;
+  const analyzingIdsRef = useRef<string[]>(analyzingIds);
+  useEffect(() => {
+    analyzingIdsRef.current = analyzingIds;
+  }, [analyzingIds]);
 
   useEffect(() => {
     if (!hasAnalyzingReviews || failedRegrade?.running) return;
     let inFlight = false;
     const poll = () => {
       if (inFlight || document.visibilityState === "hidden") return;
+      const ids = analyzingIdsRef.current;
+      if (ids.length === 0) return;
       inFlight = true;
-      void apiFetch<ReviewView[]>("/api/reviews")
-        .then((loaded) => { if (mountedRef.current) setReviews(loaded); })
+      const endpoint = ids.length <= 50
+        ? `/api/reviews?ids=${ids.map((id) => encodeURIComponent(id)).join(",")}`
+        : "/api/reviews";
+      void apiFetch<ReviewView[]>(endpoint)
+        .then((loaded) => {
+          if (!mountedRef.current) return;
+          if (ids.length > 50) {
+            setReviews(loaded);
+            return;
+          }
+          const byId = new Map(loaded.map((item) => [item.id, item]));
+          setReviews((current) => current.map((item) => byId.get(item.id) ?? item));
+        })
         .catch(() => undefined)
         .finally(() => { inFlight = false; });
     };

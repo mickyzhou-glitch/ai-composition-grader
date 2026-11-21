@@ -96,11 +96,27 @@ export class D1ReviewReader {
     return results.map((row) => row.class_name);
   }
 
-  async list(ownerId: string): Promise<unknown[]> {
-    const { results = [] } = await this.database.prepare(`
-      SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
-      FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
-    `).bind(ownerId).all<ReviewRow>();
+  async list(ownerId: string, options?: { ids?: readonly string[] }): Promise<unknown[]> {
+    let results: ReviewRow[];
+    if (options?.ids !== undefined) {
+      const requestedIds = [...new Set(options.ids)];
+      if (requestedIds.length === 0) return [];
+      const chunks = await Promise.all(chunkItems(requestedIds).map(async (chunk) => {
+        const placeholders = chunk.map(() => "?").join(", ");
+        const { results: rows = [] } = await this.database.prepare(`
+          SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
+          FROM reviews WHERE owner_id = ? AND deleting_at IS NULL AND id IN (${placeholders}) ORDER BY updated_at DESC, created_at DESC
+        `).bind(ownerId, ...chunk).all<ReviewRow>();
+        return rows;
+      }));
+      results = chunks.flat().sort((left, right) => (right.updated_at - left.updated_at) || (right.created_at - left.created_at));
+    } else {
+      const queried = await this.database.prepare(`
+        SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
+        FROM reviews WHERE owner_id = ? AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
+      `).bind(ownerId).all<ReviewRow>();
+      results = queried.results ?? [];
+    }
     if (results.length === 0) return [];
     const reviewIds = results.map((review) => review.id);
     const failedReviewIds = results.filter((review) => review.status === "failed").map((review) => review.id);

@@ -554,4 +554,55 @@ describe("历史首页", () => {
     expect(await screen.findByText("重新批改结束：已提交 1 篇。这次失败 1 篇。")).toBeVisible();
     expect(screen.getByText("林晓：第 2 张图片读取失败，请重新上传后再分析")).toBeVisible();
   });
+
+  it("存在分析中作文时，后台轮询只按 analyzing 的 ID 增量点查并原位合并结果", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const analyzing = {
+        ...review,
+        id: "review-analyzing",
+        status: "analyzing",
+        report: null,
+        studentName: "周同学",
+        config: { title: "成长的一刻" },
+      };
+      const settled = {
+        ...exportableReview,
+        id: "review-settled",
+        studentName: "陈同学",
+        config: { title: "已完成作文" },
+      };
+      const requestedUrls: string[] = [];
+      vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        if (url === "/api/reviews") {
+          return json([analyzing, settled]);
+        }
+        if (url === "/api/reviews?ids=review-analyzing") {
+          return json([{
+            ...exportableReview,
+            id: "review-analyzing",
+            status: "ready_for_review",
+            teacherReviewedAt: null,
+            studentName: "周同学",
+            config: { title: "成长的一刻" },
+          }]);
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      });
+
+      render(<Home />);
+      expect(await screen.findByText("学生：周同学")).toBeVisible();
+      expect(screen.getByText("学生：陈同学")).toBeVisible();
+
+      await vi.advanceTimersByTimeAsync(4_100);
+
+      await waitFor(() => expect(requestedUrls).toContain("/api/reviews?ids=review-analyzing"));
+      expect(requestedUrls.filter((url) => url === "/api/reviews")).toHaveLength(1);
+      expect(screen.getByText("学生：陈同学")).toBeVisible();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

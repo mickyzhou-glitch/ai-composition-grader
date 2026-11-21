@@ -9,10 +9,13 @@ const cropImageRegion = vi.hoisted(() => vi.fn(async () => ({
 
 vi.mock("../lib/image-crop", () => ({ cropImageRegion }));
 
-import { ParagraphCropPreview } from "./ParagraphCropPreview";
+import { clearParagraphCropPageCache, ParagraphCropPreview } from "./ParagraphCropPreview";
 
 describe("ParagraphCropPreview", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    clearParagraphCropPageCache();
+    vi.restoreAllMocks();
+  });
 
   it("按片段页序加载 ai 图片、裁图并清理临时资源", async () => {
     vi.spyOn(globalThis, "fetch")
@@ -119,6 +122,39 @@ describe("ParagraphCropPreview", () => {
     );
 
     expect(revokeObjectURL).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("卸载后再次挂载同一页裁图时复用页级内存缓存，不重复下载原图", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response("cached-page"));
+    const close = vi.fn();
+    vi.stubGlobal("createImageBitmap", vi.fn(async () => ({ width: 1000, height: 1500, close })));
+    let nextUrl = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:remount-${++nextUrl}`);
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+
+    const first = render(
+      <ParagraphCropPreview
+        reviewId="review-cache"
+        paragraphNumber={1}
+        images={[{ id: 21, position: 0 }]}
+        segments={[{ pageIndex: 0, x: 0.1, y: 0.1, width: 0.5, height: 0.2 }]}
+      />,
+    );
+    expect(await screen.findByRole("img", { name: "第 1 段原文裁图，第 1 页" })).toHaveAttribute("src", "blob:remount-1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    first.unmount();
+
+    render(
+      <ParagraphCropPreview
+        reviewId="review-cache"
+        paragraphNumber={2}
+        images={[{ id: 21, position: 0 }]}
+        segments={[{ pageIndex: 0, x: 0.1, y: 0.4, width: 0.5, height: 0.2 }]}
+      />,
+    );
+    expect(await screen.findByRole("img", { name: "第 2 段原文裁图，第 1 页" })).toHaveAttribute("src", "blob:remount-2");
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
