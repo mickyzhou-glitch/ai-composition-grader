@@ -50,10 +50,12 @@ describe("AppHeader", () => {
     expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "长期批改规则" })).toHaveAttribute("href", "/opinions");
     expect(screen.queryByRole("link", { name: "设置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "账号管理" })).not.toBeInTheDocument();
     teacher.unmount();
 
     renderHeader("admin");
     expect(screen.getByRole("button", { name: "退出登录" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "账号管理" })).toHaveAttribute("href", "/settings/accounts");
     expect(screen.getByRole("link", { name: "设置" })).toBeInTheDocument();
   });
 

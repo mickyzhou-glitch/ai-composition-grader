@@ -8,6 +8,10 @@ import type { D1SessionRepository } from "./d1-session-repository";
 
 const CHALLENGE_TTL_MS = 5 * 60_000;
 
+export interface SecurityEventRecorder {
+  record(userId: string, eventType: string, metadata?: Record<string, unknown>, now?: Date): Promise<void>;
+}
+
 interface WorkerAuthDependencies {
   appOrigin: string;
   ipHmacSecret: string;
@@ -15,6 +19,7 @@ interface WorkerAuthDependencies {
   challenges: LoginChallengeRepository;
   sessions?: Pick<D1SessionRepository, "create" | "findActiveByTokenHash" | "revokeByTokenHash">;
   attempts?: LoginAttemptGuard;
+  securityEvents?: SecurityEventRecorder;
   proofEncryptionKey?: string;
   randomNonce?: () => string;
 }
@@ -141,6 +146,11 @@ function sessionToken(request: Request): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
+export async function sessionTokenHashFromRequest(request: Request): Promise<string | null> {
+  const token = sessionToken(request);
+  return token ? hashSessionToken(token) : null;
+}
+
 export async function authenticatedWorkerUser(
   request: Request,
   sessions: Pick<D1SessionRepository, "findActiveByTokenHash">,
@@ -193,8 +203,10 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
       if (typeof body.salt !== "string" || typeof body.verifier !== "string") throw new Error();
       const verifier = fromBase64Url(body.verifier);
       if (fromBase64Url(body.salt).length < 16 || verifier.length !== 32) throw new Error();
-      await dependencies.proofs.save(user.id, body.salt, await sealPasswordVerifier(verifier, fromBase64Url(dependencies.proofEncryptionKey)), new Date());
+      const now = new Date();
+      await dependencies.proofs.save(user.id, body.salt, await sealPasswordVerifier(verifier, fromBase64Url(dependencies.proofEncryptionKey)), now);
       await dependencies.proofs.clearMustChangePassword?.(user.id);
+      await dependencies.securityEvents?.record(user.id, "password_changed", {}, now).catch(() => undefined);
       return Response.json({ ok: true, data: { user: { ...user, mustChangePassword: false } } });
     } catch { return jsonError("VALIDATION_ERROR", "请求参数无效", 400); }
   }
@@ -233,6 +245,7 @@ export async function handleWorkerAuth(request: Request, dependencies: WorkerAut
     const rawToken = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
     const now = new Date();
     await dependencies.sessions.create({ id: crypto.randomUUID(), userId: proof.user.id, tokenHash: await hashSessionToken(rawToken), expiresAt: new Date(now.getTime() + 12 * 60 * 60_000), now });
+    await dependencies.securityEvents?.record(proof.user.id, "login_succeeded", { mode: "proof" }, now).catch(() => undefined);
     return Response.json({ ok: true, data: proof.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });
   }
   const normalizedUsername = normalizeUsername(body.username);
@@ -352,5 +365,6 @@ async function handleLegacyPasswordLogin(request: Request, dependencies: WorkerA
   await dependencies.attempts?.record(challenge.normalizedUsername, ipHash, true);
   const rawToken = toBase64Url(crypto.getRandomValues(new Uint8Array(32)));
   await dependencies.sessions.create({ id: crypto.randomUUID(), userId: legacy.user.id, tokenHash: await hashSessionToken(rawToken), expiresAt: new Date(now.getTime() + 12 * 60 * 60_000), now });
+  await dependencies.securityEvents?.record(legacy.user.id, "login_succeeded", { mode: "legacy_upgraded" }, now).catch(() => undefined);
   return Response.json({ ok: true, data: legacy.user }, { headers: { "set-cookie": cookie(rawToken), "cache-control": "no-store" } });
 }

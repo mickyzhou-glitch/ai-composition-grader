@@ -27,6 +27,8 @@ import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
 import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
+import { D1SecurityEvents } from "../src/cloudflare/d1-admin-accounts";
+import { handleWorkerAdmin } from "../src/cloudflare/worker-admin-routes";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
 import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
 import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter";
@@ -174,7 +176,8 @@ function secureResponse(response: Response, pathname: string): Response {
   headers.set("referrer-policy", "no-referrer");
   headers.set("x-frame-options", "DENY");
   headers.set("x-robots-tag", "noindex, nofollow");
-  const legacyWasmFallback = ["/login", "/change-password"].includes(pathname)
+  const normalizedPath = pathname.length > 1 ? pathname.replace(/\/+$/u, "") : pathname;
+  const legacyWasmFallback = ["/login", "/change-password", "/settings/accounts"].includes(normalizedPath)
     && (response.status === 304 || (response.status === 200 && headers.get("content-type")?.toLowerCase().includes("text/html")));
   headers.set("content-security-policy", `default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data: blob:; object-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${legacyWasmFallback ? " 'unsafe-eval'" : ""}; connect-src 'self'`);
   if ([200, 304].includes(response.status) && pathname.startsWith("/_next/static/")) {
@@ -337,6 +340,7 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       challenges: new D1LoginChallengeRepository(env.DB),
       sessions: new D1SessionRepository(env.DB),
       attempts: new D1LoginAttemptRepository(env.DB),
+      securityEvents: new D1SecurityEvents(env.DB),
       proofEncryptionKey: env.AUTH_PROOF_ENCRYPTION_KEY,
     });
     if (authResponse) return authResponse;
@@ -380,6 +384,12 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
     if (url.pathname.startsWith("/api/") && user?.mustChangePassword) {
       return apiError("PASSWORD_CHANGE_REQUIRED", "请先修改初始密码", 403);
     }
+    const adminResponse = await handleWorkerAdmin(request, {
+      user,
+      database: env.DB,
+      proofEncryptionKey: env.AUTH_PROOF_ENCRYPTION_KEY,
+    });
+    if (adminResponse) return adminResponse;
     const settingsEndpoint = url.pathname === "/api/settings"
       || /^\/api\/settings\/(?:vision|content)(?:\/test)?$/u.test(url.pathname);
     if (settingsEndpoint && user && user.role !== "admin") {

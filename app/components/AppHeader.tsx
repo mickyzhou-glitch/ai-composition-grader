@@ -45,7 +45,12 @@ export function AppHeader({ compact = false, userRole }: { compact?: boolean; us
             长期批改规则
             {pendingRules > 0 ? <span className="nav-badge" aria-hidden="true">{pendingRules > 99 ? "99+" : pendingRules}</span> : null}
           </Link>
-          {role === "admin" ? <Link className="button button--quiet" href="/settings">设置</Link> : null}
+          {role === "admin" ? (
+            <>
+              <Link className="button button--quiet" href="/settings/accounts">账号管理</Link>
+              <Link className="button button--quiet" href="/settings">设置</Link>
+            </>
+          ) : null}
           <Link className="button button--primary" href="/new">新建作文批改</Link>
           <AsyncButton
             className="button button--ghost"

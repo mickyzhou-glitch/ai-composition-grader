@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { AdminSubnav } from "../../components/AdminSubnav";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
 import { ErrorBanner } from "../../components/ErrorBanner";
@@ -75,7 +76,8 @@ export default function SettingsPage() {
     <div className="app-shell">
       <AppHeader compact />
       <main className="medium-page">
-        <div className="page-title"><p className="eyebrow">模型连接</p><h1>设置</h1><p>两个模型独立配置，密钥不会在页面回显。</p></div>
+        <div className="page-title"><p className="eyebrow">管理员控制台 · 模型连接</p><h1>设置</h1><p>两个模型独立配置，密钥不会在页面回显；可切换至「账号与活跃监控」管理教师与管理员账号。</p></div>
+        <AdminSubnav active="models" />
         {error ? <ErrorBanner message={error} /> : null}
         {success ? <div className="success-banner" role="status">{success}</div> : null}
         <div className="model-settings-grid">
