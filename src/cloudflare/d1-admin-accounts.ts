@@ -55,6 +55,8 @@ export interface AdminAccountView {
     rejectedCount: number;
     jobsSucceeded: number;
     jobsFailed: number;
+    jobsSucceeded7d: number;
+    jobsFailed7d: number;
     jobsActive: number;
     savedAssignmentsCount: number;
     standingRulesCount: number;
@@ -78,6 +80,8 @@ export interface AdminAccountsSummary {
   reviews7d: number;
   totalJobsSucceeded: number;
   totalJobsFailed: number;
+  jobsSucceeded7d: number;
+  jobsFailed7d: number;
   loginsSucceeded7d: number;
   loginsFailed7d: number;
   rateLimitedUsers: number;
@@ -268,14 +272,18 @@ export class D1AdminAccounts {
         SELECT owner_id,
                SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS jobs_succeeded,
                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS jobs_failed,
+               SUM(CASE WHEN status = 'succeeded' AND created_at >= ? THEN 1 ELSE 0 END) AS jobs_succeeded_7d,
+               SUM(CASE WHEN status = 'failed' AND created_at >= ? THEN 1 ELSE 0 END) AS jobs_failed_7d,
                SUM(CASE WHEN status IN ('queued', 'running') THEN 1 ELSE 0 END) AS jobs_active,
                MAX(COALESCE(finished_at, started_at, created_at)) AS last_job_at
         FROM analysis_jobs
         GROUP BY owner_id
-      `).all<{
+      `).bind(cutoff7d, cutoff7d).all<{
         owner_id: string;
         jobs_succeeded: number;
         jobs_failed: number;
+        jobs_succeeded_7d: number;
+        jobs_failed_7d: number;
         jobs_active: number;
         last_job_at: number | null;
       }>(),
@@ -427,6 +435,8 @@ export class D1AdminAccounts {
           rejectedCount: Number(review?.rejected_count ?? 0),
           jobsSucceeded: Number(job?.jobs_succeeded ?? 0),
           jobsFailed: Number(job?.jobs_failed ?? 0),
+          jobsSucceeded7d: Number(job?.jobs_succeeded_7d ?? 0),
+          jobsFailed7d: Number(job?.jobs_failed_7d ?? 0),
           jobsActive: Number(job?.jobs_active ?? 0),
           savedAssignmentsCount: Number(assignmentsByOwner.get(user.id) ?? 0),
           standingRulesCount: Number(opinion?.standing_count ?? 0),
@@ -453,6 +463,8 @@ export class D1AdminAccounts {
       reviews7d: accounts.reduce((sum, item) => sum + item.usage.reviews7d, 0),
       totalJobsSucceeded: accounts.reduce((sum, item) => sum + item.usage.jobsSucceeded, 0),
       totalJobsFailed: accounts.reduce((sum, item) => sum + item.usage.jobsFailed, 0),
+      jobsSucceeded7d: accounts.reduce((sum, item) => sum + item.usage.jobsSucceeded7d, 0),
+      jobsFailed7d: accounts.reduce((sum, item) => sum + item.usage.jobsFailed7d, 0),
       loginsSucceeded7d: (attemptSummaryRows.results ?? []).reduce((sum, row) => sum + Number(row.succeeded_7d ?? 0), 0),
       loginsFailed7d: (attemptSummaryRows.results ?? []).reduce((sum, row) => sum + Number(row.failed_7d ?? 0), 0),
       rateLimitedUsers: accounts.filter((item) => item.rateLimited).length,

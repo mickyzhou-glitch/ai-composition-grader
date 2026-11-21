@@ -218,4 +218,59 @@ describe("VisionOcrAdapter", () => {
       paragraphs: [{ ...paragraph(), id: "model-controlled-id" }],
     });
   });
+
+  it("auto-repairs minor 1%-3% bounding-box overshoot, slight adjacent-paragraph border touch, and punctuation-only segment drift", async () => {
+    const harness = setup({
+      pages: [{
+        pageIndex: 0,
+        text: "第一段正文！\n第二段正文。",
+        readable: true,
+        warnings: [],
+        blocks: [{ text: "整页块", x: -0.01, y: 0.02, width: 1.02, height: 0.99 }],
+      }],
+      paragraphs: [
+        paragraph(0, "“第一段正文！”", {
+          segments: [{ pageIndex: 0, text: "第一段正文", x: 0.04, y: 0.12, width: 0.98, height: 0.21 }],
+        }),
+        paragraph(1, "第二段正文。", {
+          segments: [{ pageIndex: 0, text: "第二段正文。", x: 0.04, y: 0.315, width: 0.97, height: 0.24 }],
+        }),
+      ],
+    });
+
+    const result = await harness.adapter.recognize({
+      imageUrls: ["data:image/jpeg;base64,page-0"],
+    });
+
+    expect(result.paragraphs).toHaveLength(2);
+    expect(result.paragraphs[0].segments[0].x + result.paragraphs[0].segments[0].width).toBeLessThanOrEqual(1);
+    expect(result.paragraphs[0].segments[0].y + result.paragraphs[0].segments[0].height)
+      .toBeLessThan(result.paragraphs[1].segments[0].y);
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries once with max_tokens and repair hint when first vision output is truncated or structurally invalid", async () => {
+    const valid = validSinglePageResponse();
+    const create = vi.fn()
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: "{\"pages\":[{\"pageIndex\":0" }, finish_reason: "length" }],
+      })
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify(valid) }, finish_reason: "stop" }],
+      });
+    const factory: OpenAIClientFactory = () => ({ chat: { completions: { create } } });
+    const settings = {
+      getRuntimeConfig: vi.fn(async () => ({
+        baseUrl: "https://vision.example/v1",
+        model: "vision-model",
+        apiKey: "vision-secret",
+      })),
+    };
+    const adapter = new VisionOcrAdapter(settings, { clientFactory: factory });
+
+    const recognized = await adapter.recognize({ imageUrls: ["data:image/jpeg;base64,page-0"] });
+    expect(recognized).toEqual(valid);
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1][0]).toMatchObject({ max_tokens: 8192 });
+  });
 });

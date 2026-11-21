@@ -521,9 +521,9 @@ export default function AdminAccountsPage() {
               <small>近 7 天新增 +{summary.reviews7d} 篇</small>
             </div>
             <div className="admin-kpi-card">
-              <dt>AI 批改任务</dt>
-              <dd>{summary.totalJobsSucceeded}</dd>
-              <small>成功 {summary.totalJobsSucceeded} · 失败 {summary.totalJobsFailed}</small>
+              <dt>近 7 天 AI 任务</dt>
+              <dd>{summary.jobsSucceeded7d ?? summary.totalJobsSucceeded}</dd>
+              <small>近 7 天失败 {summary.jobsFailed7d ?? 0} · 累计成功 {summary.totalJobsSucceeded}</small>
             </div>
             <div className={summary.rateLimitedUsers > 0 ? "admin-kpi-card admin-kpi-card--danger" : "admin-kpi-card"}>
               <dt>近 7 天登录</dt>
@@ -715,8 +715,10 @@ export default function AdminAccountsPage() {
                             <span>已复核 {account.usage.reviewedCount}</span>
                             <span>已导出 {account.usage.exportedCount}</span>
                             {account.usage.analyzingCount > 0 ? <span>分析中 {account.usage.analyzingCount}</span> : null}
-                            {account.usage.failedCount > 0 ? <span className="chip-danger">失败 {account.usage.failedCount}</span> : null}
-                            <span>AI 成功 {account.usage.jobsSucceeded} / 失败 {account.usage.jobsFailed}</span>
+                            {account.usage.failedCount > 0 ? <span className="chip-danger">待重批失败 {account.usage.failedCount} 篇</span> : null}
+                            <span title={`含历史重试累计：成功 ${account.usage.jobsSucceeded} 次，历史失败 ${account.usage.jobsFailed} 次`}>
+                              近 7 天 AI {account.usage.jobsSucceeded7d ?? 0} 成功 / {account.usage.jobsFailed7d ?? 0} 失败
+                            </span>
                             <span>题目框架 {account.usage.savedAssignmentsCount}</span>
                             <span>长期规则 {account.usage.standingRulesCount}</span>
                           </dd>
