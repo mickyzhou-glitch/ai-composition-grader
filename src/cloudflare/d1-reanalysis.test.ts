@@ -542,7 +542,7 @@ describe("D1Reanalysis", () => {
       }],
     });
     expect(batchCalls).toBe(2);
-    expect(assignmentReads).toBe(2);
+    expect(assignmentReads).toBe(1);
   });
 
   it("未知 D1 错误中止批量并携带此前已提交的 jobIds 与结果", async () => {

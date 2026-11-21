@@ -85,4 +85,31 @@ describe("createWorkerOpenAIClient", () => {
     expect(init?.signal).toBeInstanceOf(AbortSignal);
     vi.unstubAllGlobals();
   });
+
+  it("遇到 429 或 503 临时故障时按 maxRetries 自动重试，400 参数错误不重试", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: "rate limited" } }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "0" },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{ message: { content: "{\"ok\":true}" } }],
+      }), { headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createWorkerOpenAIClient({ apiKey: "server-key", baseURL: "https://gateway.test/v1", timeout: 10, maxRetries: 1 });
+    await expect(client.chat.completions.create({ model: "content-model", messages: [] })).resolves.toEqual({
+      choices: [{ message: { content: "{\"ok\":true}" } }],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: { message: "bad request" } }), {
+      status: 400,
+      headers: { "content-type": "application/json" },
+    }));
+    await expect(client.chat.completions.create({ model: "content-model", messages: [] })).rejects.toMatchObject({ status: 400 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    vi.unstubAllGlobals();
+  });
 });

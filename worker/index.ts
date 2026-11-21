@@ -183,10 +183,65 @@ function secureResponse(response: Response, pathname: string): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-function normalizeSettingsCandidate(value: { baseUrl?: unknown; model?: unknown; apiKey?: unknown }): { baseUrl: string; model: string; apiKey?: string } {
-  if (typeof value.baseUrl !== "string" || !/^https?:\/\//u.test(value.baseUrl) || typeof value.model !== "string" || !value.model.trim()) throw new Error("INVALID_SETTINGS");
+function isBlockedSettingsHost(hostname: string): boolean {
+  const lower = hostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  if (
+    lower === "localhost"
+    || lower === "0.0.0.0"
+    || lower === "::1"
+    || lower.endsWith(".localhost")
+    || lower.endsWith(".local")
+    || lower.endsWith(".internal")
+    || /^fe[89ab][0-9a-f]:/iu.test(lower)
+    || /^f[cd][0-9a-f]{2}:/iu.test(lower)
+  ) {
+    return true;
+  }
+  const ipv4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/u.exec(lower);
+  if (!ipv4) return false;
+  const octets = ipv4.slice(1).map(Number);
+  if (octets.some((part) => part > 255)) return true;
+  const [a, b] = octets;
+  return a === 0
+    || a === 10
+    || a === 127
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168);
+}
+
+function sameSettingsOrigin(left?: string | null, right?: string | null): boolean {
+  if (!left || !right) return false;
+  try {
+    return new URL(left).origin === new URL(right).origin;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSettingsCandidate(
+  value: { baseUrl?: unknown; model?: unknown; apiKey?: unknown },
+  appOrigin?: string,
+): { baseUrl: string; model: string; apiKey?: string } {
+  if (typeof value.baseUrl !== "string" || typeof value.model !== "string" || !value.model.trim()) {
+    throw new Error("INVALID_SETTINGS");
+  }
+  const trimmedUrl = value.baseUrl.trim();
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmedUrl);
+  } catch {
+    throw new Error("INVALID_SETTINGS");
+  }
+  if ((parsedUrl.protocol !== "https:" && parsedUrl.protocol !== "http:") || parsedUrl.username || parsedUrl.password || parsedUrl.search || parsedUrl.hash) {
+    throw new Error("INVALID_SETTINGS");
+  }
+  const prodHttps = appOrigin?.startsWith("https://") ?? false;
+  if (prodHttps && (parsedUrl.protocol !== "https:" || isBlockedSettingsHost(parsedUrl.hostname))) {
+    throw new Error("INVALID_SETTINGS");
+  }
   if (value.apiKey !== undefined && (typeof value.apiKey !== "string" || !value.apiKey.trim())) throw new Error("INVALID_SETTINGS");
-  return { baseUrl: value.baseUrl.replace(/\/+$/u, ""), model: value.model.trim(), ...(typeof value.apiKey === "string" ? { apiKey: value.apiKey.trim() } : {}) };
+  return { baseUrl: trimmedUrl.replace(/\/+$/u, ""), model: value.model.trim(), ...(typeof value.apiKey === "string" ? { apiKey: value.apiKey.trim() } : {}) };
 }
 
 async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null, role: "vision" | "content" = "content"): Promise<string | null> {
@@ -308,16 +363,27 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
     }
     const sessions = new D1SessionRepository(env.DB);
     const user = await authenticatedWorkerUser(request, sessions);
+    if (request.method === "GET" && url.pathname === "/" && request.headers.get("accept")?.includes("text/html")) {
+      if (!user) {
+        return new Response(null, {
+          status: 302,
+          headers: { "cache-control": "no-store", location: new URL("/login", url).toString() },
+        });
+      }
+      if (user.mustChangePassword) {
+        return new Response(null, {
+          status: 302,
+          headers: { "cache-control": "no-store", location: new URL("/change-password", url).toString() },
+        });
+      }
+    }
+    if (url.pathname.startsWith("/api/") && user?.mustChangePassword) {
+      return apiError("PASSWORD_CHANGE_REQUIRED", "请先修改初始密码", 403);
+    }
     const settingsEndpoint = url.pathname === "/api/settings"
       || /^\/api\/settings\/(?:vision|content)(?:\/test)?$/u.test(url.pathname);
     if (settingsEndpoint && user && user.role !== "admin") {
       return apiError("FORBIDDEN", "Administrator access required", 403);
-    }
-    if (request.method === "GET" && url.pathname === "/" && request.headers.get("accept")?.includes("text/html") && !user) {
-      return new Response(null, {
-        status: 302,
-        headers: { "cache-control": "no-store", location: new URL("/login", url).toString() },
-      });
     }
     if (url.pathname === "/api/settings" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
@@ -338,21 +404,33 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
         const role = settingMatch[1] as "vision" | "content";
-        const candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown });
+        const candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown }, url.origin);
         const encrypted = candidate.apiKey ? await sealSetting(candidate.apiKey, env.AUTH_PROOF_ENCRYPTION_KEY) : null;
-        const previous = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ encrypted_api_key: string | null }>();
-        await env.DB.prepare("INSERT INTO settings (role, base_url, model, updated_at, encrypted_api_key) VALUES (?, ?, ?, ?, ?) ON CONFLICT(role) DO UPDATE SET base_url = excluded.base_url, model = excluded.model, updated_at = excluded.updated_at, encrypted_api_key = COALESCE(excluded.encrypted_api_key, settings.encrypted_api_key)").bind(role, candidate.baseUrl, candidate.model, Date.now(), encrypted).run();
+        const previous = await env.DB.prepare("SELECT base_url, encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ base_url?: string | null; encrypted_api_key: string | null }>();
+        const originChanged = Boolean(previous?.base_url) && !sameSettingsOrigin(previous?.base_url, candidate.baseUrl);
+        const keepPreviousKey = encrypted === null && !originChanged;
+        await env.DB.prepare("INSERT INTO settings (role, base_url, model, updated_at, encrypted_api_key) VALUES (?, ?, ?, ?, ?) ON CONFLICT(role) DO UPDATE SET base_url = excluded.base_url, model = excluded.model, updated_at = excluded.updated_at, encrypted_api_key = CASE WHEN ? THEN settings.encrypted_api_key ELSE excluded.encrypted_api_key END")
+          .bind(role, candidate.baseUrl, candidate.model, Date.now(), encrypted, keepPreviousKey ? 1 : 0).run();
         const envKey = role === "vision" ? env.VISION_AI_API_KEY : env.CONTENT_AI_API_KEY;
-        return Response.json({ ok: true, data: { baseUrl: candidate.baseUrl, model: candidate.model, keyConfigured: encrypted !== null || previous?.encrypted_api_key !== null || Boolean(envKey || env.AI_API_KEY) } });
+        const retainedStoredKey = keepPreviousKey && previous?.encrypted_api_key !== null && previous?.encrypted_api_key !== undefined;
+        return Response.json({ ok: true, data: { baseUrl: candidate.baseUrl, model: candidate.model, keyConfigured: encrypted !== null || retainedStoredKey || Boolean(!originChanged && (envKey || env.AI_API_KEY)) } });
       } catch { return apiError("VALIDATION_ERROR", "请求参数无效", 400); }
     }
     const settingTestMatch = /^\/api\/settings\/(vision|content)\/test$/u.exec(url.pathname);
     if (settingTestMatch && request.method === "POST") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      let candidate: { baseUrl: string; model: string; apiKey?: string };
+      const role = settingTestMatch[1] as "vision" | "content";
       try {
-        const role = settingTestMatch[1] as "vision" | "content";
-        const candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown });
-        const stored = await env.DB.prepare("SELECT encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ encrypted_api_key: string | null }>();
+        candidate = normalizeSettingsCandidate(await request.json() as { baseUrl?: unknown; model?: unknown; apiKey?: unknown }, url.origin);
+      } catch {
+        return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+      }
+      try {
+        const stored = await env.DB.prepare("SELECT base_url, encrypted_api_key FROM settings WHERE role = ?").bind(role).first<{ base_url?: string | null; encrypted_api_key: string | null }>();
+        if (!candidate.apiKey && stored?.base_url && !sameSettingsOrigin(stored.base_url, candidate.baseUrl)) {
+          return apiError("AI_SETTINGS_INCOMPLETE", "更换服务地址时请重新填写 API Key", 400);
+        }
         const apiKey = candidate.apiKey ?? await configuredApiKey(env, stored?.encrypted_api_key ?? null, role);
         if (!apiKey) return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
         await testAiConnection({ ...candidate, apiKey, role });
@@ -643,7 +721,7 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       const reviewId = decodeURIComponent(reviewMatch[1]);
       const paths = await new D1ReviewWriter(env.DB).deleteReview(user.id, reviewId);
       if (!paths) return apiError("REVIEW_NOT_FOUND", "批改记录不存在", 404);
-      const keys = paths.filter((path) => /^images\/[^/\\\0]+$/u.test(path)).map((path) => `users/${user.id}/reviews/${reviewId}/${path}`);
+      const keys = [...new Set(paths.filter((path) => /^images\/[^/\\\0]+$/u.test(path)).map((path) => `users/${user.id}/reviews/${reviewId}/${path}`))];
       if (keys.length > 0) await env.FILES.delete(keys);
       return Response.json({ ok: true, data: { deleted: true } });
     }
@@ -653,28 +731,55 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       try {
         const reviewId = decodeURIComponent(imagesMatch[1]);
+        if (!reanalysisRouteIdPattern.test(reviewId)) return apiError("VALIDATION_ERROR", "图片上传参数无效", 400);
         const form = await request.formData();
         const expectedRevision = Number(form.get("expectedRevision"));
         const files = form.getAll("images");
         const metadata = JSON.parse(String(form.get("imageMeta") ?? "[]")) as Array<{ width: number; height: number }>;
         if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0 || files.length !== metadata.length || files.length < 1 || files.length > 4) return apiError("VALIDATION_ERROR", "图片上传参数无效", 400);
-        const prepared = await Promise.all(files.map(async (entry, position) => {
-          if (!(entry instanceof File) || entry.size > 20 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(entry.type)) throw new Error("INVALID_IMAGE");
+        const privacyConfirmed = form.get("privacyConfirmed") === "true" && form.get("privacyNoticeVersion") === "2026-07-22";
+        if (!privacyConfirmed) return apiError("PRIVACY_CONFIRMATION_REQUIRED", "请先确认真实作文上传说明", 400);
+        let totalUploadBytes = 0;
+        for (let position = 0; position < files.length; position += 1) {
+          const entry = files[position];
           const meta = metadata[position];
-          if (!Number.isInteger(meta?.width) || !Number.isInteger(meta?.height) || meta.width < 1 || meta.height < 1) throw new Error("INVALID_IMAGE");
-          const extension = entry.type === "image/png" ? "png" : entry.type === "image/webp" ? "webp" : "jpg";
+          if (!(entry instanceof File) || entry.size < 1 || entry.size > 20 * 1024 * 1024 || !["image/jpeg", "image/png", "image/webp"].includes(entry.type)) {
+            throw new Error("INVALID_IMAGE");
+          }
+          if (!Number.isInteger(meta?.width) || !Number.isInteger(meta?.height) || meta.width < 1 || meta.height < 1 || meta.width > 20_000 || meta.height > 20_000) {
+            throw new Error("INVALID_IMAGE");
+          }
+          totalUploadBytes += entry.size;
+        }
+        if (totalUploadBytes > 12 * 1024 * 1024) {
+          return apiError("AI_INLINE_IMAGE_TOO_LARGE", "整篇作文图片总大小不能超过 12MB，请压缩或重拍后重试", 422);
+        }
+        const prepared = await Promise.all(files.map(async (entry, position) => {
+          const file = entry as File;
+          const meta = metadata[position]!;
+          const data = await file.arrayBuffer();
+          const bytes = new Uint8Array(data);
+          const validMagic = file.type === "image/jpeg"
+            ? bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+            : file.type === "image/png"
+              ? bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+              : bytes.length >= 12
+                && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+                && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50;
+          if (!validMagic) throw new Error("INVALID_IMAGE");
+          const extension = file.type === "image/png" ? "png" : file.type === "image/webp" ? "webp" : "jpg";
           const path = `images/${crypto.randomUUID()}.${extension}`;
-          return { originalName: entry.name.slice(0, 255), mimeType: entry.type as "image/jpeg" | "image/png" | "image/webp", width: meta.width, height: meta.height, path, data: await entry.arrayBuffer() };
+          return { originalName: file.name.slice(0, 255), mimeType: file.type as "image/jpeg" | "image/png" | "image/webp", width: meta.width, height: meta.height, path, data };
         }));
         const keys = prepared.map((image) => `users/${user.id}/reviews/${reviewId}/${image.path}`);
-        await Promise.all(prepared.map((image, index) => env.FILES.put(keys[index], image.data, { httpMetadata: { contentType: image.mimeType } })));
         try {
-          const saved = await new D1ImageWriter(env.DB).replace(user.id, reviewId, expectedRevision, prepared, form.get("privacyConfirmed") === "true" && form.get("privacyNoticeVersion") === "2026-07-22");
+          await Promise.all(prepared.map((image, index) => env.FILES.put(keys[index], image.data, { httpMetadata: { contentType: image.mimeType } })));
+          const saved = await new D1ImageWriter(env.DB).replace(user.id, reviewId, expectedRevision, prepared, privacyConfirmed);
           const newKeySet = new Set(keys);
-          const obsoleteKeys = saved.replacedPaths
+          const obsoleteKeys = [...new Set(saved.replacedPaths
             .filter((path) => /^images\/[^/\\\0]+$/u.test(path))
             .map((path) => `users/${user.id}/reviews/${reviewId}/${path}`)
-            .filter((key) => !newKeySet.has(key));
+            .filter((key) => !newKeySet.has(key)))];
           if (obsoleteKeys.length > 0) {
             await runInBackground(ctx, Promise.resolve(env.FILES.delete(obsoleteKeys)).then(
               () => undefined,
@@ -693,7 +798,7 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
             { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" } },
           );
         } catch (error) {
-          await env.FILES.delete(keys);
+          await Promise.resolve(env.FILES.delete(keys)).catch(() => undefined);
           const code = error instanceof Error ? error.message : "VALIDATION_ERROR";
           return apiError(code, code === "PRIVACY_CONFIRMATION_REQUIRED" ? "请先确认真实作文上传说明" : "图片上传失败", code === "REVISION_CONFLICT" ? 409 : 400);
         }
@@ -887,13 +992,22 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
 
 const worker = {
   async fetch(request: Request, env: WorkerEnv, ctx?: ExecutionContext): Promise<Response> {
-    const response = await handleFetch(request, env, ctx);
-    if (new URL(request.url).pathname.startsWith("/api/")) {
+    const pathname = new URL(request.url).pathname;
+    let response: Response;
+    try {
+      response = await handleFetch(request, env, ctx);
+    } catch (error) {
+      if (error instanceof URIError) {
+        return apiError("VALIDATION_ERROR", "请求路径无效", 400);
+      }
+      throw error;
+    }
+    if (pathname.startsWith("/api/")) {
       return secureApiResponse(response);
     }
     return response;
   },
-  async scheduled(_controller: ScheduledController, env: WorkerEnv): Promise<void> {
+  async scheduled(controller: ScheduledController, env: WorkerEnv): Promise<void> {
     const recovered = await new D1AnalysisJobs(env.DB).recoverExpired();
     if (recovered > 0) {
       console.info(JSON.stringify({
@@ -902,6 +1016,9 @@ const worker = {
         reason: `运行超过 ${MAX_CLOUD_ANALYSIS_RUN_MS / 60_000} 分钟仍未结束或长时间滞留队列，已标记为超时`,
       }));
     }
+    const scheduledTime = typeof controller?.scheduledTime === "number" ? controller.scheduledTime : 0;
+    const shouldRunMaintenance = scheduledTime === 0 || Math.floor(scheduledTime / 60_000) % 15 === 0;
+    if (!shouldRunMaintenance) return;
     try {
       const cleaned = await runCloudMaintenance(env.DB);
       if (
@@ -1017,16 +1134,11 @@ const worker = {
         const pipeline = new CloudAnalysisPipeline({
           readCheckpoint: (ownerId, reviewId) => ocr.readInternal(ownerId, reviewId),
           loadImageUrls: (currentJob) => logStep("load_images", async () => {
-            const { results = [] } = await env.DB.prepare(
-              "SELECT id FROM review_images WHERE review_id = ? ORDER BY position",
-            ).bind(currentJob.reviewId).all<{ id: number }>();
-            const reader = new D1ReviewReader(env.DB);
-            const images = await Promise.all(results.map(async ({ id }) => {
-              const file = await reader.imageObjectKeyForAi(currentJob.reviewId, id, "original")
-                ?? await reader.imageObjectKeyForAi(currentJob.reviewId, id, "ai");
-              if (!file) throw new Error("AI_IMAGE_UNAVAILABLE");
-              return { key: file.key, mimeType: file.contentType };
-            }));
+            const images = await new D1ReviewReader(env.DB).aiImageObjectsForReview(
+              currentJob.ownerId,
+              currentJob.reviewId,
+            );
+            if (images.length === 0) throw new Error("AI_IMAGE_UNAVAILABLE");
             return loadInlineAiImageUrls(env.FILES, images);
           }),
           recognize: (imageUrls) => logStep("recognize", () => vision.recognize({ imageUrls })),

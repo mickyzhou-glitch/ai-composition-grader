@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ClassFilter } from "../components/ClassFilter";
 import { filterReviewsByClass } from "../lib/classification";
@@ -20,15 +20,18 @@ import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
 
 const REGRADE_POLL_INTERVAL_MS = 1_000;
 const REGRADE_POLL_DEADLINE_MS = 12 * 60_000;
+const ANALYZING_REFRESH_INTERVAL_MS = 4_000;
 
 async function pollRegradeJob(
   reviewId: string,
   jobId: string,
+  signal: AbortSignal,
 ): Promise<{ status: "succeeded" | "failed" | "running"; message: string | null }> {
   const deadline = Date.now() + REGRADE_POLL_DEADLINE_MS;
-  while (Date.now() <= deadline) {
+  while (Date.now() <= deadline && !signal.aborted) {
     const payload = await apiFetch<{ job: PublicAnalysisJobView | null }>(
       `/api/reviews/${encodeURIComponent(reviewId)}/analyze/status`,
+      { signal },
     );
     const job = payload.job;
     if (
@@ -37,8 +40,18 @@ async function pollRegradeJob(
     ) {
       return { status: job.status === "canceled" ? "failed" : job.status, message: job.message };
     }
-    if (Date.now() + REGRADE_POLL_INTERVAL_MS > deadline) break;
-    await new Promise((resolve) => setTimeout(resolve, REGRADE_POLL_INTERVAL_MS));
+    if (Date.now() + REGRADE_POLL_INTERVAL_MS > deadline || signal.aborted) break;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, REGRADE_POLL_INTERVAL_MS);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
   }
   return { status: "running", message: "等待这次分析结果超时" };
 }
@@ -77,26 +90,55 @@ export default function Home() {
     error: string;
   } | null>(null);
 
+  const mountedRef = useRef(true);
+  const regradeControllerRef = useRef<AbortController | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      setReviews(await apiFetch<ReviewView[]>("/api/reviews"));
+      const loaded = await apiFetch<ReviewView[]>("/api/reviews");
+      if (mountedRef.current) setReviews(loaded);
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (mountedRef.current) setError(errorMessage(caught));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    mountedRef.current = true;
     let active = true;
     void apiFetch<ReviewView[]>("/api/reviews")
       .then((loaded) => { if (active) setReviews(loaded); })
       .catch((caught) => { if (active) setError(errorMessage(caught)); })
       .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      mountedRef.current = false;
+      regradeControllerRef.current?.abort();
+    };
   }, []);
+
+  const hasAnalyzingReviews = useMemo(
+    () => reviews.some(({ status }) => status === "analyzing"),
+    [reviews],
+  );
+
+  useEffect(() => {
+    if (!hasAnalyzingReviews || failedRegrade?.running) return;
+    let inFlight = false;
+    const poll = () => {
+      if (inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
+      void apiFetch<ReviewView[]>("/api/reviews")
+        .then((loaded) => { if (mountedRef.current) setReviews(loaded); })
+        .catch(() => undefined)
+        .finally(() => { inFlight = false; });
+    };
+    const timer = window.setInterval(poll, ANALYZING_REFRESH_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [failedRegrade?.running, hasAnalyzingReviews]);
 
   const reviewedPending = useMemo(
     () => reviews.filter(isReviewedPendingExport),
@@ -281,6 +323,9 @@ export default function Home() {
     const submittedJobs: Array<{ reviewId: string; jobId: string }> = [];
     let submitted = 0;
     let completed = 0;
+    regradeControllerRef.current?.abort();
+    const regradeController = new AbortController();
+    regradeControllerRef.current = regradeController;
     setFailedRegrade({ running: true, completed: 0, total: ids.length, submitted: 0, skipped: [], failures: [], error: "" });
     setError("");
     try {
@@ -330,14 +375,15 @@ export default function Home() {
       let nextPollIndex = 0;
       await Promise.all(
         Array.from({ length: pollConcurrency }, async () => {
-          while (nextPollIndex < submittedJobs.length) {
+          while (nextPollIndex < submittedJobs.length && !regradeController.signal.aborted) {
             const index = nextPollIndex;
             nextPollIndex += 1;
             const item = submittedJobs[index]!;
-            pollOutcomes[index] = await pollRegradeJob(item.reviewId, item.jobId);
+            pollOutcomes[index] = await pollRegradeJob(item.reviewId, item.jobId, regradeController.signal);
           }
         }),
       );
+      if (!mountedRef.current || regradeController.signal.aborted) return;
       submittedJobs.forEach((item, index) => {
         const outcome = pollOutcomes[index];
         if (outcome && (outcome.status === "failed" || outcome.status === "running")) {
@@ -359,6 +405,7 @@ export default function Home() {
         error: "",
       });
     } catch (caught) {
+      if (!mountedRef.current || regradeController.signal.aborted) return;
       setFailedRegrade({
         running: false,
         completed,
@@ -368,6 +415,10 @@ export default function Home() {
         failures,
         error: errorMessage(caught),
       });
+    } finally {
+      if (regradeControllerRef.current === regradeController) {
+        regradeControllerRef.current = null;
+      }
     }
   }
 

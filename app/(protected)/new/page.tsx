@@ -14,7 +14,7 @@ import { AsyncButton } from "../../components/AsyncButton";
 import { AssignmentGuidancePanel } from "../../components/AssignmentGuidancePanel";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { apiFetch, errorMessage } from "../../lib/api";
-import { prepareImageForCloudUpload, uprightImageFile } from "../../lib/image-upload-transform";
+import { prepareImageForCloudUpload } from "../../lib/image-upload-transform";
 
 const presetConfig: AssignmentConfig = {
   title: "为自己鼓掌",
@@ -43,6 +43,7 @@ interface PendingImage {
   file: File;
   previewUrl: string;
   rotation: 0 | 90 | 180 | 270;
+  preparedSize?: { width: number; height: number } | null;
 }
 
 interface UploadedImage { id: number; position: number }
@@ -138,6 +139,15 @@ export default function NewReviewPage() {
     }
   }
 
+  async function prepareSelectedImage(file: File): Promise<{ file: File; preparedSize: { width: number; height: number } | null }> {
+    try {
+      const prepared = await prepareImageForCloudUpload({ file, rotation: 0, crop: null });
+      return { file: prepared.file, preparedSize: { width: prepared.width, height: prepared.height } };
+    } catch {
+      return { file, preparedSize: null };
+    }
+  }
+
   async function chooseFiles(files: File[]) {
     setError("");
     if (files.length < 1 || files.length > MAX_REVIEW_IMAGES) {
@@ -145,16 +155,17 @@ export default function NewReviewPage() {
       return;
     }
     const generation = ++selectionGeneration.current;
-    const upright = await Promise.all(files.map((file) => uprightImageFile(file)));
+    const upright = await Promise.all(files.map((file) => prepareSelectedImage(file)));
     if (!mountedRef.current || generation !== selectionGeneration.current) return;
     setDocumentName("");
     setImages((current) => {
       current.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
-      return upright.map((file, index) => ({
+      return upright.map(({ file, preparedSize }, index) => ({
         key: `${file.name}-${file.lastModified}-${index}`,
         file,
         previewUrl: URL.createObjectURL(file),
         rotation: 0,
+        preparedSize,
       }));
     });
     setUploaded(null);
@@ -171,15 +182,16 @@ export default function NewReviewPage() {
       return;
     }
     const generation = ++selectionGeneration.current;
-    const [file] = await Promise.all(files.map((item) => uprightImageFile(item)));
+    const [prepared] = await Promise.all(files.map((item) => prepareSelectedImage(item)));
     if (!mountedRef.current || generation !== selectionGeneration.current) return;
     setImages((current) => {
       if (current.length >= MAX_REVIEW_IMAGES) return current;
       return [...current, {
-        key: `${file.name}-${file.lastModified}-${current.length}`,
-        file,
-        previewUrl: URL.createObjectURL(file),
+        key: `${prepared.file.name}-${prepared.file.lastModified}-${current.length}`,
+        file: prepared.file,
+        previewUrl: URL.createObjectURL(prepared.file),
         rotation: 0,
+        preparedSize: prepared.preparedSize,
       }];
     });
     setUploaded(null);
@@ -240,7 +252,11 @@ export default function NewReviewPage() {
         form.append("expectedRevision", String(currentReview.revision));
         form.append("privacyConfirmed", String(privacyConfirmed));
         form.append("privacyNoticeVersion", PRIVACY_NOTICE_VERSION);
-        const prepared = await Promise.all(images.map(async (image) => prepareImageForCloudUpload({ file: image.file, rotation: image.rotation, crop: null })));
+        const prepared = await Promise.all(images.map(async (image) => (
+          image.preparedSize && image.rotation === 0
+            ? { file: image.file, width: image.preparedSize.width, height: image.preparedSize.height }
+            : prepareImageForCloudUpload({ file: image.file, rotation: image.rotation, crop: null })
+        )));
         prepared.forEach(({ file }) => form.append("images", file));
         form.append("imageMeta", JSON.stringify(prepared.map(({ width, height }) => ({ width, height }))));
         const uploadResult = await apiFetch<ImageMutationResult>(`/api/reviews/${encodeURIComponent(currentReview.id)}/images`, {
@@ -338,7 +354,7 @@ export default function NewReviewPage() {
             <label className="upload-student-name">学生姓名<input aria-label="学生姓名" maxLength={50} placeholder="请输入学生姓名" value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label>
             <div className="upload-choices">
               <label className="upload-zone upload-zone--camera">使用手机相机拍照<input className="visually-hidden" aria-label="使用手机相机拍照" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { addCameraFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /><span>拍摄一页后可继续拍下一页</span><small>将优先打开后置相机</small></label>
-              <label className="upload-zone">从相册或文件选择<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => chooseFiles(Array.from(event.target.files ?? []))} /><span>选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP，单张不超过 20MB</small></label>
+              <label className="upload-zone">从相册或文件选择<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void chooseFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /><span>选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP，单张不超过 20MB</small></label>
             </div>
             <label className="upload-zone document-upload">直接上传 Word 或 PDF<input className="visually-hidden" aria-label="选择作文文档" type="file" accept=".docx,.pdf,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => { void chooseDocument(event.target.files?.[0]); event.currentTarget.value = ""; }} /><span>每份文档对应一篇作文，最多 {MAX_REVIEW_IMAGES} 页、20MB</span><small>Word 会重新排版，PDF 按原页显示。导入后请逐页检查预览。</small></label>
             {documentName ? <p className="document-import-notice">已导入：{documentName}，共 {images.length} 页。重新选文件会替换当前作文。</p> : null}

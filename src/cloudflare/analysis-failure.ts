@@ -1,7 +1,14 @@
 import { AiAdapterError } from "../ai/openai-review-adapter";
 import { CloudAnalysisConflictError } from "./cloud-analysis-pipeline";
 
-const KNOWN_FAILURES = new Set(["AI_SETTINGS_INCOMPLETE", "OCR_NOT_FOUND", "OCR_V2_REQUIRED"]);
+const KNOWN_FAILURES = new Set([
+  "AI_SETTINGS_INCOMPLETE",
+  "OCR_NOT_FOUND",
+  "OCR_V2_REQUIRED",
+  "AI_IMAGE_UNAVAILABLE",
+  "AI_IMAGE_UNSUPPORTED",
+  "AI_INLINE_IMAGE_TOO_LARGE",
+]);
 
 const STAGE_LABELS: Record<string, string> = {
   queued: "排队",
@@ -31,7 +38,9 @@ export function isWorkerAbort(error: unknown): boolean {
 }
 
 export function analysisFailureCode(error: unknown): string {
-  if (!(error instanceof AiAdapterError) && !(error instanceof CloudAnalysisConflictError) && isWorkerAbort(error)) {
+  if (!(error instanceof CloudAnalysisConflictError) && (
+    isWorkerAbort(error) || (error instanceof AiAdapterError && isWorkerAbort(error.cause))
+  )) {
     return "ANALYSIS_ABORTED";
   }
   if (error instanceof AiAdapterError && error.upstreamStatus) {

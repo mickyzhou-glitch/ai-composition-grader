@@ -362,4 +362,33 @@ describe("双格式导出编排", () => {
       .rejects.toThrow("没有可下载的旧版 PDF");
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("批量导出超过 20 篇时按每批 20 篇分片调用 export-check，不触发服务端上限报错", async () => {
+    const reviews = Array.from({ length: 25 }, (_, index) => review(`review-${index + 1}`, 1, "春游", `学生${index + 1}`));
+    const checkBatches: number[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      const detailMatch = /^\/api\/reviews\/([^/]+)$/u.exec(url);
+      if (detailMatch && (!init?.method || init.method === "GET")) {
+        const found = reviews.find(({ id }) => id === decodeURIComponent(detailMatch[1]));
+        return apiResponse(found);
+      }
+      if (url === "/api/reviews/export-check" && init?.method === "POST") {
+        const parsed = JSON.parse(String(init.body)) as { reviews: Array<{ id: string }> };
+        if (parsed.reviews.length > 20) {
+          return new Response(JSON.stringify({ ok: false, error: { code: "VALIDATION_ERROR", message: "请求参数无效" } }), { status: 400 });
+        }
+        checkBatches.push(parsed.reviews.length);
+        return apiResponse({ exportable: true });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const filename = await downloadReviewArchive(reviews.map(({ id }) => id), "pdf");
+
+    expect(filename).toBe("作文批改批量导出-PDF.zip");
+    expect(checkBatches).toEqual([20, 5]);
+    expect(exportMocks.triggerDownload).toHaveBeenCalledOnce();
+    expect(exportMocks.markExported).toHaveBeenCalledTimes(25);
+  });
 });

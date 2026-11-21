@@ -41,7 +41,9 @@ export function PrintReviewPage({ reviewId }: { reviewId: string }) {
     void (async () => {
       try {
         const review = await apiFetch<ReviewView>(`/api/reviews/${encodeURIComponent(reviewId)}`);
+        if (!active) return;
         const document = await buildDeliveryDocument(review);
+        if (!active) return;
         const cropSources = document.paragraphs.map(({ crops }) => crops.map(({ bytes }) => {
           const source = URL.createObjectURL(cropBlob(bytes));
           objectUrls.push(source);

@@ -126,14 +126,23 @@ function setKaitiFont(
   context.font = `${weight} ${sizePt}px ${EXPORT_KAITI_FONT}`;
 }
 
+function releaseCanvas(canvas: HTMLCanvasElement) {
+  canvas.width = 0;
+  canvas.height = 0;
+}
+
 function imageUrl(reviewId: string, imageId: number) {
   return exportOriginalImageUrl(reviewId, imageId);
 }
 
-async function loadOriginalImage(reviewId: string, imageId: number): Promise<LoadedImage> {
+async function fetchOriginalImageBlob(reviewId: string, imageId: number): Promise<Blob> {
   const response = await fetch(imageUrl(reviewId, imageId));
   if (!response.ok) throw new Error(`作文照片读取失败（${response.status}）`);
-  const objectUrl = URL.createObjectURL(await response.blob());
+  return response.blob();
+}
+
+async function decodeImageBlob(blob: Blob): Promise<LoadedImage> {
+  const objectUrl = URL.createObjectURL(blob);
   try {
     const element = new Image();
     element.src = objectUrl;
@@ -158,11 +167,33 @@ function styledRun(run: ExportTextRun): RichTextRun {
   return { text: run.text, color: TEXT_COLOR, weight: 400, underline: null };
 }
 
+const paragraphRunsCache = new WeakMap<ExportParagraph, RichTextRun[]>();
+
 function paragraphRuns(paragraph: ExportParagraph): RichTextRun[] {
-  return exportParagraphRuns(paragraph).map(styledRun);
+  const cached = paragraphRunsCache.get(paragraph);
+  if (cached) return cached;
+  const computed = exportParagraphRuns(paragraph).map(styledRun);
+  paragraphRunsCache.set(paragraph, computed);
+  return computed;
+}
+
+let kaitiStylesPromise: Promise<unknown> | null = null;
+
+async function ensureKaitiStylesLoaded() {
+  if (!kaitiStylesPromise) {
+    kaitiStylesPromise = Promise.all([
+      import("lxgw-wenkai-webfont/lxgwwenkai-regular.css"),
+      import("lxgw-wenkai-webfont/lxgwwenkai-bold.css"),
+    ]).catch((error) => {
+      kaitiStylesPromise = null;
+      throw error;
+    });
+  }
+  await kaitiStylesPromise;
 }
 
 async function loadExportKaiti(content: ExportReportContent) {
+  await ensureKaitiStylesLoaded();
   const text = exportFontSample(content);
   await Promise.all([
     window.document.fonts.load(`400 16px ${EXPORT_KAITI_FACE}`, text),
@@ -346,16 +377,13 @@ function textBoxHeight(
   return padding * 2 + lines.length * lineHeight;
 }
 
-function regionLayout(
-  context: CanvasRenderingContext2D,
+function regionLayoutWithHeights(
   paragraphs: ExportParagraph[],
+  heights: number[],
   region: Rectangle,
   fontPt: number,
 ): PositionedTextBox[] | null {
   const gap = Math.min(BOX_GAP, Math.max(1, fontPt * 0.6));
-  const heights = paragraphs.map((paragraph) => (
-    textBoxHeight(context, paragraph, region.width, fontPt)
-  ));
   const requiredHeight = heights.reduce((sum, height) => sum + height, 0)
     + Math.max(0, paragraphs.length - 1) * gap;
   if (requiredHeight > region.height + 0.01) return null;
@@ -375,6 +403,18 @@ function regionLayout(
   });
 }
 
+function regionLayout(
+  context: CanvasRenderingContext2D,
+  paragraphs: ExportParagraph[],
+  region: Rectangle,
+  fontPt: number,
+): PositionedTextBox[] | null {
+  const heights = paragraphs.map((paragraph) => (
+    textBoxHeight(context, paragraph, region.width, fontPt)
+  ));
+  return regionLayoutWithHeights(paragraphs, heights, region, fontPt);
+}
+
 function layoutAtFontSize(
   context: CanvasRenderingContext2D,
   paragraphs: ExportParagraph[],
@@ -386,11 +426,17 @@ function layoutAtFontSize(
     return regionLayout(context, paragraphs, regions[0], fontPt);
   }
 
+  const firstHeights = paragraphs.map((paragraph) => textBoxHeight(context, paragraph, regions[0].width, fontPt));
+  const secondHeights = regions[1].width === regions[0].width
+    ? firstHeights
+    : paragraphs.map((paragraph) => textBoxHeight(context, paragraph, regions[1].width, fontPt));
+
   let best: { boxes: PositionedTextBox[]; remainingArea: number } | null = null;
   for (let split = 0; split <= paragraphs.length; split += 1) {
-    const first = regionLayout(context, paragraphs.slice(0, split), regions[0], fontPt);
-    const second = regionLayout(context, paragraphs.slice(split), regions[1], fontPt);
-    if (!first || !second) continue;
+    const first = regionLayoutWithHeights(paragraphs.slice(0, split), firstHeights.slice(0, split), regions[0], fontPt);
+    if (!first) continue;
+    const second = regionLayoutWithHeights(paragraphs.slice(split), secondHeights.slice(split), regions[1], fontPt);
+    if (!second) continue;
     const usedArea = [...first, ...second].reduce(
       (sum, box) => sum + box.width * box.height,
       0,
@@ -460,12 +506,12 @@ function drawTextBox(
 
 async function drawPdfPage(
   canvasPage: CanvasPage,
-  reviewId: string,
+  imageBlob: Blob,
   page: PdfPage,
 ) {
   const { canvas, context } = canvasPage;
   paintPageBackground(context);
-  const loaded = await loadOriginalImage(reviewId, page.image.id);
+  const loaded = await decodeImageBlob(imageBlob);
   try {
     const imageWidth = loaded.element.naturalWidth || page.image.width;
     const imageHeight = loaded.element.naturalHeight || page.image.height;
@@ -531,28 +577,40 @@ export async function createReviewPdf(review: ReviewView): Promise<Blob> {
   const content = exportContentOrPdfError(review);
   const pages = content.pages;
   const rewrittenEssay = content.rewrittenEssay;
-  await loadExportKaiti(content);
-  const { jsPDF } = await import("jspdf");
+  const [, imageBlobs, { jsPDF }] = await Promise.all([
+    loadExportKaiti(content),
+    Promise.all(pages.map((page) => fetchOriginalImageBlob(review.id, page.image.id))),
+    import("jspdf"),
+  ]);
   const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4", compress: true });
   pdf.setProperties({ title: reviewPdfTitle(review) });
   for (let index = 0; index < pages.length; index += 1) {
-    const canvas = await drawPdfPage(createCanvasPage(), review.id, pages[index]);
-    if (index > 0) pdf.addPage("a4", "landscape");
-    pdf.addImage(
-      canvas.toDataURL("image/jpeg", 0.97),
-      "JPEG",
-      0,
-      0,
-      PDF_WIDTH,
-      PDF_HEIGHT,
-      undefined,
-      "FAST",
-    );
+    const canvasPage = createCanvasPage();
+    try {
+      const canvas = await drawPdfPage(canvasPage, imageBlobs[index]!, pages[index]);
+      if (index > 0) pdf.addPage("a4", "landscape");
+      pdf.addImage(
+        canvas.toDataURL("image/jpeg", 0.97),
+        "JPEG",
+        0,
+        0,
+        PDF_WIDTH,
+        PDF_HEIGHT,
+        undefined,
+        "FAST",
+      );
+    } finally {
+      releaseCanvas(canvasPage.canvas);
+    }
   }
   if (rewrittenEssay.length) {
     for (const canvas of drawRewrittenEssayPages(rewrittenEssay)) {
-      pdf.addPage("a4", "landscape");
-      pdf.addImage(canvas.toDataURL("image/jpeg", 0.97), "JPEG", 0, 0, PDF_WIDTH, PDF_HEIGHT, undefined, "FAST");
+      try {
+        pdf.addPage("a4", "landscape");
+        pdf.addImage(canvas.toDataURL("image/jpeg", 0.97), "JPEG", 0, 0, PDF_WIDTH, PDF_HEIGHT, undefined, "FAST");
+      } finally {
+        releaseCanvas(canvas);
+      }
     }
   }
   return pdf.output("blob");

@@ -248,6 +248,22 @@ export class D1ReviewReader {
     return { key: `users/${row.owner_id}/reviews/${reviewId}/${storedPath}`, contentType: row.mime_type };
   }
 
+  async aiImageObjectsForReview(ownerId: string, reviewId: string): Promise<Array<{ key: string; mimeType: string }>> {
+    const { results = [] } = await this.database.prepare(`
+      SELECT original_path, ai_path, mime_type
+      FROM review_images WHERE review_id = ? ORDER BY position, id
+    `).bind(reviewId).all<{ original_path?: string | null; ai_path?: string | null; mime_type?: string | null }>();
+    return results.map((row) => {
+      const candidate = [row.original_path, row.ai_path].find(
+        (path): path is string => typeof path === "string" && /^images\/[^/\\\0]+$/u.test(path),
+      );
+      if (!candidate || typeof row.mime_type !== "string" || !row.mime_type) {
+        throw new Error("AI_IMAGE_UNAVAILABLE");
+      }
+      return { key: `users/${ownerId}/reviews/${reviewId}/${candidate}`, mimeType: row.mime_type };
+    });
+  }
+
   async savedAssignments(ownerId: string): Promise<unknown[]> {
     const { results = [] } = await this.database.prepare(`
       SELECT id, config, created_at, updated_at FROM saved_assignments WHERE owner_id = ? ORDER BY updated_at DESC

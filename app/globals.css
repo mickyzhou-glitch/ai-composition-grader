@@ -126,7 +126,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .hero-cta { min-width: 168px; background: var(--teal); color: white; box-shadow: 0 10px 24px rgb(1 101 75 / 22%); }
 .hero-cta span { margin-left: 14px; font-size: 1.2em; }
 
-.stats-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; margin: 22px 0 54px; }
+.stats-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; margin: 22px 0 54px; }
 .stats-grid > div { display: flex; padding: 18px 22px; align-items: center; justify-content: space-between; border: 1px solid var(--line); border-radius: 12px; background: rgb(251 254 252 / 78%); }
 .stats-grid dt { color: var(--muted); font-size: .9rem; }
 .stats-grid dd { margin: 0; font: 700 1.5rem/1 STKaiti, KaiTi, serif; }

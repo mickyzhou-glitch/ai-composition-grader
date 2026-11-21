@@ -19,6 +19,7 @@ import { AppHeader } from "../../../components/AppHeader";
 import { BatchReviewReportEditor } from "../../../components/BatchReviewReportEditor";
 import { ErrorBanner } from "../../../components/ErrorBanner";
 import { ExportMenu } from "../../../components/ExportMenu";
+import { usePendingRules } from "../../../components/PendingRulesContext";
 import { RevisionRequestDialog } from "../../../components/RevisionRequestDialog";
 import { ReviewExportList } from "../../../components/ReviewExportList";
 import { apiFetch, errorMessage } from "../../../lib/api";
@@ -52,6 +53,7 @@ interface RevisionJobTracker {
 }
 
 export function BatchReviewPage() {
+  const pendingRules = usePendingRules();
   const [queue, setQueue] = useState<ReviewQueueItemView[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [review, setReview] = useState<ReviewView | null>(null);
@@ -193,46 +195,58 @@ export function BatchReviewPage() {
   useEffect(() => {
     if (revisionJobs.length === 0) return;
     let active = true;
+    let inFlight = false;
 
     async function pollRevisionJobs() {
-      const succeededReviewIds: string[] = [];
-      const failedReviewIds: string[] = [];
-      await Promise.all(revisionJobs.map(async (task) => {
-        try {
-          const result = await apiFetch<{ job: PublicAnalysisJobView | null }>(
-            `/api/reviews/${encodeURIComponent(task.reviewId)}/analyze/status`,
-          );
-          if (!active || !result.job || result.job.id !== task.jobId) return;
-          if (result.job.status === "succeeded") succeededReviewIds.push(task.reviewId);
-          else if (result.job.status === "failed" || result.job.status === "canceled") failedReviewIds.push(task.reviewId);
-        } catch {
-          if (active) setRevisionNotice("任务状态暂时无法刷新，正在尝试重新连接。");
-        }
-      }));
-      if (!active) return;
-      const terminalIds = new Set([...succeededReviewIds, ...failedReviewIds]);
-      if (terminalIds.size > 0) {
-        setRevisionJobs((current) => current.filter(({ reviewId }) => !terminalIds.has(reviewId)));
-      }
-      if (failedReviewIds.length > 0) {
-        setRevisionNotice("退回后的重新分析失败，作文未加入待审核队列。");
-      }
-      if (succeededReviewIds.length === 0) return;
+      if (inFlight || document.visibilityState === "hidden") return;
+      inFlight = true;
       try {
-        const loaded = await apiFetch<ReviewQueueItemView[]>("/api/reviews/review-queue");
+        const succeededReviewIds: string[] = [];
+        const failedReviewIds: string[] = [];
+        await Promise.all(revisionJobs.map(async (task) => {
+          try {
+            const result = await apiFetch<{ job: PublicAnalysisJobView | null }>(
+              `/api/reviews/${encodeURIComponent(task.reviewId)}/analyze/status`,
+            );
+            if (!active || !result.job || result.job.id !== task.jobId) return;
+            if (result.job.status === "succeeded") succeededReviewIds.push(task.reviewId);
+            else if (result.job.status === "failed" || result.job.status === "canceled") failedReviewIds.push(task.reviewId);
+          } catch {
+            if (active) setRevisionNotice("任务状态暂时无法刷新，正在尝试重新连接。");
+          }
+        }));
         if (!active) return;
-        setQueue(loaded);
-        setActiveId((current) => current ?? loaded[0]?.id ?? null);
-      } catch {
-        if (active) setRevisionNotice("待审核队列暂时无法刷新，请稍后重试。");
+        const terminalIds = new Set([...succeededReviewIds, ...failedReviewIds]);
+        if (terminalIds.size > 0) {
+          setRevisionJobs((current) => current.filter(({ reviewId }) => !terminalIds.has(reviewId)));
+        }
+        if (failedReviewIds.length > 0) {
+          setRevisionNotice("退回后的重新分析失败，作文未加入待审核队列。");
+        }
+        if (succeededReviewIds.length === 0) return;
+        try {
+          const loaded = await apiFetch<ReviewQueueItemView[]>("/api/reviews/review-queue");
+          if (!active) return;
+          setQueue(loaded);
+          setActiveId((current) => current ?? loaded[0]?.id ?? null);
+        } catch {
+          if (active) setRevisionNotice("待审核队列暂时无法刷新，请稍后重试。");
+        }
+      } finally {
+        inFlight = false;
       }
     }
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") void pollRevisionJobs();
+    };
     void pollRevisionJobs();
     const timer = window.setInterval(() => { void pollRevisionJobs(); }, 2000);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       active = false;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [revisionJobs]);
 
@@ -260,7 +274,7 @@ export function BatchReviewPage() {
     const currentIndex = visibleQueue.findIndex(({ id }) => id === reviewId);
     const next = currentIndex >= 0
       ? visibleQueue[currentIndex + 1] ?? visibleQueue[currentIndex - 1] ?? null
-      : null;
+      : visibleQueue.find(({ id }) => id !== reviewId) ?? null;
     setQueue((current) => current.filter(({ id }) => id !== reviewId));
     setActiveId(next?.id ?? null);
     setReview(next ? cacheRef.current.get(cacheKey(next.id, next.revision)) ?? null : null);
@@ -334,6 +348,7 @@ export function BatchReviewPage() {
         if (key.startsWith(`${currentReview.id}:`)) cacheRef.current.delete(key);
       }
       setRevisionDialogOpen(false);
+      pendingRules?.refresh();
       advanceAfterQueueRemoval(currentReview.id);
     } catch (caught) {
       setRevisionError(errorMessage(caught));
@@ -366,6 +381,7 @@ export function BatchReviewPage() {
         setRevisionJobs((current) => [...current.filter(({ reviewId }) => reviewId !== result.job.reviewId), { reviewId: result.job.reviewId, jobId: result.job.id }]);
       }
       setRevisionDialogOpen(false);
+      pendingRules?.refresh();
       advanceAfterQueueRemoval(currentReview.id);
     } catch (caught) {
       setRevisionError(errorMessage(caught));
@@ -417,7 +433,7 @@ export function BatchReviewPage() {
       {view === "export" ? <section className="batch-export-view">
         <ClassFilter items={[...queue, ...reviewed]} value={classFilter} onChange={(value) => updateSearch(search, value)} />
         <div className="batch-export-actions"><span>已选择 {selectedExportIds.size} 篇</span><div className="batch-export-action-buttons"><div className="batch-export-command"><span>导出所选作文</span><ExportMenu ariaLabel="导出所选作文" disabled={selectedExportable.length === 0 || exporting} disabledReason={selectedExportIds.size > 0 && selectedExportable.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={exporting} onExport={exportSelected} /></div><div className="batch-export-command"><span>一键导出已复核（{exportableReviewed.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={exportableReviewed.length === 0 || exporting} busy={exporting} onExport={exportAllReviewed} /></div></div></div>
-        <ReviewExportList reviews={filterReviewsByClass(reviewed, classFilter)} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (target) { setReview(target); setActiveId(id); setView("review"); } }} />
+        <ReviewExportList reviews={filterReviewsByClass(reviewed, classFilter)} selectedIds={selectedExportIds} onToggle={(id) => setSelectedExportIds((current) => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; })} onReturnToReview={(id) => { const target = reviewed.find((item) => item.id === id); if (!target) return; if (dirty && !window.confirm("当前修改尚未审核保存，确认切换作文？")) return; setReview(target); setActiveId(id); setDirty(false); setView("review"); }} />
       </section> : <div className="batch-review-layout">
         <div className="batch-review-actionbar" role="toolbar" aria-label="审核操作"><span>{paragraphReadiness && !paragraphReadiness.ready ? paragraphReadiness.message : sampleParagraphCountMismatch && review ? <>示范作文段落数不符合题目要求。<Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>前往单篇复核</Link></> : dirty ? "有未确认的修改" : review ? "修改将在审核确认时保存" : ""}</span><div className="batch-review-actionbar-actions"><button ref={revisionButtonRef} type="button" className="button button--danger-quiet" disabled={!review || saving || revisionSubmitting} onClick={openRevisionDialog}>不合适</button><button type="button" className="button button--primary" disabled={!review?.report || saving || revisionSubmitting || sampleParagraphCountMismatch || Boolean(paragraphReadiness && !paragraphReadiness.ready)} onClick={() => void completeReview()}>{saving ? "正在保存并切换…" : "审核通过并进入下一篇"}</button></div></div>
         <aside className="batch-queue" aria-label="待审核作文队列">

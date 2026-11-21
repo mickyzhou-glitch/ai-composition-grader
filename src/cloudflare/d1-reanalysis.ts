@@ -1,6 +1,11 @@
 import { composeReviewGuidance } from "../grading-opinions/review-guidance";
-import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
-import { describeScopedOpinion, type OpinionScope } from "../grading-opinions/standing-guidance";
+import {
+  listD1EssayOpinions,
+  listD1EssayOpinionsByReview,
+  listD1StandingOpinions,
+  listD1StandingOpinionsByTitle,
+} from "./d1-grading-opinions";
+import { describeScopedOpinion, type OpinionScope, type StandingOpinionInput } from "../grading-opinions/standing-guidance";
 import {
   assignmentConfigSchema,
   isParagraphEvaluationReport,
@@ -370,12 +375,28 @@ export class D1Reanalysis {
     items: BatchReanalysisCommitItem[],
     options: BatchReanalysisCommitOptions = {},
   ): Promise<BatchReanalysisCommitResult> {
+    if (items.length === 0) return { submitted: [], skipped: [] };
     const applyFramework = options.applyCurrentFramework === true;
     const submitted: BatchReanalysisCommitResult["submitted"] = [];
     const skippedItems: BatchReanalysisCommitResult["skipped"] = [];
+    let preloaded: {
+      assignments: AssignmentRow[];
+      standingByTitle: Map<string, StandingOpinionInput[]>;
+      essayByReview: Map<string, StandingOpinionInput[]>;
+    };
+    try {
+      const [assignments, standingByTitle, essayByReview] = await Promise.all([
+        applyFramework ? this.readAssignments(ownerId) : Promise.resolve([]),
+        listD1StandingOpinionsByTitle(this.database, ownerId),
+        listD1EssayOpinionsByReview(this.database, ownerId, items.map(({ reviewId }) => reviewId)),
+      ]);
+      preloaded = { assignments, standingByTitle, essayByReview };
+    } catch (error) {
+      throw new D1ReanalysisBatchError(submitted, error);
+    }
     for (const item of items) {
       try {
-        submitted.push(await this.commitOne(ownerId, item, applyFramework));
+        submitted.push(await this.commitOne(ownerId, item, applyFramework, preloaded));
       } catch (error) {
         if (error instanceof D1ReanalysisError) {
           skippedItems.push(skipped(item.reviewId, error.code, error.review));
@@ -412,11 +433,20 @@ export class D1Reanalysis {
     await this.database.batch(statements);
   }
 
-  private async commitOne(ownerId: string, item: BatchReanalysisCommitItem, applyFramework: boolean) {
+  private async commitOne(
+    ownerId: string,
+    item: BatchReanalysisCommitItem,
+    applyFramework: boolean,
+    preloaded?: {
+      assignments: AssignmentRow[];
+      standingByTitle: Map<string, StandingOpinionInput[]>;
+      essayByReview: Map<string, StandingOpinionInput[]>;
+    },
+  ) {
     const row = await this.readReview(ownerId, item.reviewId);
     const review = this.assertCommitRequestable(row, item);
     if (applyFramework) {
-      const assignments = await this.readAssignments(ownerId);
+      const assignments = preloaded ? preloaded.assignments : await this.readAssignments(ownerId);
       const assignment = this.findAssignment(assignments, review.title);
       if (!assignment || assignment.id !== item.assignmentId || asIso(assignment.updated_at) !== item.expectedAssignmentUpdatedAt) {
         throw new D1ReanalysisError("FRAMEWORK_CHANGED", review);
@@ -429,7 +459,13 @@ export class D1Reanalysis {
     const mode = reanalysisMode(row!);
     const jobId = crypto.randomUUID();
     const now = Date.now();
-    const teacherGuidance = await this.mergedGuidance(ownerId, item.reviewId, review.title, null);
+    const teacherGuidance = preloaded
+      ? composeReviewGuidance(
+          null,
+          preloaded.standingByTitle.get(normalizeAssignmentTitle(review.title)) ?? [],
+          preloaded.essayByReview.get(item.reviewId) ?? [],
+        )
+      : await this.mergedGuidance(ownerId, item.reviewId, review.title, null);
     const statements = this.commitStatements(
       ownerId,
       item,

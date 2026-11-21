@@ -1,6 +1,4 @@
 import type { Metadata } from "next";
-import "lxgw-wenkai-webfont/lxgwwenkai-regular.css";
-import "lxgw-wenkai-webfont/lxgwwenkai-bold.css";
 import "./globals.css";
 
 export const metadata: Metadata = {

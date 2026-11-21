@@ -2,6 +2,17 @@ import { toBase64Url } from "../auth/password-proof";
 
 const encoder = new TextEncoder();
 
+function constantTimeEqualStrings(left: string, right: string): boolean {
+  const leftBytes = encoder.encode(left);
+  const rightBytes = encoder.encode(right);
+  const maxLength = Math.max(leftBytes.length, rightBytes.length);
+  let diff = leftBytes.length ^ rightBytes.length;
+  for (let index = 0; index < maxLength; index += 1) {
+    diff |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+  return diff === 0;
+}
+
 function payload(input: { reviewId: string; imageId: number; variant: string; expiresAt: number }): string {
   return `${input.reviewId}.${input.imageId}.${input.variant}.${input.expiresAt}`;
 }
@@ -39,5 +50,7 @@ export async function verifyAiImageUrl(input: {
   const expiresAt = Number(input.expires);
   if (!Number.isSafeInteger(expiresAt) || expiresAt < (input.now ?? Date.now())) return null;
   const expected = await sign(payload({ reviewId: input.reviewId, imageId: input.imageId, variant: input.variant, expiresAt }), input.secret);
-  return expected === input.signature ? input.variant as "original" | "annotation" | "ai" : null;
+  return constantTimeEqualStrings(expected, input.signature)
+    ? input.variant as "original" | "annotation" | "ai"
+    : null;
 }

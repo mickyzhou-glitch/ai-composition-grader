@@ -57,12 +57,11 @@ const opinionColumns = `
   updated_at AS updatedAt
 `;
 
-export async function listD1StandingOpinions(
+export async function listD1StandingOpinionsByTitle(
   database: D1Database,
   ownerId: string,
-  title: string,
-): Promise<StandingOpinionInput[]> {
-  const normalized = normalizeAssignmentTitle(title);
+): Promise<Map<string, StandingOpinionInput[]>> {
+  const byTitle = new Map<string, StandingOpinionInput[]>();
   const bound = database.prepare(`
     SELECT change_request AS text, paragraph_label AS paragraphLabel,
       category, source_title AS sourceTitle, updated_at AS updatedAt
@@ -72,18 +71,69 @@ export async function listD1StandingOpinions(
   `).bind(ownerId) as D1PreparedStatement & {
     all?: () => Promise<{ results?: Array<Record<string, unknown>> }>;
   };
-  // Some job-enqueue doubles only stub first(). An absent archive query means no standing opinions.
-  if (typeof bound.all !== "function") return [];
+  if (typeof bound.all !== "function") return byTitle;
   const result = await bound.all();
-  return (result.results ?? []).flatMap((row) => {
+  for (const row of result.results ?? []) {
     const text = typeof row.text === "string" ? row.text.trim() : "";
-    const sourceTitle = typeof row.sourceTitle === "string" ? row.sourceTitle : "";
-    if (!text || normalizeAssignmentTitle(sourceTitle) !== normalized) return [];
+    const sourceTitle = typeof row.sourceTitle === "string" ? normalizeAssignmentTitle(row.sourceTitle) : "";
+    if (!text || !sourceTitle) continue;
     const createdAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
     const category = typeof row.category === "string" && isOpinionCategory(row.category) ? row.category : undefined;
     const paragraphLabel = typeof row.paragraphLabel === "string" ? row.paragraphLabel : null;
-    return [{ text, paragraphLabel, category, createdAt }];
-  });
+    const bucket = byTitle.get(sourceTitle) ?? [];
+    bucket.push({ text, paragraphLabel, category, createdAt });
+    byTitle.set(sourceTitle, bucket);
+  }
+  return byTitle;
+}
+
+export async function listD1StandingOpinions(
+  database: D1Database,
+  ownerId: string,
+  title: string,
+): Promise<StandingOpinionInput[]> {
+  const normalized = normalizeAssignmentTitle(title);
+  if (!normalized) return [];
+  const byTitle = await listD1StandingOpinionsByTitle(database, ownerId);
+  return byTitle.get(normalized) ?? [];
+}
+
+export async function listD1EssayOpinionsByReview(
+  database: D1Database,
+  ownerId: string,
+  reviewIds: readonly string[],
+): Promise<Map<string, StandingOpinionInput[]>> {
+  const byReview = new Map<string, StandingOpinionInput[]>();
+  const uniqueIds = [...new Set(reviewIds.map((id) => id.trim()).filter(Boolean))];
+  if (uniqueIds.length === 0) return byReview;
+  const chunkSize = 80;
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map(() => "?").join(", ");
+    const bound = database.prepare(`
+      SELECT change_request AS text, paragraph_label AS paragraphLabel,
+        category, source_review_id AS sourceReviewId, updated_at AS updatedAt
+      FROM grading_opinions
+      WHERE owner_id = ? AND scope = 'essay' AND source_review_id IN (${placeholders})
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+    `).bind(ownerId, ...chunk) as D1PreparedStatement & {
+      all?: () => Promise<{ results?: Array<Record<string, unknown>> }>;
+    };
+    if (typeof bound.all !== "function") return byReview;
+    const result = await bound.all();
+    for (const row of result.results ?? []) {
+      const text = typeof row.text === "string" ? row.text.trim() : "";
+      const sourceReviewId = typeof row.sourceReviewId === "string" ? row.sourceReviewId : "";
+      if (!text || !sourceReviewId) continue;
+      const createdAt = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
+      const category = typeof row.category === "string" && isOpinionCategory(row.category) ? row.category : undefined;
+      const paragraphLabel = typeof row.paragraphLabel === "string" ? row.paragraphLabel : null;
+      const bucket = byReview.get(sourceReviewId) ?? [];
+      bucket.push({ text, paragraphLabel, category, createdAt });
+      byReview.set(sourceReviewId, bucket);
+    }
+  }
+  return byReview;
 }
 
 export async function listD1EssayOpinions(

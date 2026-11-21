@@ -1332,4 +1332,31 @@ describe("复核页", () => {
     expect(((fetchMock.mock.calls[2][1] as RequestInit).body as FormData).get("expectedRevision")).toBe("1");
     expect(await screen.findByRole("status")).toHaveTextContent("作文图片已压缩优化并替换，可重新开始 AI 分析。");
   });
+
+  it("新版逐段批改报告同样允许修改并保存学生姓名", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementationOnce(() => json(paragraphReview))
+      .mockImplementationOnce(() => json({ job: null }))
+      .mockImplementationOnce(() => json({
+        ...paragraphReview,
+        revision: 2,
+        studentName: "李小红",
+      }));
+    const user = userEvent.setup();
+    render(<ReviewPage />);
+
+    const input = await screen.findByRole("textbox", { name: "学生姓名" });
+    expect(input).not.toBeDisabled();
+    await user.clear(input);
+    await user.type(input, "李小红");
+    await user.click(screen.getByRole("button", { name: "保存复核" }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)).toMatchObject({
+      expectedRevision: 1,
+      studentName: "李小红",
+    });
+    expect(input).toHaveValue("李小红");
+  });
 });

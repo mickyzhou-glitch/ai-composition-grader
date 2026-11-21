@@ -4,7 +4,7 @@ import { useEffect, useState, type PropsWithChildren } from "react";
 
 import { ApiError, apiFetch } from "../lib/api";
 import { replaceDocument } from "../lib/document-navigation";
-import { AuthUserProvider } from "./AuthUserContext";
+import { AuthUserProvider, useAuthRole } from "./AuthUserContext";
 import { PendingRulesProvider } from "./PendingRulesContext";
 
 type CurrentUser = {
@@ -15,10 +15,12 @@ type CurrentUser = {
 };
 
 export function RequireAuthenticatedUser({ children, requireAdmin = false }: PropsWithChildren<{ requireAdmin?: boolean }>) {
+  const inheritedRole = useAuthRole();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
+    if (inheritedRole !== undefined) return;
     let active = true;
     let verification = 0;
     const verifyAuthentication = async () => {
@@ -51,7 +53,14 @@ export function RequireAuthenticatedUser({ children, requireAdmin = false }: Pro
       active = false;
       window.removeEventListener("pageshow", handlePageShow);
     };
-  }, []);
+  }, [inheritedRole]);
+
+  if (inheritedRole !== undefined) {
+    if (requireAdmin && inheritedRole !== "admin") {
+      return <main className="auth-page"><p className="error-banner" role="alert">没有权限访问此页面</p></main>;
+    }
+    return <>{children}</>;
+  }
 
   if (failed) return <main className="auth-page"><p className="error-banner" role="alert">认证服务暂时不可用，请稍后重试。</p></main>;
   if (!user) return <main aria-busy="true" />;

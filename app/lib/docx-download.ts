@@ -136,10 +136,40 @@ function fittedImageSize(image: ExportImage) {
   };
 }
 
+function isWebpBytes(bytes: Uint8Array, mimeType?: string): boolean {
+  return (bytes.length >= 12
+    && bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46
+    && bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50)
+    || Boolean(mimeType?.toLowerCase().includes("webp"));
+}
+
+async function ensureWordCompatibleImage(bytes: Uint8Array, image: ExportImage): Promise<{ bytes: Uint8Array; mimeType?: string }> {
+  if (!isWebpBytes(bytes, image.mimeType) || typeof document === "undefined" || typeof createImageBitmap !== "function") {
+    return { bytes, mimeType: image.mimeType };
+  }
+  const bitmap = await createImageBitmap(new Blob([bytes.slice().buffer], { type: "image/webp" }));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, bitmap.width);
+  canvas.height = Math.max(1, bitmap.height);
+  try {
+    const context = canvas.getContext("2d");
+    if (!context) return { bytes, mimeType: image.mimeType };
+    context.drawImage(bitmap, 0, 0);
+    const converted = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("图片格式转换失败")), "image/png");
+    });
+    return { bytes: new Uint8Array(await converted.arrayBuffer()), mimeType: "image/png" };
+  } finally {
+    bitmap.close();
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
 async function loadOriginalImage(reviewId: string, image: ExportImage) {
   const response = await fetch(exportOriginalImageUrl(reviewId, image.id));
   if (!response.ok) throw new Error(`作文照片读取失败（${response.status}）`);
-  return new Uint8Array(await response.arrayBuffer());
+  return ensureWordCompatibleImage(new Uint8Array(await response.arrayBuffer()), image);
 }
 
 const DOCX_UNDERLINE = {
@@ -370,7 +400,7 @@ async function documentChildren(review: ExportReviewSource, content: ExportRepor
   const images = await Promise.all(content.pages.map((page) => loadOriginalImage(review.id, page.image)));
   const children = content.pages.flatMap((page, index) => [
     ...(index === 0 ? [] : [pageBreakParagraph()]),
-    photoTable(images[index], page),
+    photoTable(images[index].bytes, { ...page, image: { ...page.image, mimeType: images[index].mimeType } }),
   ]);
   if (content.rewrittenEssay.length === 0) return children;
   return [
@@ -474,8 +504,11 @@ async function applyChocolateTheme(blob: Blob): Promise<Blob> {
       `<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/></Types>`,
     ));
   }
-  const bytes = await zip.generateAsync({ type: "uint8array" });
-  return new Blob([Uint8Array.from(bytes)], { type: DOCX_MIME });
+  const bytes = await zip.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+  const buffer = bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? (bytes.buffer as ArrayBuffer)
+    : (bytes.slice().buffer as ArrayBuffer);
+  return new Blob([buffer], { type: DOCX_MIME });
 }
 
 export async function createReviewDocx(review: ExportReviewSource): Promise<Blob> {

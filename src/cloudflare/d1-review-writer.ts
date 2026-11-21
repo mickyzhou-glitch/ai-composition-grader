@@ -95,7 +95,8 @@ export class D1ReviewWriter {
       ? "rejected"
       : parsed.config ? "draft" : parsed.report !== undefined || parsed.annotations !== undefined ? (report === null ? "draft" : "ready_for_review") : current.status;
     const now = Date.now();
-    const updated = await this.database.prepare(`
+    const nextRevision = parsed.expectedRevision + 1;
+    const updateStatement = this.database.prepare(`
       UPDATE reviews SET student_name = ?, config = ?, report = ?, status = ?, revision = revision + 1, updated_at = ?,
         analysis_run_id = CASE WHEN ? THEN NULL ELSE analysis_run_id END,
         teacher_reviewed_at = CASE WHEN ? THEN NULL ELSE teacher_reviewed_at END,
@@ -121,18 +122,40 @@ export class D1ReviewWriter {
       ownerId,
       parsed.expectedRevision,
       ...(paragraphReport && checkpoint ? [checkpoint.ocrRevision, checkpoint.ocrRevision] : []),
-    ).run();
-    if (updated.meta.changes === 0) throw new RevisionConflictError();
-    if (annotations !== undefined) {
-      await this.database.batch([
-        this.database.prepare("DELETE FROM annotations WHERE review_id = ?").bind(reviewId),
-        ...annotations.map((annotation, position) => this.database.prepare(`
-          INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(reviewId, position, annotation.pageIndex, annotation.x, annotation.y, annotation.category, annotation.anchorText, annotation.comment, annotation.isHighlight ? 1 : 0)),
-      ]);
+    );
+    if (annotations === undefined) {
+      const updated = await updateStatement.run();
+      if (updated.meta.changes === 0) throw new RevisionConflictError();
+      return { revision: nextRevision };
     }
-    return { revision: parsed.expectedRevision + 1 };
+    const annotationGuard = `EXISTS (
+      SELECT 1 FROM reviews
+      WHERE id = ? AND owner_id = ? AND deleting_at IS NULL
+        AND revision = ? AND updated_at = ? AND analysis_run_id IS NULL
+    )`;
+    const guardBindings = [reviewId, ownerId, nextRevision, now];
+    const outcomes = await this.database.batch([
+      updateStatement,
+      this.database.prepare(`DELETE FROM annotations WHERE review_id = ? AND ${annotationGuard}`)
+        .bind(reviewId, ...guardBindings),
+      ...annotations.map((annotation, position) => this.database.prepare(`
+        INSERT INTO annotations (review_id, position, page_index, x, y, category, anchor_text, comment, is_highlight)
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE ${annotationGuard}
+      `).bind(
+        reviewId,
+        position,
+        annotation.pageIndex,
+        annotation.x,
+        annotation.y,
+        annotation.category,
+        annotation.anchorText,
+        annotation.comment,
+        annotation.isHighlight ? 1 : 0,
+        ...guardBindings,
+      )),
+    ]);
+    if ((outcomes[0]?.meta.changes ?? 0) !== 1) throw new RevisionConflictError();
+    return { revision: nextRevision };
   }
 
   async completeTeacherReview(
@@ -296,13 +319,14 @@ export class D1ReviewWriter {
     } catch {
       return false;
     }
+    const now = Date.now();
     const updated = await this.database.prepare(`
-      UPDATE reviews SET status = 'exported', updated_at = ?
+      UPDATE reviews SET status = 'exported', exported_at = COALESCE(exported_at, ?), updated_at = ?
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
         AND teacher_reviewed_at IS NOT NULL AND report IS NOT NULL
         AND json_extract(ocr_checkpoint, '$.version') = 2
         AND report_ocr_revision = json_extract(ocr_checkpoint, '$.ocrRevision')
-    `).bind(Date.now(), reviewId, ownerId, current.revision).run();
+    `).bind(now, now, reviewId, ownerId, current.revision).run();
     return updated.meta.changes > 0;
   }
 

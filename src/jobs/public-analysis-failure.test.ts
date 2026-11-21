@@ -69,6 +69,7 @@ describe("公开的分析失败说明", () => {
     ["AI_INVALID_RESPONSE_json_parse", "批改结果不是合法 JSON（可能夹带多余文字或未转义字符），请重新分析"],
     ["AI_INVALID_RESPONSE_rewritten_essay_structure", "AI 生成的范文未满足逐段结构要求，请重新分析"],
     ["AI_INVALID_RESPONSE_schema_annotationAnchors_invalid_type", "批改结果结构不符：「annotationAnchors」缺少字段或类型不对，请重新分析"],
+    ["AI_UPSTREAM_HTTP_429_rate_limit", "AI 服务请求过于频繁（触发限流），停在「生成批改」，请稍后重新分析"],
   ])("写明具体失败原因：%s", (errorCode, summary) => {
     expect(describePublicAnalysisFailure({ errorCode, progressStage: "generating_review" }).summary).toBe(summary);
   });

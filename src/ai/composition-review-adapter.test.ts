@@ -1333,4 +1333,52 @@ describe("CompositionReviewAdapter", () => {
     expect(prompt).toContain("本段无需修改");
     expect(prompt).not.toContain("1 至 4");
   });
+
+  it("归组作文未返回显式 rewrittenEssay 且首轮字数不达标时，字数返修不会因缺少范文数组崩溃", async () => {
+    const source = [
+      { id: "paragraph-1", text: "雨很大。" },
+      { id: "paragraph-2", text: "我走进赛场。" },
+    ];
+    const shortParagraph = "雨停了。";
+    const longParagraph = "雨水顺着伞骨往下淌，我深吸一口气迈进灯火通明的赛场，指尖攥紧了被汗水浸湿的号码牌，耳边传来观众席低沉的加油声，紧张的心跳渐渐平复下来，脚步也随之坚定起来。";
+    const firstResponse = {
+      ...validResult,
+      annotationAnchors: [],
+      report: {
+        ...report,
+        rewrittenEssay: undefined,
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          sourceParagraphStart: 1,
+          sourceParagraphEnd: 2,
+          suggestions: [{ advice: "把两段合并成一段。" }],
+          revisedText: shortParagraph,
+        }],
+      },
+    };
+    const repairedResponse = {
+      paragraphReviews: [{
+        suggestions: [{ advice: "扩写雨景与进场细节", revisedQuotes: [longParagraph] }],
+        revisedText: longParagraph,
+      }],
+    };
+    const harness = setup();
+    harness.create
+      .mockResolvedValueOnce(completion(firstResponse))
+      .mockResolvedValueOnce(completion(repairedResponse))
+      .mockResolvedValueOnce(completion({
+        items: [{ index: 0, passed: true, reason: "结构达标" }],
+      }));
+
+    const result = await harness.adapter.analyzeText({
+      config: { ...config, structureRequirements: "严格一段式：融雨景与入场于一段。" },
+      paragraphs: source,
+      teacherGuidance: "第1段不少于40字",
+      studentName: "小艾",
+    });
+
+    expect(result.report.paragraphReviews).toHaveLength(1);
+    expect(result.report.paragraphReviews[0]?.revisedText).toBe(longParagraph);
+    expect(result.report.rewrittenEssay).toEqual([longParagraph]);
+  });
 });

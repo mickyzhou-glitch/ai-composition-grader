@@ -92,6 +92,8 @@ export function describePublicAnalysisFailure(input: {
     summary = "AI 服务拒绝了访问密钥，请在设置中重新保存并测试";
   } else if (errorCode === "AI_UPSTREAM_HTTP_403" || errorCode.startsWith("AI_UPSTREAM_HTTP_403_")) {
     summary = "AI 服务拒绝了图片批改请求，请确认当前模型已开通视觉输入权限";
+  } else if (errorCode === "AI_UPSTREAM_HTTP_429" || errorCode.startsWith("AI_UPSTREAM_HTTP_429_")) {
+    summary = `AI 服务请求过于频繁（触发限流），停在「${stage}」，请稍后重新分析`;
   } else if (errorCode.startsWith("AI_UPSTREAM_HTTP_")) {
     summary = `AI 服务返回 ${status ?? "错误"}，停在「${stage}」，请稍后重试`;
   } else if (errorCode === "AI_INVALID_RESPONSE" || errorCode.startsWith("AI_INVALID_RESPONSE_")) {

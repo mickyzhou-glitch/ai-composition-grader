@@ -31,13 +31,17 @@ function exifTurnForBitmap(bytes: Uint8Array, bitmapWidth: number, bitmapHeight:
   return alreadySwapped ? 0 : turn;
 }
 
+const JPEG_HEADER_SLICE_BYTES = 256 * 1024;
+
 async function loadBitmap(file: File): Promise<{ bitmap: ImageBitmap; exifTurn: QuarterTurn }> {
-  const bytes = new Uint8Array(await file.arrayBuffer());
+  const headerBytes = file.type === "image/jpeg"
+    ? new Uint8Array(await file.slice(0, JPEG_HEADER_SLICE_BYTES).arrayBuffer())
+    : null;
   try {
     const bitmap = await createImageBitmap(file, { imageOrientation: "none" });
     return {
       bitmap,
-      exifTurn: exifTurnForBitmap(bytes, bitmap.width, bitmap.height),
+      exifTurn: headerBytes ? exifTurnForBitmap(headerBytes, bitmap.width, bitmap.height) : 0,
     };
   } catch {
     const bitmap = await createImageBitmap(file);
@@ -58,31 +62,36 @@ function sampleLuminance(
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) return null;
-  context.translate(width / 2, height / 2);
-  context.rotate((rotation * Math.PI) / 180);
-  context.drawImage(
-    source,
-    (-sourceWidth * scale) / 2,
-    (-sourceHeight * scale) / 2,
-    sourceWidth * scale,
-    sourceHeight * scale,
-  );
-  let pixels: Uint8ClampedArray;
   try {
-    pixels = context.getImageData(0, 0, width, height).data;
-  } catch {
-    return null;
-  }
-  const luminance = new Uint8Array(width * height);
-  for (let index = 0; index < luminance.length; index += 1) {
-    const offset = index * 4;
-    luminance[index] = Math.round(
-      pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114,
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.translate(width / 2, height / 2);
+    context.rotate((rotation * Math.PI) / 180);
+    context.drawImage(
+      source,
+      (-sourceWidth * scale) / 2,
+      (-sourceHeight * scale) / 2,
+      sourceWidth * scale,
+      sourceHeight * scale,
     );
+    let pixels: Uint8ClampedArray;
+    try {
+      pixels = context.getImageData(0, 0, width, height).data;
+    } catch {
+      return null;
+    }
+    const luminance = new Uint8Array(width * height);
+    for (let index = 0; index < luminance.length; index += 1) {
+      const offset = index * 4;
+      luminance[index] = Math.round(
+        pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114,
+      );
+    }
+    return { width, height, luminance };
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
   }
-  return { width, height, luminance };
 }
 
 export async function uprightImageFile(file: File): Promise<File> {
@@ -120,33 +129,38 @@ export async function prepareImageForCloudUpload(input: {
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const context = canvas.getContext("2d");
-    if (!context) throw new Error("浏览器不支持图片处理");
-    context.translate(width / 2, height / 2);
-    context.rotate((rotation * Math.PI) / 180);
-    context.drawImage(
-      source,
-      Math.round(source.width * crop.x),
-      Math.round(source.height * crop.y),
-      sourceWidth,
-      sourceHeight,
-      (-sourceWidth * scale) / 2,
-      (-sourceHeight * scale) / 2,
-      sourceWidth * scale,
-      sourceHeight * scale,
-    );
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      canvas.toBlob(
-        (value) => value ? resolve(value) : reject(new Error("图片转换失败")),
-        "image/jpeg",
-        0.9,
+    try {
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("浏览器不支持图片处理");
+      context.translate(width / 2, height / 2);
+      context.rotate((rotation * Math.PI) / 180);
+      context.drawImage(
+        source,
+        Math.round(source.width * crop.x),
+        Math.round(source.height * crop.y),
+        sourceWidth,
+        sourceHeight,
+        (-sourceWidth * scale) / 2,
+        (-sourceHeight * scale) / 2,
+        sourceWidth * scale,
+        sourceHeight * scale,
       );
-    });
-    return {
-      file: new File([blob], input.file.name.replace(/\.[^.]+$/u, "") + ".jpg", { type: "image/jpeg" }),
-      width,
-      height,
-    };
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (value) => value ? resolve(value) : reject(new Error("图片转换失败")),
+          "image/jpeg",
+          0.9,
+        );
+      });
+      return {
+        file: new File([blob], input.file.name.replace(/\.[^.]+$/u, "") + ".jpg", { type: "image/jpeg" }),
+        width,
+        height,
+      };
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
   } finally {
     source.close();
   }

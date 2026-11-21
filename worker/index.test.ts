@@ -1473,4 +1473,164 @@ describe("Cloudflare Worker", () => {
     expect(health.headers.get("x-content-type-options")).toBe("nosniff");
     expect(health.headers.get("cache-control")).toBe("no-store");
   });
+
+  it("强制改密账号（must_change_password=1）访问业务 API 返回 403 PASSWORD_CHANGE_REQUIRED，访问首页 302 跳到改密页", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "teacher-must-change",
+            username: "teacher",
+            role: "teacher",
+            must_change_password: 1,
+            expires_at: Date.now() + 60_000,
+          } : null),
+        })),
+      })),
+    };
+    const env = workerEnv(() => new Response("asset"), database);
+
+    const apiResponse = await worker.fetch(new Request("https://grader.workers.dev/api/reviews", {
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    }), env as never);
+    expect(apiResponse.status).toBe(403);
+    await expect(apiResponse.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "PASSWORD_CHANGE_REQUIRED" },
+    });
+
+    const htmlResponse = await worker.fetch(new Request("https://grader.workers.dev/", {
+      headers: { cookie: "__Host-zuowen_session=session-token", accept: "text/html" },
+    }), env as never);
+    expect(htmlResponse.status).toBe(302);
+    expect(htmlResponse.headers.get("location")).toBe("https://grader.workers.dev/change-password");
+  });
+
+  it("设置接口更换 baseUrl 域名而未重填密钥时拒绝复用旧密钥，且拦截生产环境非 HTTPS 或内网地址", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "admin-1",
+            username: "admin",
+            role: "admin",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM settings") ? {
+            base_url: "https://api.deepseek.com",
+            encrypted_api_key: "sealed-existing",
+          } : null),
+        })),
+      })),
+    };
+    const upstream = vi.spyOn(globalThis, "fetch");
+    const env = Object.assign(workerEnv(() => new Response("asset"), database), {
+      CONTENT_AI_API_KEY: "env-secret",
+    });
+
+    const exfilAttempt = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({ baseUrl: "https://attacker.example/v1", model: "probe" }),
+    }), env as never);
+    expect(exfilAttempt.status).toBe(400);
+    await expect(exfilAttempt.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AI_SETTINGS_INCOMPLETE" },
+    });
+    expect(upstream).not.toHaveBeenCalled();
+
+    const ssrfAttempt = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token", "content-type": "application/json" },
+      body: JSON.stringify({ baseUrl: "https://127.0.0.1:8080/v1", model: "probe", apiKey: "sk-new" }),
+    }), env as never);
+    expect(ssrfAttempt.status).toBe(400);
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
+  it("畸形百分号编码路径返回 400 VALIDATION_ERROR，不抛出未捕获 URIError", async () => {
+    const database = authenticatedDatabase();
+    const response = await worker.fetch(new Request("https://grader.workers.dev/api/reviews/%E0%A4%A", {
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    }), workerEnv(() => new Response("asset"), database) as never);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "VALIDATION_ERROR" },
+    });
+  });
+
+  it("图片上传拦截伪造文件头与超过 12MB 的整篇总体积，不在 R2 残留对象", async () => {
+    const database = authenticatedDatabase();
+    const files = { put: vi.fn().mockResolvedValue(undefined), delete: vi.fn().mockResolvedValue(undefined) };
+    const env = Object.assign(workerEnv(() => new Response("asset"), database), { FILES: files });
+
+    const fakeJpgForm = new FormData();
+    fakeJpgForm.set("expectedRevision", "1");
+    fakeJpgForm.set("privacyConfirmed", "true");
+    fakeJpgForm.set("privacyNoticeVersion", "2026-07-22");
+    fakeJpgForm.set("imageMeta", JSON.stringify([{ width: 800, height: 1000 }]));
+    fakeJpgForm.append("images", new File(["not-a-real-jpeg"], "fake.jpg", { type: "image/jpeg" }));
+    const fakeReq = new Request("https://grader.workers.dev/api/reviews/review-1/images", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    });
+    vi.spyOn(fakeReq, "formData").mockResolvedValue(fakeJpgForm);
+
+    const fakeRes = await worker.fetch(fakeReq, env as never);
+    expect(fakeRes.status).toBe(422);
+    expect(files.put).not.toHaveBeenCalled();
+
+    const oversizedChunk = new Uint8Array(7 * 1024 * 1024);
+    oversizedChunk[0] = 0xff;
+    oversizedChunk[1] = 0xd8;
+    oversizedChunk[2] = 0xff;
+    const bigForm = new FormData();
+    bigForm.set("expectedRevision", "1");
+    bigForm.set("privacyConfirmed", "true");
+    bigForm.set("privacyNoticeVersion", "2026-07-22");
+    bigForm.set("imageMeta", JSON.stringify([{ width: 800, height: 1000 }, { width: 800, height: 1000 }]));
+    bigForm.append("images", new File([oversizedChunk], "p1.jpg", { type: "image/jpeg" }));
+    bigForm.append("images", new File([oversizedChunk], "p2.jpg", { type: "image/jpeg" }));
+    const bigReq = new Request("https://grader.workers.dev/api/reviews/review-1/images", {
+      method: "POST",
+      headers: { cookie: "__Host-zuowen_session=session-token" },
+    });
+    vi.spyOn(bigReq, "formData").mockResolvedValue(bigForm);
+
+    const bigRes = await worker.fetch(bigReq, env as never);
+    expect(bigRes.status).toBe(422);
+    await expect(bigRes.json()).resolves.toMatchObject({
+      ok: false,
+      error: { code: "AI_INLINE_IMAGE_TOO_LARGE" },
+    });
+    expect(files.put).not.toHaveBeenCalled();
+  });
+
+  it("scheduled 定时任务每分钟执行超时回收，但仅在 15 分钟整点执行全表维护清理", async () => {
+    const recoverSpy = vi.spyOn(D1AnalysisJobs.prototype, "recoverExpired").mockResolvedValue(0);
+    const maintenanceModule = await import("../src/cloudflare/d1-maintenance");
+    const maintenanceSpy = vi.spyOn(maintenanceModule, "runCloudMaintenance").mockResolvedValue({
+      emptyDraftsDeleted: 0,
+      loginChallengesDeleted: 0,
+      sessionsDeleted: 0,
+      loginAttemptsDeleted: 0,
+    });
+    const database = authenticatedDatabase();
+
+    // Minute 7: recover runs, maintenance skipped
+    await worker.scheduled({ scheduledTime: 7 * 60_000 } as ScheduledController, { DB: database } as never);
+    expect(recoverSpy).toHaveBeenCalledTimes(1);
+    expect(maintenanceSpy).not.toHaveBeenCalled();
+
+    // Minute 15: both recover and maintenance run
+    await worker.scheduled({ scheduledTime: 15 * 60_000 } as ScheduledController, { DB: database } as never);
+    expect(recoverSpy).toHaveBeenCalledTimes(2);
+    expect(maintenanceSpy).toHaveBeenCalledTimes(1);
+
+    recoverSpy.mockRestore();
+    maintenanceSpy.mockRestore();
+  });
 });

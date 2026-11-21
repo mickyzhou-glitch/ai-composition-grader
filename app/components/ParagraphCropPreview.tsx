@@ -28,6 +28,30 @@ interface PreviewState {
   error: string;
 }
 
+interface PreviewInputSnapshot {
+  reviewId: string;
+  paragraphNumber: number;
+  images: Array<{ id: number; position: number }>;
+  segments: Segment[];
+}
+
+const inflightPageBlobs = new Map<string, Promise<Blob>>();
+
+function fetchPageBlob(url: string, errorMessage: string): Promise<Blob> {
+  const existing = inflightPageBlobs.get(url);
+  if (existing) return existing;
+  const request = fetch(url)
+    .then((response) => {
+      if (!response.ok) throw new Error(errorMessage);
+      return response.blob();
+    })
+    .finally(() => {
+      inflightPageBlobs.delete(url);
+    });
+  inflightPageBlobs.set(url, request);
+  return request;
+}
+
 export function ParagraphCropPreview({
   reviewId,
   paragraphNumber,
@@ -39,25 +63,31 @@ export function ParagraphCropPreview({
   images: CropPreviewImage[];
   segments: Segment[];
 }) {
-  const previewKey = JSON.stringify({ reviewId, paragraphNumber, images, segments });
+  const previewKey = JSON.stringify({
+    reviewId,
+    paragraphNumber,
+    images: images.map(({ id, position }) => ({ id, position })),
+    segments,
+  });
   const [preview, setPreview] = useState<PreviewState | null>(null);
 
   useEffect(() => {
     let active = true;
     const objectUrls: string[] = [];
+    const snapshot = JSON.parse(previewKey) as PreviewInputSnapshot;
 
-    void Promise.all(segments.map(async (segment) => {
-      const image = images.find(({ position }) => position === segment.pageIndex);
-      if (!image) throw new Error(`第 ${paragraphNumber} 段第 ${segment.pageIndex + 1} 页裁图失败`);
-      const response = await fetch(
-        `/api/reviews/${encodeURIComponent(reviewId)}/files?imageId=${image.id}&variant=ai`,
+    void Promise.all(snapshot.segments.map(async (segment) => {
+      const errorMessage = `第 ${snapshot.paragraphNumber} 段第 ${segment.pageIndex + 1} 页裁图失败`;
+      const image = snapshot.images.find(({ position }) => position === segment.pageIndex);
+      if (!image) throw new Error(errorMessage);
+      const blob = await fetchPageBlob(
+        `/api/reviews/${encodeURIComponent(snapshot.reviewId)}/files?imageId=${image.id}&variant=ai`,
+        errorMessage,
       );
-      if (!response.ok) {
-        throw new Error(`第 ${paragraphNumber} 段第 ${segment.pageIndex + 1} 页裁图失败`);
-      }
-      const bitmap = await createImageBitmap(await response.blob());
+      const bitmap = await createImageBitmap(blob);
       try {
         const crop = await cropImageRegion(bitmap, segment);
+        if (!active) return { pageIndex: segment.pageIndex, url: "", width: crop.width, height: crop.height };
         const url = URL.createObjectURL(new Blob([crop.bytes.slice().buffer], {
           type: "image/png",
         }));
@@ -75,7 +105,7 @@ export function ParagraphCropPreview({
         crops: [],
         error: caught instanceof Error
           ? caught.message
-          : `第 ${paragraphNumber} 段裁图失败`,
+          : `第 ${snapshot.paragraphNumber} 段裁图失败`,
       });
     });
 
@@ -83,7 +113,7 @@ export function ParagraphCropPreview({
       active = false;
       objectUrls.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [images, paragraphNumber, previewKey, reviewId, segments]);
+  }, [previewKey]);
 
   const crops = preview?.key === previewKey ? preview.crops : [];
   const error = preview?.key === previewKey ? preview.error : "";

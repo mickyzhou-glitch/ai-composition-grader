@@ -99,4 +99,35 @@ describe("D1ImageWriter", () => {
       sqlite.close();
     }
   });
+
+  it("cancels queued or running analysis jobs when images are replaced so new analysis can start", async () => {
+    const sqlite = migratedDatabase();
+    try {
+      const db = d1Shim(sqlite);
+      sqlite.prepare("INSERT INTO users (id, username, password_hash, role, must_change_password, disabled_at, created_at, updated_at) VALUES ('owner-1', 'owner-1', 'hash', 'teacher', 0, NULL, 1, 1)").run();
+      sqlite.prepare(`
+        INSERT INTO reviews (id, owner_id, status, student_name, class_name, config, revision, image_revision, analysis_run_id, created_at, updated_at)
+        VALUES ('review-active', 'owner-1', 'analyzing', '小明', '', ?, 4, 1, 'job-old', 100, 100)
+      `).run(CONFIG);
+      sqlite.prepare(`
+        INSERT INTO analysis_jobs (id, review_id, owner_id, mode, status, attempt, available_at, progress_stage, created_at)
+        VALUES ('job-old', 'review-active', 'owner-1', 'full', 'running', 1, 100, 'reading_images', 100)
+      `).run();
+
+      const writer = new D1ImageWriter(db);
+      await writer.replace("owner-1", "review-active", 4, [{
+        originalName: "retake.jpg",
+        mimeType: "image/jpeg",
+        width: 800,
+        height: 1200,
+        path: "images/retake.jpg",
+      }], true);
+
+      const jobRow = sqlite.prepare("SELECT status, finished_at FROM analysis_jobs WHERE id = 'job-old'").get() as { status: string; finished_at: number | null };
+      expect(jobRow.status).toBe("canceled");
+      expect(jobRow.finished_at).not.toBeNull();
+    } finally {
+      sqlite.close();
+    }
+  });
 });

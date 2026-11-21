@@ -82,6 +82,6 @@ export async function completionWithFinish(
   } catch (error) {
     if (error instanceof AiAdapterError) throw error;
     const { upstreamStatus, upstreamCode, message } = describeUpstreamAiError(error);
-    throw new AiAdapterError("AI_REQUEST_FAILED", message, 502, upstreamStatus, upstreamCode);
+    throw new AiAdapterError("AI_REQUEST_FAILED", message, 502, upstreamStatus, upstreamCode, { cause: error });
   }
 }

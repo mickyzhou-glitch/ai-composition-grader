@@ -23,4 +23,12 @@ describe("analysis failure reasons", () => {
     const error = new AiAdapterError("AI_INVALID_RESPONSE", "无效", 502, undefined, "schema_report_unrecognized_keys");
     expect(analysisFailureCode(error)).toBe("AI_INVALID_RESPONSE_schema_report_unrecognized_keys");
   });
+
+  it("识别被 AiAdapterError 包装的超时中止以及图片读取类已知错误码", () => {
+    const timeoutCause = Object.assign(new Error("The operation timed out"), { name: "TimeoutError" });
+    const wrappedTimeout = new AiAdapterError("AI_REQUEST_FAILED", "请求超时", 502, undefined, undefined, { cause: timeoutCause });
+    expect(analysisFailureCode(wrappedTimeout)).toBe("ANALYSIS_ABORTED");
+    expect(analysisFailureCode(new Error("AI_IMAGE_UNAVAILABLE"))).toBe("AI_IMAGE_UNAVAILABLE");
+    expect(analysisFailureCode(new Error("AI_INLINE_IMAGE_TOO_LARGE"))).toBe("AI_INLINE_IMAGE_TOO_LARGE");
+  });
 });

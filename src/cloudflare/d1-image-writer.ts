@@ -54,6 +54,10 @@ export class D1ImageWriter {
           privacy_consent_version = COALESCE(privacy_consent_version, ?), privacy_consented_at = COALESCE(privacy_consented_at, ?), updated_at = ?
         WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
       `).bind(PRIVACY_NOTICE_VERSION, now, now, reviewId, ownerId, expectedRevision),
+      this.database.prepare(`
+        UPDATE analysis_jobs SET status = 'canceled', finished_at = ?
+        WHERE review_id = ? AND owner_id = ? AND status IN ('queued', 'running') AND ${replacedGuard}
+      `).bind(now, reviewId, ownerId, ...guardBindings),
       this.database.prepare(`DELETE FROM annotations WHERE review_id = ? AND ${replacedGuard}`).bind(reviewId, ...guardBindings),
       this.database.prepare(`DELETE FROM review_images WHERE review_id = ? AND ${replacedGuard}`).bind(reviewId, ...guardBindings),
       ...images.map((image, position) => this.database.prepare(`

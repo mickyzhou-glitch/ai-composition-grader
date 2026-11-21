@@ -1,17 +1,17 @@
 import { isLegacyEvaluationReport } from "@/src/domain/contracts";
 
 import { apiFetch } from "./api";
-import {
-  createReviewPdf,
-  markReviewExported,
-  triggerFileDownload,
-} from "./pdf-download";
 import type { ReviewView } from "./types";
 
 export type ExportFormat = "pdf" | "docx";
 
 const MEMORY_ERROR_MESSAGE = "生成文件时内存不足，请减少单次批量数量后重试";
 const EXPORT_CONCURRENCY = 4;
+const EXPORT_CHECK_BATCH_SIZE = 20;
+
+async function loadPdfDownloadModule() {
+  return import("./pdf-download");
+}
 
 async function mapWithConcurrency<T, R>(
   items: readonly T[],
@@ -75,17 +75,23 @@ async function fetchReview(reviewId: string): Promise<ReviewView> {
 }
 
 async function assertReviewsExportable(reviews: ReviewView[]): Promise<void> {
-  await apiFetch<{ exportable: true }>("/api/reviews/export-check", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      reviews: reviews.map(({ id, revision }) => ({ id, revision })),
-    }),
-  });
+  for (let offset = 0; offset < reviews.length; offset += EXPORT_CHECK_BATCH_SIZE) {
+    const batch = reviews.slice(offset, offset + EXPORT_CHECK_BATCH_SIZE);
+    await apiFetch<{ exportable: true }>("/api/reviews/export-check", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        reviews: batch.map(({ id, revision }) => ({ id, revision })),
+      }),
+    });
+  }
 }
 
 async function createExportFile(review: ReviewView, format: ExportFormat): Promise<Blob> {
-  if (format === "pdf") return createReviewPdf(review);
+  if (format === "pdf") {
+    const { createReviewPdf } = await loadPdfDownloadModule();
+    return createReviewPdf(review);
+  }
   const { createReviewDocx } = await import("./docx-download");
   return createReviewDocx(review);
 }
@@ -114,6 +120,7 @@ export async function downloadReview(
     await assertReviewsExportable([review]);
     const filename = reviewFilename(review, format);
     const blob = await createExportFile(review, format);
+    const { triggerFileDownload, markReviewExported } = await loadPdfDownloadModule();
     triggerFileDownload(blob, filename);
     await markReviewExported(reviewId);
     return filename;
@@ -146,12 +153,18 @@ export async function downloadReviewArchive(
     }
     const filename = archiveFilename(format);
     const blob = await archive.generateAsync({ type: "blob", compression: "DEFLATE" });
+    const { triggerFileDownload, markReviewExported } = await loadPdfDownloadModule();
     triggerFileDownload(blob, filename);
-    await mapWithConcurrency(
+    const markOutcomes = await mapWithConcurrency(
       reviewIds,
       EXPORT_CONCURRENCY,
-      (reviewId) => markReviewExported(reviewId),
+      (reviewId) => markReviewExported(reviewId).then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
+      ),
     );
+    const firstMarkError = markOutcomes.find((outcome) => !outcome.ok);
+    if (firstMarkError && !firstMarkError.ok) throw firstMarkError.error;
     return filename;
   });
 }
@@ -182,8 +195,8 @@ export async function downloadLegacyCachedPdf(review: ReviewView): Promise<strin
   const response = await fetch(`/api/reviews/${encodeURIComponent(review.id)}/pdf`);
   if (!response.ok) throw new Error(`旧版 PDF 下载失败（${response.status}）`);
   const filename = responseFilename(response, review.pdfFilename);
-  const rawBlob = await response.blob();
-  const blob = new Blob([await rawBlob.arrayBuffer()], { type: rawBlob.type });
+  const blob = await response.blob();
+  const { triggerFileDownload } = await loadPdfDownloadModule();
   triggerFileDownload(blob, filename);
   return filename;
 }

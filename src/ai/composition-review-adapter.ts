@@ -818,6 +818,9 @@ export class CompositionReviewAdapter {
       const previousEssay = previous
         ? (previous.report.rewrittenEssay?.length ? previous.report.rewrittenEssay : deriveEssayFromParagraphReviews(previous.report.paragraphReviews))
         : [];
+      if (previous && !previous.report.rewrittenEssay?.length) {
+        previous.report.rewrittenEssay = previousEssay;
+      }
       const lengthFailures = previous ? teacherRewriteLengthFailures(previousEssay, readReviewGuidance(safeInput.teacherGuidance).constraints) : [];
       const affectedParagraphs = [...new Set(lengthFailures.flatMap((failure) => failure.indices))];
       const repairedResult = await completionJsonWithFinish(client, {

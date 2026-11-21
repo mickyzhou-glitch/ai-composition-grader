@@ -293,7 +293,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       setError("");
       const loadFinalResult = async () => {
         const result = await loadReview(false, false);
-        if (canceled) return;
+        if (canceled || (!result.ok && isAbortError(result.error))) return;
         if (result.ok) {
           refreshedTerminalJobRef.current = terminalKey;
           setLoadingAnalysisResult(false);
@@ -328,8 +328,8 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       return;
     }
     let polling = false;
-    const timer = window.setInterval(() => {
-      if (polling) return;
+    const pollOnce = () => {
+      if (polling || document.visibilityState === "hidden") return;
       polling = true;
       void loadJob().catch((caught) => {
         if (mountedRef.current && !isAbortError(caught)) {
@@ -338,8 +338,16 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       }).finally(() => {
         polling = false;
       });
-    }, 1500);
-    return () => window.clearInterval(timer);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") pollOnce();
+    };
+    const timer = window.setInterval(pollOnce, 1500);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [analysisJob, analysisResultRetry, loadJob, loadReview]);
 
   useEffect(() => {
@@ -398,7 +406,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
   }
 
   function changeStudentName(next: string) {
-    if (report && !isLegacyEvaluationReport(report)) return;
+    if (!editableReport) return;
     if (analysisJob?.status === "queued" || analysisJob?.status === "running") return;
     invalidateLoad();
     setStudentName(next);
@@ -666,12 +674,16 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         images: uploaded.images,
         status: "draft",
         report: null,
+        ocr: null,
+        reportStale: false,
+        analysisFailure: undefined,
         annotations: [],
         revision: uploaded.revision,
       } : current);
       setReport(null);
       setAnnotations([]);
       setActivePage(0);
+      setActiveView("report");
       setDirty(false);
       setNotice("作文图片已压缩优化并替换，可重新开始 AI 分析。");
     } catch (caught) {
@@ -782,7 +794,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
                 maxLength={50}
                 placeholder="请输入学生姓名"
                 value={studentName}
-                disabled={busy !== null || analysisActive || !editableLegacyReport}
+                disabled={busy !== null || analysisActive || !editableReport}
                 onChange={(event) => changeStudentName(event.target.value)}
               />
             </label>
