@@ -25,7 +25,7 @@ const PAGE_INSET = 8;
 const IMAGE_TEXT_GAP = 10;
 const BOX_GAP = 6;
 const BOX_PADDING = 7;
-const MAX_TEXT_PT = 10.5;
+export const MAX_TEXT_PT = 12;
 const MIN_TEXT_PT = 7;
 const FONT_STEP_PT = 0.25;
 const TEXT_COLOR = "#000000";
@@ -504,23 +504,82 @@ function drawTextBox(
   }
 }
 
-async function drawPdfPage(
+function splitSinglePhotoPdfParagraphs(
+  context: CanvasRenderingContext2D,
+  paragraphs: ExportParagraph[],
+  regions: Rectangle[],
+): ExportParagraph[][] {
+  if (paragraphs.length <= 1) return [paragraphs];
+  if (layoutAtFontSize(context, paragraphs, regions, MAX_TEXT_PT)) {
+    return [paragraphs];
+  }
+  const chunks: ExportParagraph[][] = [];
+  let cursor = 0;
+  while (cursor < paragraphs.length) {
+    let end = cursor + 1;
+    while (
+      end < paragraphs.length
+      && layoutAtFontSize(context, paragraphs.slice(cursor, end + 1), regions, MAX_TEXT_PT)
+    ) {
+      end += 1;
+    }
+    chunks.push(paragraphs.slice(cursor, end));
+    cursor = end;
+  }
+  return chunks;
+}
+
+function paintPhotoAndBoxes(
   canvasPage: CanvasPage,
-  imageBlob: Blob,
-  page: PdfPage,
+  imageElement: HTMLImageElement,
+  imageRect: Rectangle,
+  regions: Rectangle[],
+  paragraphs: ExportParagraph[],
 ) {
   const { canvas, context } = canvasPage;
   paintPageBackground(context);
+  context.drawImage(imageElement, imageRect.x, imageRect.y, imageRect.width, imageRect.height);
+  const textBoxes = layoutTextBoxes(context, paragraphs, regions);
+  textBoxes.forEach((box) => drawTextBox(context, box));
+  return canvas;
+}
+
+async function appendPdfPhotoPages(
+  imageBlob: Blob,
+  page: PdfPage,
+  allowSinglePhotoOverflow: boolean,
+  writeCanvasPage: (canvas: HTMLCanvasElement) => void,
+) {
+  const firstCanvasPage = createCanvasPage();
+  let firstReleased = false;
   const loaded = await decodeImageBlob(imageBlob);
   try {
     const imageWidth = loaded.element.naturalWidth || page.image.width;
     const imageHeight = loaded.element.naturalHeight || page.image.height;
-    const image = maximumImagePlacement(imageWidth, imageHeight);
-    context.drawImage(loaded.element, image.x, image.y, image.width, image.height);
-    const textBoxes = layoutTextBoxes(context, page.paragraphs, availableTextRegions(image));
-    textBoxes.forEach((box) => drawTextBox(context, box));
-    return canvas;
+    const imageRect = maximumImagePlacement(imageWidth, imageHeight);
+    const regions = availableTextRegions(imageRect);
+    const chunks = allowSinglePhotoOverflow
+      ? splitSinglePhotoPdfParagraphs(firstCanvasPage.context, page.paragraphs, regions)
+      : [page.paragraphs];
+
+    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+      const currentCanvasPage = chunkIndex === 0 ? firstCanvasPage : createCanvasPage();
+      try {
+        const canvas = paintPhotoAndBoxes(
+          currentCanvasPage,
+          loaded.element,
+          imageRect,
+          regions,
+          chunks[chunkIndex]!,
+        );
+        writeCanvasPage(canvas);
+      } finally {
+        releaseCanvas(currentCanvasPage.canvas);
+        if (chunkIndex === 0) firstReleased = true;
+      }
+    }
   } finally {
+    if (!firstReleased) releaseCanvas(firstCanvasPage.canvas);
     URL.revokeObjectURL(loaded.objectUrl);
   }
 }
@@ -584,24 +643,28 @@ export async function createReviewPdf(review: ReviewView): Promise<Blob> {
   ]);
   const pdf = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4", compress: true });
   pdf.setProperties({ title: reviewPdfTitle(review) });
+  let writtenPages = 0;
+  const allowSinglePhotoOverflow = pages.length === 1;
   for (let index = 0; index < pages.length; index += 1) {
-    const canvasPage = createCanvasPage();
-    try {
-      const canvas = await drawPdfPage(canvasPage, imageBlobs[index]!, pages[index]);
-      if (index > 0) pdf.addPage("a4", "landscape");
-      pdf.addImage(
-        canvas.toDataURL("image/jpeg", 0.97),
-        "JPEG",
-        0,
-        0,
-        PDF_WIDTH,
-        PDF_HEIGHT,
-        undefined,
-        "FAST",
-      );
-    } finally {
-      releaseCanvas(canvasPage.canvas);
-    }
+    await appendPdfPhotoPages(
+      imageBlobs[index]!,
+      pages[index]!,
+      allowSinglePhotoOverflow,
+      (canvas) => {
+        if (writtenPages > 0) pdf.addPage("a4", "landscape");
+        writtenPages += 1;
+        pdf.addImage(
+          canvas.toDataURL("image/jpeg", 0.97),
+          "JPEG",
+          0,
+          0,
+          PDF_WIDTH,
+          PDF_HEIGHT,
+          undefined,
+          "FAST",
+        );
+      },
+    );
   }
   if (rewrittenEssay.length) {
     for (const canvas of drawRewrittenEssayPages(rewrittenEssay)) {

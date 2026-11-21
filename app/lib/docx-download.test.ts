@@ -7,11 +7,11 @@ import {
   ACCENT3_BASE_HEX,
   ACCENT3_LIGHTER_60_TINT,
   BOX_FILL_HEX,
-  chooseBoxHalfPoints,
+  BOX_HALF_POINTS,
   createReviewDocx,
+  splitSingleImageParagraphs,
 } from "./docx-download";
-import type { ExportParagraph } from "./export-report-content";
-import type { ExportReviewSource } from "./export-report-content";
+import type { ExportParagraph, ExportReviewSource } from "./export-report-content";
 
 const PNG_BYTES = Uint8Array.from(
   atob("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="),
@@ -522,7 +522,7 @@ describe("Word 逐段批改文档", () => {
     expect(boxes[1]).toContain("经过。");
   });
 
-  it("框内容过长时缩小字号并保留全文", async () => {
+  it("黄色批注框统一固定小四（12pt），框内容过长时不再缩小字号并保留全文", async () => {
     installBrowserExport();
     const review = fixture();
     const revised = `我终于走上台。${"灯光一直很亮，我还是迈了出去。".repeat(80)}`;
@@ -547,16 +547,71 @@ describe("Word 逐段批改文档", () => {
         revisedText: revised,
       }],
     };
-    const paragraph: ExportParagraph = {
-      suggestions: [{ advice: "写清迈步。" }],
-      revisionRuns: [{ text: revised, changed: true }],
-    };
-    const halfPoints = chooseBoxHalfPoints([paragraph]);
     const { documentXml } = await unpack(review);
 
-    expect(halfPoints).toBeLessThan(21);
+    expect(BOX_HALF_POINTS).toBe(24);
     expect(documentXml).toContain(revised);
-    expect(documentXml).toContain(`<w:sz w:val="${halfPoints}"`);
-    expect(documentXml).not.toContain('<w:sz w:val="21"');
+    expect(documentXml).toContain('<w:sz w:val="24"');
+    expect(documentXml).not.toMatch(/<w:sz w:val="(?:16|17|18|19|20|21)"/u);
+  });
+
+  it("原文图片只有一张且小四字号下批注框超出一页时，挪到下一页并在左侧再贴一张原文图片", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const paragraphCount = 5;
+    const originals = Array.from({ length: paragraphCount }, (_, index) => `原文第${index + 1}段内容。`);
+    const revisedParagraphs = Array.from(
+      { length: paragraphCount },
+      (_, index) => `第${index + 1}段改后：${"窗外寒风呼呼地刮，栗老师搬了把椅子坐在我旁边，俯身在书桌旁耐心地一句一句讲给我听。".repeat(4)}`,
+    );
+    review.images = [{ id: 11, position: 0, width: 1200, height: 1600, mimeType: "image/png" }];
+    review.ocr = {
+      version: 2,
+      ocrRevision: 1,
+      editedAt: null,
+      pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+      paragraphs: originals.map((text, index) => ({
+        id: `paragraph-${index + 1}`,
+        paragraphIndex: index,
+        text,
+        segments: [{ pageIndex: 0, x: 0.1, y: 0.08 + index * 0.15, width: 0.6, height: 0.1 }],
+      })),
+    };
+    review.report = {
+      ...(review.report as object),
+      paragraphReviews: originals.map((_, index) => ({
+        paragraphId: `paragraph-${index + 1}`,
+        suggestions: [
+          { advice: `补充第 ${index + 1} 段人物动作与环境细节描写，突出情感转折。` },
+          { advice: `增加第 ${index + 1} 段神态刻画与光影呼应，让画面更生动具体。` },
+        ],
+        revisedText: revisedParagraphs[index]!,
+      })),
+    };
+
+    const exportParagraphs: ExportParagraph[] = revisedParagraphs.map((text, index) => ({
+      suggestions: [
+        { advice: `补充第 ${index + 1} 段人物动作与环境细节描写，突出情感转折。` },
+        { advice: `增加第 ${index + 1} 段神态刻画与光影呼应，让画面更生动具体。` },
+      ],
+      revisionRuns: [{ text, changed: true }],
+    }));
+    const chunks = splitSingleImageParagraphs(exportParagraphs);
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const { documentXml } = await unpack(review);
+    const photoTables = [...documentXml.matchAll(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/gu)]
+      .filter((grid) => (grid[0].match(/<w:gridCol\b/gu) ?? []).length === 2);
+    const drawings = documentXml.match(/descr="第 1 页作文原图"/gu) ?? [];
+    const cells = documentXml.split(/<w:tc[\s>]/u).slice(1);
+    const boxes = cells.filter((cell) => cell.includes("改后全段："));
+
+    expect(photoTables).toHaveLength(chunks.length);
+    expect(drawings).toHaveLength(chunks.length);
+    expect(documentXml.match(/<w:br w:type="page"\/>/gu)).toHaveLength(chunks.length - 1);
+    expect(boxes).toHaveLength(paragraphCount);
+    revisedParagraphs.forEach((text) => expect(documentXml).toContain(text));
+    expect(documentXml).toContain('<w:sz w:val="24"');
+    expect(documentXml).not.toMatch(/<w:sz w:val="(?:16|17|18|19|20|21)"/u);
   });
 });

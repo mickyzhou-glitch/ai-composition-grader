@@ -243,4 +243,54 @@ describe("Word 与 PDF 导出文本", () => {
       essay.forEach((text) => expect(docxText).toContain(text));
     }
   });
+
+  it("单张原图多段长批注跨页复贴原图时，docx 与 PDF 文本完全一致", async () => {
+    const paintedText = installBrowser();
+    const originals = Array.from({ length: 5 }, (_, index) => `原文第${index + 1}段。`);
+    const revisedList = Array.from(
+      { length: 5 },
+      (_, index) => `第${index + 1}段改后：${"窗外寒风呼呼地刮，栗老师俯身在书桌旁一句一句讲给我听。".repeat(5)}`,
+    );
+    const source: ExportReviewSource = {
+      ...review(),
+      images: [{ id: 11, position: 0, width: 1200, height: 1600, mimeType: "image/png" }],
+      ocr: {
+        version: 2,
+        ocrRevision: 1,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+        paragraphs: originals.map((text, index) => ({
+          id: `paragraph-${index + 1}`,
+          paragraphIndex: index,
+          text,
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.08 + index * 0.15, width: 0.6, height: 0.1 }],
+        })),
+      },
+      report: {
+        version: 2,
+        themeFit: "fits",
+        themeReason: "切题",
+        personalizedComment: "真实",
+        painPoints: [],
+        commonIssues: [],
+        revisionSuggestions: [],
+        grade: "A",
+        diagnostics,
+        paragraphReviews: originals.map((_, index) => ({
+          paragraphId: `paragraph-${index + 1}`,
+          suggestions: [{ advice: `补充第 ${index + 1} 段动作与神态细节描写。` }],
+          revisedText: revisedList[index]!,
+        })),
+        parentFeedbacks: [],
+      },
+    };
+    const measure = (text: string) => text.length * 8;
+
+    await createReviewPdf(source as never);
+    const pdfText = paintedText.join("");
+    const docxText = await docxVisibleText(source);
+
+    expect(withoutEssayLayout(docxText)).toBe(withoutEssayLayout(pdfText));
+    expect(withoutEssayLayout(docxText)).toBe(withoutEssayLayout(visibleExportText(buildExportReportContent(source), measure)));
+  });
 });

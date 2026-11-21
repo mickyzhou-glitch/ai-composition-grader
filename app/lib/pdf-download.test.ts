@@ -162,9 +162,9 @@ describe("PDF 文件下载", () => {
     expect(pdfMock.addPage).not.toHaveBeenCalled();
     expect(context.drawImage).toHaveBeenCalled();
     expect(paintedRects).toContainEqual({ color: "#e7d4a8" });
-    expect(paintedText.find(({ text }) => text.includes("补充听觉"))).toMatchObject({ color: "#c00000" });
+    expect(paintedText.find(({ text }) => text.includes("补充听觉"))).toMatchObject({ color: "#c00000", font: expect.stringContaining("12px") });
     expect(paintedText.some(({ text }) => text.includes("动作略快") || text.includes("我听见急促的呼吸声"))).toBe(false);
-    expect(paintedText.find(({ text }) => text.includes("终于"))).toMatchObject({ color: "#1f4e78", font: expect.stringContaining("LXGW WenKai") });
+    expect(paintedText.find(({ text }) => text.includes("终于"))).toMatchObject({ color: "#1f4e78", font: expect.stringContaining('12px "LXGW WenKai"') });
     expect(strokedLines).toContainEqual({ color: "#1f4e78" });
     expect(paintedText.some(({ text }) => text.includes("慢慢"))).toBe(false);
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/files?imageId=11&variant=original");
@@ -313,6 +313,111 @@ describe("PDF 文件下载", () => {
     await markReviewExported("review-1");
 
     expect(fetchMock).toHaveBeenCalledWith("/api/reviews/review-1/exported", { method: "POST" });
+  });
+
+  it("原文图片只有一张且小四字号下批注框超出一页时，自动分页并在下一页再画一张原图，保持小四字号", async () => {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load: vi.fn(async () => []) },
+    });
+    const paintedText: Array<{ text: string; font: string }> = [];
+    const context = {
+      fillStyle: "",
+      strokeStyle: "",
+      font: "",
+      textAlign: "left",
+      textBaseline: "top",
+      lineWidth: 1,
+      beginPath: vi.fn(),
+      drawImage: vi.fn(),
+      lineTo: vi.fn(),
+      moveTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      scale: vi.fn(),
+      fillRect: vi.fn(),
+      stroke: vi.fn(),
+      measureText(text: string) {
+        const sizeMatch = /(\d+(?:\.\d+)?)px/u.exec(this.font);
+        const fontSize = sizeMatch ? Number(sizeMatch[1]) : 12;
+        return { width: Array.from(text).length * fontSize };
+      },
+      fillText(text: string) {
+        paintedText.push({ text, font: this.font });
+      },
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,page");
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:image"), revokeObjectURL: vi.fn() });
+    vi.stubGlobal("Image", class {
+      src = "";
+      naturalWidth = 1200;
+      naturalHeight = 1600;
+      async decode() { return undefined; }
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => (
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } })
+    ));
+
+    const paragraphCount = 5;
+    const originals = Array.from({ length: paragraphCount }, (_, index) => `原文第${index + 1}段。`);
+    const revisedList = Array.from(
+      { length: paragraphCount },
+      (_, index) => `第${index + 1}段改后：${"窗外寒风呼呼地刮，栗老师搬了把椅子坐在我旁边，耐心地一句一句讲给我听。".repeat(4)}`,
+    );
+    const review = {
+      id: "review-single-photo-overflow",
+      revision: 1,
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+      studentName: "小明",
+      config: { title: "温暖的灯光" },
+      images: [{ id: 11, position: 0, width: 1200, height: 1600 }],
+      ocr: {
+        version: 2,
+        ocrRevision: 1,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: originals.join(""), readable: true, warnings: [] }],
+        paragraphs: originals.map((text, index) => ({
+          id: `paragraph-${index + 1}`,
+          paragraphIndex: index,
+          text,
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.08 + index * 0.15, width: 0.6, height: 0.1 }],
+        })),
+      },
+      report: {
+        version: 2,
+        themeFit: "fits",
+        themeReason: "切题",
+        personalizedComment: "真实",
+        painPoints: [],
+        commonIssues: [],
+        revisionSuggestions: [],
+        grade: "A",
+        diagnostics: {
+          authenticityAndRelevance: { finding: "真实", action: "保留" },
+          materialAndDetails: { finding: "细节少", action: "补动作" },
+          structure: { finding: "完整", action: "保留" },
+          language: { finding: "通顺", action: "保留" },
+        },
+        paragraphReviews: originals.map((_, index) => ({
+          paragraphId: `paragraph-${index + 1}`,
+          suggestions: [
+            { advice: `补充第 ${index + 1} 段人物动作与环境细节描写。` },
+            { advice: `增加第 ${index + 1} 段神态刻画与光影呼应。` },
+          ],
+          revisedText: revisedList[index]!,
+        })),
+        parentFeedbacks: [],
+      },
+    };
+
+    await expect(createReviewPdf(review as never)).resolves.toBeInstanceOf(Blob);
+
+    expect(pdfMock.addImage.mock.calls.length).toBeGreaterThan(1);
+    expect(pdfMock.addPage).toHaveBeenCalledTimes(pdfMock.addImage.mock.calls.length - 1);
+    expect(context.drawImage).toHaveBeenCalledTimes(pdfMock.addImage.mock.calls.length);
+    const allPainted = paintedText.map(({ text }) => text).join("");
+    revisedList.forEach((text) => expect(allPainted).toContain(text));
+    paintedText.forEach(({ font }) => expect(font).toContain("12px"));
   });
 });
 

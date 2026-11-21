@@ -66,11 +66,22 @@ export const ACCENT3_BASE_HEX = "C39426";
 /** Word「浅色 60%」写进 themeTint / themeFillTint 的值：(1 - 0.6) × 255 = 0x66。 */
 export const ACCENT3_LIGHTER_60_TINT = "66";
 
+function points(value: number): number {
+  return value * 2;
+}
+
 const PAGE_SHORT_MM = 210;
 const PAGE_LONG_MM = 297;
 const MARGIN_MM = 12;
-const MAX_BOX_HALF_POINTS = 21;
-const MIN_BOX_HALF_POINTS = 16;
+/** 黄色批注框统一使用小四（12 磅 = 24 半磅），不再缩小字号。 */
+export const BOX_FONT_PT = 12;
+export const BOX_HALF_POINTS = points(BOX_FONT_PT);
+const BOX_GAP_TWIP = 120;
+const BOX_LINE_HEIGHT_TWIP = 368;
+const BOX_CHROME_TWIP = 300;
+const CELL_TRAILING_PARAGRAPH_TWIP = 320;
+const PAGE_BOTTOM_SAFETY_TWIP = 480;
+const EFFECTIVE_BOX_CHARS_PER_LINE = 31.5;
 const graphemeSegmenter = new Intl.Segmenter("zh-CN", { granularity: "grapheme" });
 
 const pageWidthTwip = convertMillimetersToTwip(PAGE_LONG_MM);
@@ -80,7 +91,6 @@ const contentWidthTwip = pageWidthTwip - marginTwip * 2;
 const contentHeightTwip = pageHeightTwip - marginTwip * 2;
 const leftColumnTwip = Math.round(contentWidthTwip * 0.46);
 const rightColumnTwip = contentWidthTwip - leftColumnTwip;
-const boxInnerWidthTwip = rightColumnTwip - 200;
 
 const noBorder: IBorderOptions = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
 const noBorders = {
@@ -98,10 +108,6 @@ const boxBorders = {
   left: boxBorder,
   right: boxBorder,
 };
-
-function points(value: number): number {
-  return value * 2;
-}
 
 function pageBreakParagraph() {
   return new Paragraph({ children: [new PageBreak()] });
@@ -214,35 +220,6 @@ function textRuns(text: string, style: ExportRunStyle, halfPoints: number, under
   }));
 }
 
-function graphemeCount(value: string) {
-  return Array.from(graphemeSegmenter.segment(value), () => 1).length;
-}
-
-function estimateBoxesHeight(paragraphs: ExportParagraph[], halfPoints: number, columnWidthTwip: number) {
-  const emTwip = halfPoints * 10;
-  const charsPerLine = Math.max(1, Math.floor((columnWidthTwip - 200) / emTwip));
-  const lineTwip = emTwip * 1.45;
-  return paragraphs.reduce((height, paragraph) => {
-    const text = exportParagraphRuns(paragraph).map((run) => run.text).join("");
-    const lines = text.split("\n").reduce((count, line) => (
-      count + Math.max(1, Math.ceil(graphemeCount(line) / charsPerLine))
-    ), 0);
-    return height + lines * lineTwip + 220;
-  }, 0);
-}
-
-export function chooseBoxHalfPoints(
-  paragraphs: ExportParagraph[],
-  columnWidthTwip = boxInnerWidthTwip,
-  availableHeightTwip = contentHeightTwip,
-) {
-  if (paragraphs.length === 0) return MAX_BOX_HALF_POINTS;
-  for (let half = MAX_BOX_HALF_POINTS; half > MIN_BOX_HALF_POINTS; half -= 1) {
-    if (estimateBoxesHeight(paragraphs, half, columnWidthTwip) <= availableHeightTwip) return half;
-  }
-  return MIN_BOX_HALF_POINTS;
-}
-
 /** 修改动作按换行拆成逐行，每行保留各自的划线片段；空行丢弃。 */
 function suggestionLines(runs: ExportTextRun[]) {
   const lines: ExportTextRun[][] = [[]];
@@ -261,6 +238,66 @@ function suggestionLines(runs: ExportTextRun[]) {
     .filter((line) => line.length > 0);
 }
 
+function lineEmWidth(value: string): number {
+  let total = 0;
+  for (const { segment } of graphemeSegmenter.segment(value)) {
+    const code = segment.codePointAt(0) ?? 0;
+    total += code >= 0x20 && code <= 0x7e ? 0.55 : 1;
+  }
+  return total;
+}
+
+function wrappedLineCount(value: string): number {
+  return Math.max(1, Math.ceil(lineEmWidth(value) / EFFECTIVE_BOX_CHARS_PER_LINE));
+}
+
+export function estimateBoxHeightTwip(paragraph: ExportParagraph): number {
+  const runs = exportParagraphRuns(paragraph);
+  const suggestions = runs.filter((run) => run.style === "suggestion");
+  if (suggestions.length === 0) return BOX_LINE_HEIGHT_TWIP;
+  const remainder = runs.filter((run) => run.style !== "suggestion");
+  const suggestionLineTotal = suggestionLines(suggestions).reduce(
+    (sum, line) => sum + wrappedLineCount(line.map((run) => run.text).join("")),
+    0,
+  );
+  const revisedText = remainder
+    .map((run) => (run.style === "changed" || run.style === "plain"
+      ? run.text.replace(/[\r\n\u2028\u2029]+/gu, "")
+      : run.text))
+    .join("");
+  const revisedLineTotal = wrappedLineCount(revisedText);
+  return (suggestionLineTotal + revisedLineTotal) * BOX_LINE_HEIGHT_TWIP + BOX_CHROME_TWIP;
+}
+
+/**
+ * 原文图片只有一张时，若小四字号下全部批注框超出一页高度，将超出的整框拆到后续页，
+ * 以便每一页左侧都再贴一张同一份作文原图。
+ */
+export function splitSingleImageParagraphs(
+  paragraphs: ExportParagraph[],
+  availableHeightTwip = contentHeightTwip - PAGE_BOTTOM_SAFETY_TWIP,
+): ExportParagraph[][] {
+  if (paragraphs.length <= 1) return [paragraphs];
+  const chunks: ExportParagraph[][] = [];
+  let current: ExportParagraph[] = [];
+  let usedTwip = CELL_TRAILING_PARAGRAPH_TWIP;
+
+  for (const paragraph of paragraphs) {
+    const boxHeight = estimateBoxHeightTwip(paragraph);
+    const gap = current.length > 0 ? BOX_GAP_TWIP : 0;
+    if (current.length > 0 && usedTwip + gap + boxHeight > availableHeightTwip) {
+      chunks.push(current);
+      current = [paragraph];
+      usedTwip = CELL_TRAILING_PARAGRAPH_TWIP + boxHeight;
+    } else {
+      current.push(paragraph);
+      usedTwip += gap + boxHeight;
+    }
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
 /** 文本框里的段落：显式左对齐 + 带 lineRule 的行距，不继承 WPS 默认的两端对齐。 */
 function boxTextParagraph(children: TextRun[], before: number, after: number) {
   return new Paragraph({
@@ -270,10 +307,18 @@ function boxTextParagraph(children: TextRun[], before: number, after: number) {
   });
 }
 
+function boxGapParagraph() {
+  return new Paragraph({
+    spacing: { before: 0, after: 0, line: BOX_GAP_TWIP, lineRule: LineRuleType.EXACT },
+  });
+}
+
 function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: number) {
   const runs = exportParagraphRuns(paragraph);
   const suggestions = runs.filter((run) => run.style === "suggestion");
   const remainder = runs.filter((run) => run.style !== "suggestion");
+  const singlePageBoxBudget = contentHeightTwip - PAGE_BOTTOM_SAFETY_TWIP - CELL_TRAILING_PARAGRAPH_TWIP;
+  const keepBoxTogether = estimateBoxHeightTwip(paragraph) <= singlePageBoxBudget;
   const children = suggestions.length
     ? [
       // 建议每条编号各占一个 w:p，不用 w:br 软换行：两端对齐的段落里，软换行前的一行
@@ -302,7 +347,7 @@ function paragraphBox(paragraph: ExportParagraph, width: number, halfPoints: num
     layout: TableLayoutType.FIXED,
     borders: boxBorders,
     rows: [new TableRow({
-      cantSplit: false,
+      cantSplit: keepBoxTogether,
       children: [new TableCell({
         width: { size: width, type: WidthType.DXA },
         shading: { type: ShadingType.CLEAR, fill: BOX_FILL_HEX },
@@ -329,11 +374,10 @@ function imageParagraph(bytes: Uint8Array, image: ExportImage) {
 }
 
 function photoTable(bytes: Uint8Array, page: ExportReportPage) {
-  const halfPoints = chooseBoxHalfPoints(page.paragraphs);
   const boxWidth = rightColumnTwip - 160;
   const boxes = page.paragraphs.flatMap((paragraph, index) => [
-    ...(index === 0 ? [] : [new Paragraph({ spacing: { before: 80 } })]),
-    paragraphBox(paragraph, boxWidth, halfPoints),
+    ...(index === 0 ? [] : [boxGapParagraph()]),
+    paragraphBox(paragraph, boxWidth, BOX_HALF_POINTS),
   ]);
   return new Table({
     width: { size: contentWidthTwip, type: WidthType.DXA },
@@ -398,9 +442,21 @@ function essayBlocks(paragraphs: readonly string[]) {
 
 async function documentChildren(review: ExportReviewSource, content: ExportReportContent) {
   const images = await Promise.all(content.pages.map((page) => loadOriginalImage(review.id, page.image)));
-  const children = content.pages.flatMap((page, index) => [
+  const pageSlices = content.pages.length === 1
+    ? splitSingleImageParagraphs(content.pages[0]!.paragraphs).map((paragraphs) => ({
+      bytes: images[0]!.bytes,
+      page: {
+        image: { ...content.pages[0]!.image, mimeType: images[0]!.mimeType },
+        paragraphs,
+      },
+    }))
+    : content.pages.map((page, index) => ({
+      bytes: images[index]!.bytes,
+      page: { ...page, image: { ...page.image, mimeType: images[index]!.mimeType } },
+    }));
+  const children = pageSlices.flatMap((slice, index) => [
     ...(index === 0 ? [] : [pageBreakParagraph()]),
-    photoTable(images[index].bytes, { ...page, image: { ...page.image, mimeType: images[index].mimeType } }),
+    photoTable(slice.bytes, slice.page),
   ]);
   if (content.rewrittenEssay.length === 0) return children;
   return [
