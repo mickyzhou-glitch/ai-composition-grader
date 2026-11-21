@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 
+import type { AssignmentGuidance } from "@/src/domain/assignment-guidance";
 import {
   MAX_TEXTBOOK_IMAGES,
-  MAX_TEXTBOOK_SOURCE_BYTES,
   MAX_TEXTBOOK_IMAGE_BYTES,
+  MAX_TEXTBOOK_SOURCE_BYTES,
   TEXTBOOK_IMAGE_TYPES,
-  type AssignmentGuidance,
-} from "@/src/domain/assignment-guidance";
+} from "@/src/domain/client-constants";
 import type { AssignmentConfig } from "@/src/domain/contracts";
 import { apiFetch, errorMessage } from "../lib/api";
 import { prepareImageForCloudUpload } from "../lib/image-upload-transform";

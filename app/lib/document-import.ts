@@ -1,4 +1,4 @@
-import { MAX_REVIEW_IMAGES } from "@/src/domain/contracts";
+import { MAX_REVIEW_IMAGES } from "@/src/domain/client-constants";
 
 export function validateDocumentFile(file: File): "pdf" | "docx" {
   const extension = file.name.split(".").pop()?.toLowerCase();

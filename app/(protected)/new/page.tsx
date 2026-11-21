@@ -6,8 +6,8 @@ import { useEffect, useRef, useState } from "react";
 import {
   MAX_REVIEW_IMAGES,
   PRIVACY_NOTICE_VERSION,
-  type AssignmentConfig,
-} from "@/src/domain/contracts";
+} from "@/src/domain/client-constants";
+import type { AssignmentConfig } from "@/src/domain/contracts";
 import { ClassInput } from "../../components/ClassInput";
 import { AppHeader } from "../../components/AppHeader";
 import { AsyncButton } from "../../components/AsyncButton";
@@ -350,8 +350,10 @@ export default function NewReviewPage() {
             <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">上传作文</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
             {importing ? <p role="status" className="document-import-notice">{importProgress}</p> : null}
             <fieldset className="upload-workspace" disabled={importing}>
-            <ClassInput value={className} onChange={setClassName} />
-            <label className="upload-student-name">学生姓名<input aria-label="学生姓名" maxLength={50} placeholder="请输入学生姓名" value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label>
+            <div className="upload-meta-grid">
+              <ClassInput value={className} onChange={setClassName} />
+              <label className="upload-student-name">学生姓名<input aria-label="学生姓名" maxLength={50} placeholder="请输入学生姓名" value={studentName} onChange={(event) => setStudentName(event.target.value)} /></label>
+            </div>
             <div className="upload-choices">
               <label className="upload-zone upload-zone--camera">使用手机相机拍照<input className="visually-hidden" aria-label="使用手机相机拍照" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" onChange={(event) => { addCameraFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /><span>拍摄一页后可继续拍下一页</span><small>将优先打开后置相机</small></label>
               <label className="upload-zone">从相册或文件选择<input className="visually-hidden" aria-label="选择作文图片" type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => { void chooseFiles(Array.from(event.target.files ?? [])); event.currentTarget.value = ""; }} /><span>选择 1 至 {MAX_REVIEW_IMAGES} 张图片</span><small>支持 JPG、PNG、WebP，单张不超过 20MB</small></label>

@@ -1,9 +1,12 @@
-import { normalizeAssignmentTitle } from "../reanalysis/contracts";
 import {
   classifyOpinion,
   paragraphLabelFromText,
   type OpinionCategory,
 } from "./standing-guidance";
+
+function normalizeAssignmentTitle(title: string): string {
+  return title.trim().replace(/\s+/gu, " ");
+}
 
 /** 一条原始意见（批量审核修改意见或退回意见）。 */
 export interface RuleSourceOpinion {

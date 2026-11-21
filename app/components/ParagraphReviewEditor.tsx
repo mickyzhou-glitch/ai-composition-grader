@@ -179,7 +179,7 @@ export function ParagraphReviewEditor({
 
               {showSuggestions ? <div className="paragraph-suggestion">
                 <h4>【修改动作】</h4>
-                <label>修改动作
+                <label><span className="visually-hidden">修改动作</span>
                   <textarea
                     aria-label={`第 ${paragraphNumber} 段修改动作`}
                     value={mergedParagraphAction(paragraphReview.suggestions)}
@@ -193,19 +193,21 @@ export function ParagraphReviewEditor({
                 </label>
               </div> : null}
 
-              <h4>【{revisionHeading}】</h4>
-              <label>{revisionLabel}
-                <textarea
-                  className="paragraph-revision-input"
-                  aria-label={`第 ${paragraphNumber} 段${revisionLabel}`}
-                  value={paragraphReview.revisedText}
-                  disabled={disabled || rewriting}
-                  onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
-                    ...current,
-                    revisedText: event.target.value,
-                  }), true)}
-                />
-              </label>
+              <div className="paragraph-revision-block">
+                <h4>【{revisionHeading}】</h4>
+                <label><span className="visually-hidden">{revisionLabel}</span>
+                  <textarea
+                    className="paragraph-revision-input"
+                    aria-label={`第 ${paragraphNumber} 段${revisionLabel}`}
+                    value={paragraphReview.revisedText}
+                    disabled={disabled || rewriting}
+                    onChange={(event) => updateParagraph(paragraphReview.paragraphId, (current) => ({
+                      ...current,
+                      revisedText: event.target.value,
+                    }), true)}
+                  />
+                </label>
+              </div>
               <RevisionPreview
                 runs={buildAdviceRevisionRuns(group.sourceText, paragraphReview.revisedText, paragraphReview.suggestions)}
                 sentenceHighlight

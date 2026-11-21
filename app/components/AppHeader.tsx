@@ -31,32 +31,34 @@ export function AppHeader({ compact = false, userRole }: { compact?: boolean; us
 
   return (
     <header className={compact ? "app-header app-header--compact" : "app-header"}>
-      <Link className="wordmark" href="/" aria-label="返回批改历史首页">
-        <span className="seal" aria-hidden="true">批</span>
-        <span>青藤未来作文批改助手</span>
-      </Link>
-      <nav className="header-actions" aria-label="主要操作">
-        <Link
-          className="button button--quiet nav-with-badge"
-          href="/opinions"
-          aria-label={pendingRules > 0 ? `长期批改规则（${pendingRules} 条待审批）` : "长期批改规则"}
-        >
-          长期批改规则
-          {pendingRules > 0 ? <span className="nav-badge" aria-hidden="true">{pendingRules > 99 ? "99+" : pendingRules}</span> : null}
+      <div className="app-header-inner">
+        <Link className="wordmark" href="/" aria-label="返回批改历史首页">
+          <span className="seal" aria-hidden="true">批</span>
+          <span>青藤未来作文批改助手</span>
         </Link>
-        <Link className="button button--primary" href="/new">新建作文批改</Link>
-        {role === "admin" ? <Link className="button button--quiet" href="/settings">设置</Link> : null}
-        <AsyncButton
-          className="button button--quiet"
-          type="button"
-          busy={loggingOut}
-          busyLabel="正在退出…"
-          onClick={() => void logout()}
-        >
-          退出登录
-        </AsyncButton>
-        {logoutError ? <span className="header-action-error" role="alert">{logoutError}</span> : null}
-      </nav>
+        <nav className="header-actions" aria-label="主要操作">
+          <Link
+            className="button button--quiet nav-with-badge"
+            href="/opinions"
+            aria-label={pendingRules > 0 ? `长期批改规则（${pendingRules} 条待审批）` : "长期批改规则"}
+          >
+            长期批改规则
+            {pendingRules > 0 ? <span className="nav-badge" aria-hidden="true">{pendingRules > 99 ? "99+" : pendingRules}</span> : null}
+          </Link>
+          {role === "admin" ? <Link className="button button--quiet" href="/settings">设置</Link> : null}
+          <Link className="button button--primary" href="/new">新建作文批改</Link>
+          <AsyncButton
+            className="button button--ghost"
+            type="button"
+            busy={loggingOut}
+            busyLabel="正在退出…"
+            onClick={() => void logout()}
+          >
+            退出登录
+          </AsyncButton>
+          {logoutError ? <span className="header-action-error" role="alert">{logoutError}</span> : null}
+        </nav>
+      </div>
     </header>
   );
 }

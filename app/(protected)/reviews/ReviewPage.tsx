@@ -784,48 +784,63 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
       <AppHeader compact />
       <main className="review-page">
         <header className="review-heading">
-          <div className="review-title-block">
-            <div className="history-meta"><StatusBadge status={reviewDisplayStatus(review)} /><span>{review.config.grade}</span><ClassInput className="class-field review-class-field" label="班级" value={className} disabled={busy !== null || analysisActive || !editableReport} onChange={changeClassName} /></div>
-            <h1>{review.config.title}</h1>
-            <label className="student-name-field">
-              <span>学生姓名</span>
-              <input
-                aria-label="学生姓名"
-                maxLength={50}
-                placeholder="请输入学生姓名"
-                value={studentName}
-                disabled={busy !== null || analysisActive || !editableReport}
-                onChange={(event) => changeStudentName(event.target.value)}
-              />
-            </label>
-            <p>左侧核对落笔位置，右侧完善批注与最终评语。</p>
-          </div>
-          <div className="review-actions">
-            <label className="analysis-guidance"><span>老师补充观点（可选）</span><textarea aria-label="老师补充观点" maxLength={1000} placeholder="例如：请重点核对结尾主题是否由正文细节支撑" value={teacherGuidance} disabled={busy !== null || analysisActive} onChange={(event) => { invalidateLoad(); setTeacherGuidance(event.target.value); setDirty(true); }} /></label>
-            <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>{editableLegacyReport ? "完整重新分析" : "重新分析"}</AsyncButton>
-            {editableParagraphReport ? <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成整篇批改</AsyncButton> : null}
-            {review.status !== "needs_better_images" ? replacementControl() : null}
-            {report && isLegacyEvaluationReport(report) && review.hasPdf && review.pdfFilename?.trim() ? (
-              <AsyncButton
-                className="button button--quiet"
+          <div className="review-header-top">
+            <div className="review-title-block">
+              <div className="history-meta"><StatusBadge status={reviewDisplayStatus(review)} /><span className="meta-chip">{review.config.grade}</span><ClassInput className="class-field review-class-field" label="班级" value={className} disabled={busy !== null || analysisActive || !editableReport} onChange={changeClassName} /></div>
+              <h1>{review.config.title}</h1>
+              <div className="review-student-row">
+                <label className="student-name-field">
+                  <span>学生姓名</span>
+                  <input
+                    aria-label="学生姓名"
+                    maxLength={50}
+                    placeholder="请输入学生姓名"
+                    value={studentName}
+                    disabled={busy !== null || analysisActive || !editableReport}
+                    onChange={(event) => changeStudentName(event.target.value)}
+                  />
+                </label>
+                <p>左侧对照作文原图，右侧逐段复核修改建议与定稿。</p>
+              </div>
+            </div>
+            <div className="review-actions">
+              <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze()}>{editableLegacyReport ? "完整重新分析" : "重新分析"}</AsyncButton>
+              {editableParagraphReport ? <AsyncButton className="button button--quiet" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成整篇批改</AsyncButton> : null}
+              {review.status !== "needs_better_images" ? replacementControl() : null}
+              {report && isLegacyEvaluationReport(report) && review.hasPdf && review.pdfFilename?.trim() ? (
+                <AsyncButton
+                  className="button button--quiet"
+                  busy={busy === "export"}
+                  busyLabel="正在下载…"
+                  disabled={busy !== null || analysisActive}
+                  onClick={() => void downloadLegacyPdf()}
+                >下载已生成的旧版 PDF</AsyncButton>
+              ) : null}
+              {report && isLegacyEvaluationReport(report) ? (
+                <span className="export-menu-reason">旧版示范段落报告需要完整重新分析后才能导出新格式</span>
+              ) : null}
+              {report && !isLegacyEvaluationReport(report) ? <ExportMenu
                 busy={busy === "export"}
-                busyLabel="正在下载…"
-                disabled={busy !== null || analysisActive}
-                onClick={() => void downloadLegacyPdf()}
-              >下载已生成的旧版 PDF</AsyncButton>
-            ) : null}
-            {report && isLegacyEvaluationReport(report) ? (
-              <span className="export-menu-reason">旧版示范段落报告需要完整重新分析后才能导出新格式</span>
-            ) : null}
-            {report && !isLegacyEvaluationReport(report) ? <ExportMenu
-              busy={busy === "export"}
-              busyLabel="正在生成…"
-              disabled={busy !== null || analysisActive || exportReadiness?.ready === false}
-              disabledReason={exportReadiness?.ready === false ? exportReadiness.message : undefined}
-              onExport={exportReview}
-            /> : null}
-            {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!editableReport || !dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
+                busyLabel="正在生成…"
+                disabled={busy !== null || analysisActive || exportReadiness?.ready === false}
+                disabledReason={exportReadiness?.ready === false ? exportReadiness.message : undefined}
+                onExport={exportReview}
+              /> : null}
+              {report ? <AsyncButton className="button button--primary" busy={busy === "save"} busyLabel="保存中…" disabled={!editableReport || !dirty || busy !== null || analysisActive} onClick={() => void save()}>保存复核</AsyncButton> : null}
+            </div>
           </div>
+          <label className="analysis-guidance">
+            <span>老师补充观点（可选）</span>
+            <textarea
+              aria-label="老师补充观点"
+              rows={2}
+              maxLength={1000}
+              placeholder="例如：请重点核对结尾主题是否由正文细节支撑（下次重新分析或单段重写时一并生效）"
+              value={teacherGuidance}
+              disabled={busy !== null || analysisActive}
+              onChange={(event) => { invalidateLoad(); setTeacherGuidance(event.target.value); setDirty(true); }}
+            />
+          </label>
         </header>
         {error ? <ErrorBanner
           message={error}
@@ -846,7 +861,6 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
         {review.status === "rejected" ? <div className="stale-report-banner" role="status"><b>审核不通过</b><span>{[review.rejectionReason ? `原因：${review.rejectionReason}` : "", review.rejectionChangeRequest ? `修改要求：${review.rejectionChangeRequest}` : ""].filter(Boolean).join("。") || "这篇作文已标为不能使用。"} 可以重新分析后再审核。</span></div> : null}
         {report && isParagraphEvaluationReport(report) ? <StructureAuditBanner audit={report.structureAudit} /> : null}
         {review.reportStale && report ? <div className="stale-report-banner" role="alert"><span>批改报告基于旧版识别原文</span><AsyncButton className="button button--primary" busy={busy === "analyze"} busyLabel="正在提交…" disabled={busy !== null || analysisActive} onClick={() => void analyze("content_only")}>重新生成批改</AsyncButton></div> : null}
-        <div className="privacy-note" role="note">作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除。</div>
         {review.status === "needs_better_images" ? <div className="retake-banner" role="alert"><b>图片暂时无法辨认</b><span>请直接重新拍摄并替换：保持平整、光线均匀并拍全纸张边缘。</span>{replacementControl("button button--quiet retake-upload")}</div> : null}
         <div className="review-view-tabs" role="tablist" aria-label="复核内容">
           <button type="button" role="tab" aria-selected={activeView === "report"} aria-controls="review-report-panel" onClick={() => setActiveView("report")}>批改报告</button>
@@ -896,6 +910,7 @@ export function ReviewPage({ reviewId }: { reviewId: string }) {
             }}
           />
         </section> : null}
+        <div className="privacy-note review-footer-note" role="note">作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除。</div>
       </main>
     </div>
   );

@@ -100,3 +100,26 @@ describe("0013 候选规则迁移", () => {
     expect(count(db, "grading_rule_candidates")).toBe(0);
   });
 });
+
+describe("0014 查询索引迁移", () => {
+  it("只新增索引不改表结构，关键查询命中新索引而不再全表扫描", () => {
+    const sql = readFileSync(path.join(MIGRATIONS, "0014_query_indexes.sql"), "utf8");
+    expect(sql).not.toMatch(/DROP\s+TABLE|ALTER\s+TABLE|DELETE\s+FROM|UPDATE\s+/iu);
+    const { db, apply } = openLikeD1();
+    migrationFiles().forEach(apply);
+
+    const analyzingPlan = db.prepare(`
+      EXPLAIN QUERY PLAN
+      UPDATE reviews SET status = 'failed' WHERE status = 'analyzing' AND analysis_run_id = 'job-1'
+    `).all() as Array<{ detail: string }>;
+    expect(analyzingPlan.map((row) => row.detail).join(" ")).toContain("reviews_analyzing_idx");
+
+    const listPlan = db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT id FROM reviews WHERE owner_id = 'u1' AND deleting_at IS NULL ORDER BY updated_at DESC, created_at DESC
+    `).all() as Array<{ detail: string }>;
+    const listDetail = listPlan.map((row) => row.detail).join(" ");
+    expect(listDetail).toContain("reviews_owner_active_updated_idx");
+    expect(listDetail).not.toContain("USE TEMP B-TREE");
+  });
+});

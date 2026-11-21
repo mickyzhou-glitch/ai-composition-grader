@@ -74,7 +74,7 @@ export default function SettingsPage() {
   return (
     <div className="app-shell">
       <AppHeader compact />
-      <main className="narrow-page">
+      <main className="medium-page">
         <div className="page-title"><p className="eyebrow">模型连接</p><h1>设置</h1><p>两个模型独立配置，密钥不会在页面回显。</p></div>
         {error ? <ErrorBanner message={error} /> : null}
         {success ? <div className="success-banner" role="status">{success}</div> : null}
@@ -82,11 +82,16 @@ export default function SettingsPage() {
           {(["vision", "content"] as const).map((role) => {
             const label = labels[role];
             const value = settings[role];
-            return <form className="paper-card form-stack" key={role} onSubmit={(event) => {
+            return <form className="paper-card form-stack model-card" key={role} onSubmit={(event) => {
               event.preventDefault();
               void submit(role, "save");
             }}>
-              <h2>{label.title}</h2>
+              <div className="model-card-header">
+                <h2>{label.title}</h2>
+                <span className={`status-badge ${value.keyConfigured ? "status-badge--ready_for_review" : "status-badge--draft"}`}>
+                  {value.keyConfigured ? "已就绪" : "待配置"}
+                </span>
+              </div>
               <label>{label.prefix}服务地址<input aria-label={`${label.prefix}服务地址`} required type="url" value={value.baseUrl} disabled={loading} onChange={(event) => update(role, { baseUrl: event.target.value })} /></label>
               <label>{label.prefix}模型名称<input aria-label={`${label.prefix}模型名称`} required value={value.model} disabled={loading} onChange={(event) => update(role, { model: event.target.value })} /></label>
               <label>{label.prefix} API Key<input aria-label={`${label.prefix} API Key`} type="password" autoComplete="new-password" value={apiKeys[role]} disabled={loading} placeholder={value.keyConfigured ? "已配置，无需重复填写" : "请输入 API Key"} onChange={(event) => setApiKeys((current) => ({ ...current, [role]: event.target.value }))} /></label>

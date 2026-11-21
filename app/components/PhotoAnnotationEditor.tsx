@@ -109,9 +109,11 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, disabl
     });
   }
 
+  const readonlyPhotoOnly = disabled && pageAnnotations.length === 0;
+
   return (
-    <div className="annotation-workspace">
-      <div className="annotation-canvas" aria-label={`第 ${pageIndex + 1} 页作文批注画布`} aria-disabled={disabled} tabIndex={disabled ? -1 : 0} onClick={add} onKeyDown={addByKeyboard}>
+    <div className={readonlyPhotoOnly ? "annotation-workspace annotation-workspace--readonly" : "annotation-workspace"}>
+      <div className={`annotation-canvas ${disabled ? "annotation-canvas--disabled" : ""}`} aria-label={`第 ${pageIndex + 1} 页作文批注画布`} aria-disabled={disabled} tabIndex={disabled ? -1 : 0} onClick={add} onKeyDown={addByKeyboard}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={imageUrl} alt={`第 ${pageIndex + 1} 页作文`} />
         <svg className="annotation-svg" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
@@ -134,10 +136,10 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, disabl
             onKeyDown={(event) => nudge(event, index)}
           >{markerIndex + 1}</button>
         ))}
-        <span className="canvas-hint">点击作文空白处添加批注</span>
+        {!disabled ? <span className="canvas-hint">点击作文空白处添加批注</span> : null}
       </div>
 
-      <div className="annotation-list" aria-label={`第 ${pageIndex + 1} 页批注`}>
+      {!readonlyPhotoOnly ? <div className="annotation-list" aria-label={`第 ${pageIndex + 1} 页批注`}>
         {pageAnnotations.length === 0 ? <p className="annotation-empty">这一页还没有批注。点击左侧作文开始朱批。</p> : null}
         {pageAnnotations.map(({ annotation, index }, cardIndex) => (
           <article className={`annotation-card ${annotation.isHighlight ? "annotation-card--highlight" : ""}`} key={`${index}-card`}>
@@ -153,7 +155,7 @@ export function PhotoAnnotationEditor({ imageUrl, pageIndex, annotations, disabl
             </div>
           </article>
         ))}
-      </div>
+      </div> : null}
     </div>
   );
 }

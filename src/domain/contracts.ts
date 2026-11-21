@@ -1,11 +1,13 @@
 import { z } from "zod";
 
+import {
+  EMPTY_DRAFT_RETENTION_MS,
+  MAX_REVIEW_IMAGES,
+  PRIVACY_NOTICE_VERSION,
+} from "./client-constants";
 import { structureAuditSchema } from "./structure-audit";
 
-export const EMPTY_DRAFT_RETENTION_MS = 24 * 60 * 60 * 1000;
-
-/** Versioned acknowledgement required before the first real composition upload. */
-export const PRIVACY_NOTICE_VERSION = "2026-07-22";
+export { EMPTY_DRAFT_RETENTION_MS, MAX_REVIEW_IMAGES, PRIVACY_NOTICE_VERSION };
 export const privacyUploadConsentSchema = z.object({
   confirmed: z.literal(true),
   version: z.literal(PRIVACY_NOTICE_VERSION),
@@ -48,7 +50,6 @@ export type ReviewStatus = z.infer<typeof reviewStatusSchema>;
 export const classNameSchema = z.string().trim().max(50);
 
 export const studentNameSchema = z.string().trim().max(50);
-export const MAX_REVIEW_IMAGES = 4;
 
 export const annotationCategorySchema = z.enum([
   "typo",

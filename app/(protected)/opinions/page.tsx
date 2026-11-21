@@ -102,24 +102,37 @@ function OpinionStats({
 }) {
   const counts = categoryCounts(opinions);
   const repeats = repeatedTexts(opinions);
+  const groups = groupByTitle(opinions);
   return (
     <section className="opinion-stats" aria-label={label}>
-      <h2>{label}</h2>
-      <span>共 {opinions.length} 条</span>
-      {counts.map(({ category, count }) => <span key={category}>{category} {count} 次</span>)}
-      {repeats.map((item) => <span key={item.text}>相同内容「{item.text}」{item.count} 次</span>)}
-      {groupByTitle(opinions).map((group) => {
-        const groupCounts = categoryCounts(group.opinions);
-        const groupRepeats = repeatedTexts(group.opinions);
-        return (
-          <div key={group.title}>
-            <h3>题目：{group.title}</h3>
-            <span>共 {group.opinions.length} 条</span>
-            {groupCounts.map(({ category, count }) => <span key={`${group.title}:${category}`}>{category} {count} 次</span>)}
-            {groupRepeats.map((item) => <span key={`${group.title}:${item.text}`}>相同内容「{item.text}」{item.count} 次</span>)}
-          </div>
-        );
-      })}
+      <div className="opinion-stats-header">
+        <h2>{label}</h2>
+        <span className="count-pill">共 {opinions.length} 条</span>
+      </div>
+      {(counts.length > 0 || repeats.length > 0) ? (
+        <div className="opinion-stats-pills">
+          {counts.map(({ category, count }) => <span key={category}>{category} {count} 次</span>)}
+          {repeats.map((item) => <span key={item.text}>相同内容「{item.text}」{item.count} 次</span>)}
+        </div>
+      ) : null}
+      {groups.length > 0 ? (
+        <div className="opinion-stats-groups">
+          {groups.map((group) => {
+            const groupCounts = categoryCounts(group.opinions);
+            const groupRepeats = repeatedTexts(group.opinions);
+            return (
+              <div className="opinion-stats-group" key={group.title}>
+                <h3>题目：{group.title}</h3>
+                <div className="opinion-stats-pills">
+                  <span>共 {group.opinions.length} 条</span>
+                  {groupCounts.map(({ category, count }) => <span key={`${group.title}:${category}`}>{category} {count} 次</span>)}
+                  {groupRepeats.map((item) => <span key={`${group.title}:${item.text}`}>相同内容「{item.text}」{item.count} 次</span>)}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -232,7 +245,7 @@ export default function GradingOpinionsPage() {
   return (
     <div className="app-shell">
       <AppHeader compact />
-      <main className="narrow-page">
+      <main className="medium-page">
         <div className="page-title">
           <p className="eyebrow">长期批改要求</p>
           <h1>长期批改规则</h1>
@@ -241,11 +254,13 @@ export default function GradingOpinionsPage() {
         {error ? <ErrorBanner message={error} /> : null}
         {loading ? <p className="loading-note" role="status">正在读取批改规则…</p> : null}
         {candidates.length > 0 ? <section className="rule-candidate-list" aria-label="待审批的候选规则">
-          <h2>待审批（{candidates.length}）</h2>
-          <p className="muted">保留老师提交的原话，只合并完全相同的内容。通过后每条不同原话分别写入该题目的长期规则并立即生效；驳回则不导入。</p>
+          <div className="candidate-section-heading">
+            <h2>待审批（{candidates.length}）</h2>
+            <p className="muted">保留老师提交的原话，只合并完全相同的内容。通过后每条不同原话分别写入该题目的长期规则并立即生效；驳回则不导入。</p>
+          </div>
           {candidates.map((candidate) => {
             const originals = originalRuleTexts(candidate);
-            return <article className="opinion-card" key={candidate.id} aria-label={`候选规则：${originals.join(" ")}`}>
+            return <article className="opinion-card opinion-card--candidate" key={candidate.id} aria-label={`候选规则：${originals.join(" ")}`}>
             <p className="opinion-card-meta muted">题目：{candidate.title} · {candidate.category} · {formatTime(candidate.createdAt)}</p>
             <b>老师原话：</b>
             <ul className="rule-candidate-originals" aria-label="老师原话">
@@ -264,12 +279,17 @@ export default function GradingOpinionsPage() {
           </article>;
           })}
         </section> : null}
-        {!loading ? <OpinionStats label="长期规则统计" opinions={standing} /> : null}
-        {!loading ? <OpinionStats label="仅当前文章统计" opinions={essay} /> : null}
-        {!loading && standing.length === 0 ? <p className="muted">还没有长期批改规则。</p> : null}
+        {!loading ? (
+          <div className="opinion-stats-grid">
+            <OpinionStats label="长期规则统计" opinions={standing} />
+            <OpinionStats label="仅当前文章统计" opinions={essay} />
+          </div>
+        ) : null}
+        {!loading && standing.length === 0 ? <p className="muted empty-standing-note">还没有长期批改规则。</p> : null}
         <div className="opinion-list">
-          {groupByTitle(standing).map((group) => <section key={group.title} aria-label={`题目：${group.title}`}>
+          {groupByTitle(standing).map((group) => <section className="opinion-title-section" key={group.title} aria-label={`题目：${group.title}`}>
             <h2>题目：{group.title}</h2>
+            <div className="opinion-group-cards">
             {group.opinions.map((opinion) => {
             const draft = draftOf(opinion);
             const unchanged = draft.text.trim() === opinion.text && draft.category === asCategory(opinion.category);
@@ -280,7 +300,7 @@ export default function GradingOpinionsPage() {
                   {formatTime(opinion.createdAt)} · {sourceLabel(opinion)}
                   {opinion.paragraphLabel ? ` · ${opinion.paragraphLabel}` : ""}
                 </p>
-                <label>
+                <label className="opinion-field-label">
                   结构问题 / 共性问题
                   <textarea
                     aria-label={`编辑${sourceLabel(opinion)}的长期规则`}
@@ -291,42 +311,45 @@ export default function GradingOpinionsPage() {
                     }))}
                   />
                 </label>
-                <label>
-                  类别
-                  <select
-                    aria-label={`编辑${sourceLabel(opinion)}的类别`}
-                    value={draft.category}
-                    onChange={(event) => setDrafts((current) => ({
-                      ...current,
-                      [opinion.id]: { ...draft, category: asCategory(event.target.value) },
-                    }))}
-                  >
-                    {categories.map((category) => <option key={category} value={category}>{category}</option>)}
-                  </select>
-                </label>
-                <div className="opinion-card-actions">
-                  <AsyncButton
-                    type="button"
-                    className="button button--primary"
-                    busy={busyId === opinion.id}
-                    busyLabel="正在保存…"
-                    disabled={unchanged || incomplete || busyId !== null}
-                    onClick={() => void save(opinion)}
-                  >
-                    保存修改
-                  </AsyncButton>
-                  <button
-                    type="button"
-                    className="button button--danger-quiet"
-                    disabled={busyId !== null}
-                    onClick={() => void remove(opinion)}
-                  >
-                    删除
-                  </button>
+                <div className="opinion-card-footer">
+                  <label className="opinion-category-field">
+                    <span>类别</span>
+                    <select
+                      aria-label={`编辑${sourceLabel(opinion)}的类别`}
+                      value={draft.category}
+                      onChange={(event) => setDrafts((current) => ({
+                        ...current,
+                        [opinion.id]: { ...draft, category: asCategory(event.target.value) },
+                      }))}
+                    >
+                      {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+                    </select>
+                  </label>
+                  <div className="opinion-card-actions">
+                    <AsyncButton
+                      type="button"
+                      className="button button--primary"
+                      busy={busyId === opinion.id}
+                      busyLabel="正在保存…"
+                      disabled={unchanged || incomplete || busyId !== null}
+                      onClick={() => void save(opinion)}
+                    >
+                      保存修改
+                    </AsyncButton>
+                    <button
+                      type="button"
+                      className="button button--danger-quiet"
+                      disabled={busyId !== null}
+                      onClick={() => void remove(opinion)}
+                    >
+                      删除
+                    </button>
+                  </div>
                 </div>
               </article>
             );
             })}
+            </div>
           </section>)}
         </div>
       </main>

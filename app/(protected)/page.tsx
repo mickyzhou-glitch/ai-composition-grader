@@ -456,52 +456,63 @@ export default function Home() {
         <section className="history-section" aria-labelledby="recent-title">
           <div className="section-heading">
             <div><p className="eyebrow">最近工作</p><h2 id="recent-title">批改历史</h2></div>
-            <span className="muted">共 {reviews.length} 篇</span>
-          </div>
-          <div className="history-tools">
-            <ClassFilter items={reviews} value={classFilter} onChange={setClassFilter} />
-            <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></label>
-            <label className="history-search">批改状态
-              <select aria-label="筛选批改状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}>
-                <option value="">全部</option>
-                <option value="draft">草稿</option>
-                <option value="review">待复核</option>
-                <option value="failed">审核失败</option>
-                <option value="reviewed">已复核</option>
-                <option value="exported">已导出</option>
-                <option value="rejected">审核不通过</option>
-              </select>
-            </label>
-            <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
-          </div>
-          {reviews.length ? (
-            <div className="history-batch-actions">
-              <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0 || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
-              <span className="muted">已选择 {selectedReviewIds.size} 篇</span>
-              {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
-              <div className="history-export-command"><span>一键导出已复核（{reviewedPendingExport.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={reviewedPendingExport.length === 0 || batchExporting || exporting !== null || reanalysisBusy} busy={batchExporting} busyLabel="正在打包…" onExport={exportReviewed} /></div>
-              <div className="history-export-command"><span>导出所选（{selectedExportableReviews.length}）</span><ExportMenu ariaLabel="导出所选记录" disabled={selectedExportableReviews.length === 0 || batchExporting || exporting !== null || reanalysisBusy} disabledReason={selectedReviewIds.size > 0 && selectedExportableReviews.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={batchExporting} busyLabel="正在打包…" onExport={exportSelected} /></div>
-              <button className="button button--primary" type="button" disabled={selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
-                {reanalysisLoading ? "正在预览…" : "按最新框架重新分析"}
-              </button>
-              <button className="button" type="button" disabled={failedInView.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void regradeFailed()}>
-                {failedRegrade?.running ? "正在重新批改…" : `一键重新批改失败作文（${failedInView.length}）`}
-              </button>
-              {selectedReviewIds.size > BATCH_REANALYSIS_LIMIT ? <span className="history-limit-note" role="status">每次最多重新分析 {BATCH_REANALYSIS_LIMIT} 篇</span> : null}
-              {failedRegrade?.running ? <p className="history-limit-note" role="status">正在重新批改失败作文，已处理 {failedRegrade.completed} / {failedRegrade.total} 篇</p> : null}
-              {failedRegrade && !failedRegrade.running ? <div className="history-limit-note" role="status">
-                <p>{failedRegrade.error
-                  ? `重新批改中断：已提交 ${failedRegrade.submitted} 篇。${failedRegrade.error}`
-                  : `重新批改结束：已提交 ${failedRegrade.submitted} 篇${failedRegrade.skipped.length > 0 ? `，跳过 ${failedRegrade.skipped.length} 篇` : "。"}${failedRegrade.failures.length > 0 ? `这次失败 ${failedRegrade.failures.length} 篇。` : ""}`}</p>
-                {failedRegrade.skipped.length > 0 ? <ul>
-                  {failedRegrade.skipped.map((item) => <li key={`${item.reviewId}:${item.code}`}>{item.studentName ? `${item.studentName}：` : ""}{item.reason}</li>)}
-                </ul> : null}
-                {failedRegrade.failures.length > 0 ? <ul>
-                  {failedRegrade.failures.map((item) => <li key={item.reviewId}>{item.studentName}：{item.summary}</li>)}
-                </ul> : null}
-              </div> : null}
+            <div className="section-heading-meta">
+              <span className="count-pill">共 {reviews.length} 篇</span>
+              <span className="muted">长期保留，可手动永久删除</span>
             </div>
-          ) : null}
+          </div>
+          <div className="history-toolbar">
+            <div className="history-tools">
+              <div className="history-filters">
+                <ClassFilter items={reviews} value={classFilter} onChange={setClassFilter} />
+                <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" placeholder="输入姓名筛选…" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></label>
+                <label className="history-search history-status-filter">批改状态
+                  <select aria-label="筛选批改状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}>
+                    <option value="">全部</option>
+                    <option value="draft">草稿</option>
+                    <option value="review">待复核</option>
+                    <option value="failed">审核失败</option>
+                    <option value="reviewed">已复核</option>
+                    <option value="exported">已导出</option>
+                    <option value="rejected">审核不通过</option>
+                  </select>
+                </label>
+              </div>
+              <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
+            </div>
+            {reviews.length ? (
+              <div className="history-batch-actions">
+                <div className="history-selection-summary">
+                  <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0 || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
+                  <span className="selection-count-badge">已选择 {selectedReviewIds.size} 篇</span>
+                  {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
+                </div>
+                <div className="history-batch-commands">
+                  <div className="history-export-command"><span>一键导出已复核（{reviewedPendingExport.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={reviewedPendingExport.length === 0 || batchExporting || exporting !== null || reanalysisBusy} busy={batchExporting} busyLabel="正在打包…" onExport={exportReviewed} /></div>
+                  <div className="history-export-command"><span>导出所选（{selectedExportableReviews.length}）</span><ExportMenu ariaLabel="导出所选记录" disabled={selectedExportableReviews.length === 0 || batchExporting || exporting !== null || reanalysisBusy} disabledReason={selectedReviewIds.size > 0 && selectedExportableReviews.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={batchExporting} busyLabel="正在打包…" onExport={exportSelected} /></div>
+                  <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
+                    {reanalysisLoading ? "正在预览…" : "按最新框架重新分析"}
+                  </button>
+                  <button className="button button--quiet" type="button" disabled={failedInView.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void regradeFailed()}>
+                    {failedRegrade?.running ? "正在重新批改…" : `一键重新批改失败作文（${failedInView.length}）`}
+                  </button>
+                </div>
+                {selectedReviewIds.size > BATCH_REANALYSIS_LIMIT ? <span className="history-limit-note" role="status">每次最多重新分析 {BATCH_REANALYSIS_LIMIT} 篇</span> : null}
+                {failedRegrade?.running ? <p className="history-limit-note" role="status">正在重新批改失败作文，已处理 {failedRegrade.completed} / {failedRegrade.total} 篇</p> : null}
+                {failedRegrade && !failedRegrade.running ? <div className="history-limit-note" role="status">
+                  <p>{failedRegrade.error
+                    ? `重新批改中断：已提交 ${failedRegrade.submitted} 篇。${failedRegrade.error}`
+                    : `重新批改结束：已提交 ${failedRegrade.submitted} 篇${failedRegrade.skipped.length > 0 ? `，跳过 ${failedRegrade.skipped.length} 篇` : "。"}${failedRegrade.failures.length > 0 ? `这次失败 ${failedRegrade.failures.length} 篇。` : ""}`}</p>
+                  {failedRegrade.skipped.length > 0 ? <ul>
+                    {failedRegrade.skipped.map((item) => <li key={`${item.reviewId}:${item.code}`}>{item.studentName ? `${item.studentName}：` : ""}{item.reason}</li>)}
+                  </ul> : null}
+                  {failedRegrade.failures.length > 0 ? <ul>
+                    {failedRegrade.failures.map((item) => <li key={item.reviewId}>{item.studentName}：{item.summary}</li>)}
+                  </ul> : null}
+                </div> : null}
+              </div>
+            ) : null}
+          </div>
           {error ? <ErrorBanner message={error} onRetry={load} /> : null}
           {loading ? <p className="loading-note" role="status">正在翻阅批改记录…</p> : null}
           {!loading && !error && reviews.length === 0 ? (
@@ -513,23 +524,25 @@ export default function Home() {
             </div>
           ) : null}
           <div className="history-list">
-            {!loading && reviews.length > 0 && visibleReviews.length === 0 ? <p className="muted">没有找到该学生的作文</p> : null}
+            {!loading && reviews.length > 0 && visibleReviews.length === 0 ? <p className="muted history-empty-filter">没有找到该学生的作文</p> : null}
             {visibleReviews.map((review) => (
-              <article className="history-card" key={review.id}>
+              <article className={`history-card ${selectedReviewIds.has(review.id) ? "history-card--selected" : ""}`} key={review.id}>
                 <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting || reanalysisBusy} onChange={() => toggleReviewSelection(review.id)} /></label>
                 <div className="history-main">
                   <div className="history-meta">
                     <StatusBadge status={reviewDisplayStatus(review)} />
-                    <span>学生：{review.studentName || "未填写"}</span><span>班级：{review.className || "未分类"}</span>
+                    <span className="meta-chip">学生：{review.studentName || "未填写"}</span>
+                    <span className="meta-chip">班级：{review.className || "未分类"}</span>
                     <time>{reviewDate(review.updatedAt ?? review.createdAt)}</time>
                   </div>
-                  <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
-                  {review.status === "failed" && review.analysisFailure ? <p>
-                    {review.analysisFailure.summary}
+                  <div className="history-title-row">
+                    <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
+                    <p className="history-grade-tag">{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
+                  </div>
+                  {review.status === "failed" && review.analysisFailure ? <div className="history-failure-box">
+                    <p>{review.analysisFailure.summary}</p>
                     {review.analysisFailure.detail ? <details><summary>查看原始信息</summary><p>{review.analysisFailure.detail}</p></details> : null}
-                  </p> : null}
-                  <p>{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
-                  <p className="muted">长期保留，可手动永久删除</p>
+                  </div> : null}
                 </div>
                 <div className="card-actions">
                   <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>进入复核</Link>

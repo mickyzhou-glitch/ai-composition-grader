@@ -1,9 +1,18 @@
 import { z } from "zod";
 
-export const MAX_TEXTBOOK_IMAGES = 4;
-export const MAX_TEXTBOOK_SOURCE_BYTES = 20 * 1024 * 1024;
-export const MAX_TEXTBOOK_IMAGE_BYTES = 5 * 1024 * 1024;
-export const TEXTBOOK_IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
+import {
+  MAX_TEXTBOOK_IMAGES,
+  MAX_TEXTBOOK_IMAGE_BYTES,
+  MAX_TEXTBOOK_SOURCE_BYTES,
+  TEXTBOOK_IMAGE_TYPES,
+} from "./client-constants";
+
+export {
+  MAX_TEXTBOOK_IMAGES,
+  MAX_TEXTBOOK_IMAGE_BYTES,
+  MAX_TEXTBOOK_SOURCE_BYTES,
+  TEXTBOOK_IMAGE_TYPES,
+};
 
 const textbookImageSchema = z.string()
   .max(4 * Math.ceil(MAX_TEXTBOOK_IMAGE_BYTES / 3) + 32, "课本图片过大，请压缩后重试")
