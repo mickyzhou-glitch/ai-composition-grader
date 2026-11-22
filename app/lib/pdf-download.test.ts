@@ -171,13 +171,88 @@ describe("PDF 文件下载", () => {
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:image");
 
     paintedText.length = 0;
+    fontLoad.mockClear();
     const rewrittenEssay = ["清晨的街角。", "起初的误解。", "扫地时弯腰的身影。", "我终于明白她的辛劳。", "这件事一直打动着我。"];
     await createReviewPdf({ ...review, report: migrateEssayDraft({ ...(review.report as unknown as ParagraphEvaluationReport), rewrittenEssay }, "essay", ["paragraph-1"]) } as never);
+    expect(fontLoad).toHaveBeenCalledWith('400 16px "LXGW WenKai"', expect.stringContaining("　　清晨的街角。"));
     const essayText = paintedText.map(({ text }) => text).join("");
     expect(essayText).toContain("按要求重写的完整范文");
     rewrittenEssay.forEach((text) => expect(essayText).toContain(text));
     expect(pdfMock.addPage).toHaveBeenCalledWith("a4", "landscape");
 
+  });
+
+  it("动态注入文楷样式表尚未刷入 FontFaceSet 时，等待下一帧与 fonts.ready 后重试加载再绘图", async () => {
+    const timeline: string[] = [];
+    let attempt = 0;
+    const fontLoad = vi.fn(async () => {
+      attempt += 1;
+      timeline.push(`load-${attempt}`);
+      return attempt <= 2 ? [] : [{} as FontFace];
+    });
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: {
+        ready: Promise.resolve(),
+        load: fontLoad,
+      },
+    });
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      timeline.push("raf");
+      cb(16);
+      return 1;
+    });
+    const context = {
+      fillStyle: "", strokeStyle: "", font: "", textAlign: "left", textBaseline: "top", lineWidth: 1,
+      beginPath: vi.fn(), drawImage: vi.fn(), lineTo: vi.fn(), moveTo: vi.fn(), scale: vi.fn(),
+      fillRect: vi.fn(), stroke: vi.fn(),
+      measureText: (text: string) => ({ width: text.length * 8 }),
+      fillText: vi.fn(() => { timeline.push("paint"); }),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,page");
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:image"), revokeObjectURL: vi.fn() });
+    vi.stubGlobal("Image", class {
+      src = "";
+      naturalWidth = 1200;
+      naturalHeight = 1600;
+      async decode() { return undefined; }
+    });
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } }),
+    );
+    const review = {
+      id: "review-safari-flush",
+      revision: 1,
+      teacherReviewedAt: "2026-08-22T06:00:00.000Z",
+      studentName: "小明",
+      config: { title: "珍贵的礼物" },
+      images: [{ id: 11, position: 0, width: 1200, height: 1600 }],
+      ocr: {
+        version: 2, ocrRevision: 1, editedAt: null,
+        pages: [{ pageIndex: 0, text: "我慢慢走上台。", readable: true, warnings: [] }],
+        paragraphs: [{
+          id: "paragraph-1", paragraphIndex: 0, text: "我慢慢走上台。",
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+        }],
+      },
+      report: {
+        version: 2,
+        themeFit: "fits", themeReason: "切题", personalizedComment: "真实",
+        painPoints: [], commonIssues: [], revisionSuggestions: [], grade: "A",
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          suggestions: [{ advice: "补充听觉" }],
+          revisedText: "我终于走上台。",
+        }],
+        rewrittenEssay: ["我终于走上台。"],
+      },
+    };
+
+    await expect(createReviewPdf(review as never)).resolves.toBeInstanceOf(Blob);
+    expect(fontLoad).toHaveBeenCalledTimes(4);
+    expect(timeline.slice(0, 5)).toEqual(["load-1", "load-2", "raf", "load-3", "load-4"]);
+    expect(timeline.indexOf("paint")).toBeGreaterThan(timeline.indexOf("load-4"));
   });
 
   it.each([

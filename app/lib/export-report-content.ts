@@ -166,7 +166,7 @@ export function exportFontSample(content: ExportReportContent) {
   return content.pages.flatMap((page) => (
     page.paragraphs.flatMap((paragraph) => exportParagraphRuns(paragraph).map((run) => run.text))
   )).join("")
-    + content.rewrittenEssay.join("")
+    + content.rewrittenEssay.map(rewrittenEssayLineText).join("")
     + (content.rewrittenEssay.length ? rewrittenEssayHeading(true) : "");
 }
 

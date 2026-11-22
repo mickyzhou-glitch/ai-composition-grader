@@ -39,18 +39,26 @@ import {
 
 const DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 /**
- * Word/WPS 字体策略（只写系统常见、可跨平台回退的字体）：
- * - eastAsia 用「宋体」：Windows 自带 SimSun、WPS 自带宋体；Mac 版 Word/WPS 会把「宋体」
- *   映射到系统的 Songti SC / STSong。以前写的 KaiTi/楷体 在 Mac 上没有，WPS 提示「缺失字体」，
- *   替换字体的字宽不一致，排版也跟着变。
- * - ascii/hAnsi/cs 用 Times New Roman，各平台都有，数字、标点、西文不会再去找缺失字体。
- * - hint=eastAsia：中英混排时，有歧义的字符（引号、破折号等）一律按中文字体排。
+ * Word/WPS 双字体策略：
+ * - 修改动作（红色建议）及文档默认用 `EXPORT_DOCX_FONT`（中文「宋体」，西文 Times New Roman）。
+ * - 框内「改后全段」与文末「按要求重写的完整范文」用 `EXPORT_DOCX_KAITI_FONT`（中文「楷体」，西文 Times New Roman）。
+ * - ascii/hAnsi/cs 统一用各平台自带的 Times New Roman，数字、西文不会触发 KaiTi 缺失告警；
+ *   hint=eastAsia 让引号、破折号等歧义标点按中文字体排；同时在 fontTable.xml 写入 Mac/Windows
+ *   楷体与宋体的 altName 映射（KaiTi / Kaiti SC / STKaiti），兼顾双端显示。
  */
 export const EXPORT_DOCX_FONT = {
   ascii: "Times New Roman",
   hAnsi: "Times New Roman",
   cs: "Times New Roman",
   eastAsia: "宋体",
+  hint: "eastAsia",
+} as const;
+
+export const EXPORT_DOCX_KAITI_FONT = {
+  ascii: "Times New Roman",
+  hAnsi: "Times New Roman",
+  cs: "Times New Roman",
+  eastAsia: "楷体",
   hint: "eastAsia",
 } as const;
 /** 文本框里的行距：lineRule=auto 时 276/240 = 1.15 倍行距。必须带 lineRule，避免 WPS 误读。 */
@@ -206,8 +214,13 @@ export function runOptions(style: ExportRunStyle, underline?: RevisionUnderline)
   return { bold: false, color: "000000" };
 }
 
+function fontForStyle(style: ExportRunStyle) {
+  return style === "suggestion" ? EXPORT_DOCX_FONT : EXPORT_DOCX_KAITI_FONT;
+}
+
 function textRuns(text: string, style: ExportRunStyle, halfPoints: number, underline?: RevisionUnderline) {
   const options = runOptions(style, underline);
+  const font = fontForStyle(style);
   const normalized = text.endsWith("\n") ? text.slice(0, -1) : text;
   return normalized.split("\n").map((line, index) => new TextRun({
     text: line,
@@ -215,7 +228,7 @@ function textRuns(text: string, style: ExportRunStyle, halfPoints: number, under
     bold: options.bold,
     color: options.color,
     underline: options.underline,
-    font: EXPORT_DOCX_FONT,
+    font,
     size: halfPoints,
   }));
 }
@@ -423,7 +436,7 @@ function essayBlocks(paragraphs: readonly string[]) {
         text: rewrittenEssayHeading(false),
         bold: true,
         color: "000000",
-        font: EXPORT_DOCX_FONT,
+        font: EXPORT_DOCX_KAITI_FONT,
         size: points(18),
       })],
     }),
@@ -433,7 +446,7 @@ function essayBlocks(paragraphs: readonly string[]) {
       children: [new TextRun({
         text,
         color: "000000",
-        font: EXPORT_DOCX_FONT,
+        font: EXPORT_DOCX_KAITI_FONT,
         size: points(14),
       })],
     })),
@@ -529,6 +542,29 @@ function themeXml() {
 </a:theme>`;
 }
 
+function fontTableXml() {
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:font w:name="Times New Roman">
+    <w:charset w:val="00"/>
+    <w:family w:val="roman"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+  <w:font w:name="宋体">
+    <w:altName w:val="SimSun,Songti SC,STSong"/>
+    <w:charset w:val="86"/>
+    <w:family w:val="auto"/>
+    <w:pitch w:val="variable"/>
+  </w:font>
+  <w:font w:name="楷体">
+    <w:altName w:val="KaiTi,Kaiti SC,STKaiti"/>
+    <w:charset w:val="86"/>
+    <w:family w:val="script"/>
+    <w:pitch w:val="fixed"/>
+  </w:font>
+</w:fonts>`;
+}
+
 async function applyChocolateTheme(blob: Blob): Promise<Blob> {
   const zip = await JSZip.loadAsync(await blob.arrayBuffer());
   const documentFile = zip.file("word/document.xml");
@@ -544,6 +580,7 @@ async function applyChocolateTheme(blob: Blob): Promise<Blob> {
   );
   zip.file("word/document.xml", documentXml, xmlOptions);
   zip.file("word/theme/theme1.xml", themeXml(), xmlOptions);
+  zip.file("word/fontTable.xml", fontTableXml(), xmlOptions);
 
   const rels = await relsFile.async("string");
   if (!rels.includes("/theme")) {

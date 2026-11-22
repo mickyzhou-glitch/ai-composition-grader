@@ -192,13 +192,30 @@ async function ensureKaitiStylesLoaded() {
   await kaitiStylesPromise;
 }
 
-async function loadExportKaiti(content: ExportReportContent) {
-  await ensureKaitiStylesLoaded();
-  const text = exportFontSample(content);
-  await Promise.all([
+async function loadKaitiFaces(text: string) {
+  return Promise.all([
     window.document.fonts.load(`400 16px ${EXPORT_KAITI_FACE}`, text),
     window.document.fonts.load(`700 16px ${EXPORT_KAITI_FACE}`, text),
   ]);
+}
+
+async function loadExportKaiti(content: ExportReportContent) {
+  await ensureKaitiStylesLoaded();
+  const fonts = window.document.fonts;
+  if (fonts.ready) await fonts.ready;
+  const text = exportFontSample(content);
+  const loaded = await loadKaitiFaces(text);
+  if (fonts.ready && text.trim().length > 0 && loaded.every((faces) => faces.length === 0)) {
+    await new Promise<void>((resolve) => {
+      if (typeof window.requestAnimationFrame === "function") {
+        window.requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+    await fonts.ready;
+    await loadKaitiFaces(text);
+  }
 }
 
 function maximumImagePlacement(imageWidth: number, imageHeight: number): Rectangle {

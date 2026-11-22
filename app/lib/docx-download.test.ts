@@ -211,14 +211,24 @@ describe("Word 逐段批改文档", () => {
     // run 级字符间距 / 字宽缩放 / 字距调整都不该出现。
     expect(documentXml).not.toMatch(/<w:rPr>(?:(?!<\/w:rPr>)[\s\S])*<w:spacing /u);
     expect(documentXml).not.toMatch(/<w:w w:val=|<w:kern |<w:fitText /u);
-    // 每个 run 都声明跨平台字体：中文宋体，西文 Times New Roman，hint=eastAsia。
+    // 每个 run 都声明跨平台字体：修改动作中文用宋体，改后全段与完整范文中文用楷体，西文统一 Times New Roman，hint=eastAsia。
     const runFonts = [...documentXml.matchAll(/<w:rFonts [^>]*\/>/gu)].map((match) => match[0]);
     expect(runFonts.length).toBeGreaterThan(0);
     runFonts.forEach((tag) => {
-      expect(tag).toContain('w:eastAsia="宋体"');
+      expect(tag).toMatch(/w:eastAsia="(?:宋体|楷体)"/u);
       expect(tag).toContain('w:ascii="Times New Roman"');
       expect(tag).toContain('w:hAnsi="Times New Roman"');
       expect(tag).toContain('w:hint="eastAsia"');
+    });
+    suggestionParagraphs.forEach((xml) => {
+      expect(xml).toContain('w:eastAsia="宋体"');
+      expect(xml).not.toContain('w:eastAsia="楷体"');
+    });
+    const revisedParagraphs = paragraphs.filter((xml) => xml.includes("改后全段："));
+    expect(revisedParagraphs.length).toBeGreaterThan(0);
+    revisedParagraphs.forEach((xml) => {
+      expect(xml).toContain('w:eastAsia="楷体"');
+      expect(xml).not.toContain('w:eastAsia="宋体"');
     });
   });
 
@@ -267,8 +277,34 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).not.toContain("慢慢走");
     expect(documentXml).not.toContain("成功");
     expect(documentXml).toMatch(/w:eastAsia="宋体"/u);
-    expect(documentXml).not.toMatch(/KaiTi|楷体/u);
+    expect(documentXml).toMatch(/w:eastAsia="楷体"/u);
     expect(documentXml.match(/<w:br w:type="page"\/>/gu)).toHaveLength(1);
+  });
+
+  it("完整范文标题与正文使用楷体，并在 fontTable.xml 写入跨平台楷体/宋体回退映射", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const essay = ["第一段范文。", "第二段范文。"];
+    review.report = migrateEssayDraft(
+      { ...(review.report as ParagraphEvaluationReport), rewrittenEssay: essay },
+      "essay",
+      ["paragraph-1", "paragraph-2"],
+    );
+    const { zip, documentXml } = await unpack(review);
+    const headingParagraphStart = documentXml.lastIndexOf("<w:p>", documentXml.lastIndexOf("按要求重写的完整范文"));
+    const essayRegion = documentXml.slice(headingParagraphStart);
+    const essayFonts = [...essayRegion.matchAll(/<w:rFonts [^>]*\/>/gu)].map((match) => match[0]);
+    expect(essayFonts).toHaveLength(essay.length + 1);
+    essayFonts.forEach((tag) => {
+      expect(tag).toContain('w:eastAsia="楷体"');
+      expect(tag).toContain('w:ascii="Times New Roman"');
+      expect(tag).toContain('w:hint="eastAsia"');
+    });
+    const fontTable = await zip.file("word/fontTable.xml")?.async("string");
+    expect(fontTable).toContain('<w:font w:name="楷体">');
+    expect(fontTable).toContain('<w:altName w:val="KaiTi,Kaiti SC,STKaiti"/>');
+    expect(fontTable).toContain('<w:font w:name="宋体">');
+    expect(fontTable).toContain('<w:altName w:val="SimSun,Songti SC,STSong"/>');
   });
 
   it("嵌入每一页原图，文档标题与 PDF 一致且不写入内部信息", async () => {
