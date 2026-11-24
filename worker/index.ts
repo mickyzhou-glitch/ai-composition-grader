@@ -7,6 +7,7 @@ import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-r
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
+import { extractReportSummaryFields } from "../src/cloudflare/review-summary-state";
 import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "../src/cloudflare/d1-analysis-jobs";
 import { runCloudMaintenance } from "../src/cloudflare/d1-maintenance";
 import {
@@ -536,10 +537,59 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
         if (ids.length === 0 || ids.length > 50 || ids.some((id) => !reanalysisRouteIdPattern.test(id))) {
           return apiError("VALIDATION_ERROR", "请求参数无效", 400);
         }
+        if (url.searchParams.get("summary") === "1") {
+          return Response.json(
+            { ok: true, data: await new D1ReviewReader(env.DB).summaryByIds(user.id, ids) },
+            { headers: { "cache-control": "no-store" } },
+          );
+        }
         return Response.json(
           { ok: true, data: await new D1ReviewReader(env.DB).list(user.id, { ids }) },
           { headers: { "cache-control": "no-store" } },
         );
+      }
+      const scope = url.searchParams.get("scope");
+      if (scope !== null) {
+        if (scope !== "pending-export") {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        if (url.searchParams.get("summary") === "1") {
+          return Response.json(
+            { ok: true, data: await new D1ReviewReader(env.DB).pendingExportSummaries(user.id) },
+            { headers: { "cache-control": "no-store" } },
+          );
+        }
+        return Response.json(
+          { ok: true, data: await new D1ReviewReader(env.DB).list(user.id, { scope: "pending_export" }) },
+          { headers: { "cache-control": "no-store" } },
+        );
+      }
+      if (url.searchParams.get("summary") === "1") {
+        const rawPage = url.searchParams.get("page") ?? "1";
+        const rawPageSize = url.searchParams.get("pageSize") ?? "20";
+        const page = Number(rawPage);
+        const pageSize = Number(rawPageSize);
+        const statusParam = url.searchParams.get("status") ?? "";
+        const validStatuses = new Set(["", "draft", "review", "failed", "reviewed", "exported", "rejected"]);
+        const studentSearch = url.searchParams.get("q") ?? "";
+        const classFilter = url.searchParams.has("class") ? url.searchParams.get("class") : null;
+        if (
+          !Number.isInteger(page) || page < 1
+          || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100
+          || !validStatuses.has(statusParam)
+          || studentSearch.length > 100
+          || (classFilter !== null && classFilter.length > 100)
+        ) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        const data = await new D1ReviewReader(env.DB).summaryPage(user.id, {
+          page,
+          pageSize,
+          classFilter,
+          statusFilter: statusParam as "" | "draft" | "review" | "failed" | "reviewed" | "exported" | "rejected",
+          studentSearch,
+        });
+        return Response.json({ ok: true, data }, { headers: { "cache-control": "no-store" } });
       }
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).list(user.id) }, { headers: { "cache-control": "no-store" } });
     }
@@ -1213,7 +1263,7 @@ const worker = {
         const now = Date.now();
         const detail = sanitizeAnalysisDetail(error instanceof Error ? error.message : "");
         await env.DB.batch([
-          env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ? WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
+          env.DB.prepare("UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ?, summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':failed:' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'").bind(now, job.review_id, job.owner_id, job.id),
           env.DB.prepare("UPDATE analysis_jobs SET status = 'failed', error_code = ?, finished_at = ?, message = CASE WHEN instr(COALESCE(message, ''), ?) = 1 THEN message ELSE ? END WHERE id = ? AND status = 'running'").bind(code, now, ANALYSIS_JOB_METADATA_PREFIX, detail, job.id),
         ]);
         console.warn(JSON.stringify({ event: "analysis_failed", jobId: job.id, code, elapsedMs: Date.now() - startedAt }));
@@ -1231,6 +1281,10 @@ export async function savePipelineResult(
   result: { report: unknown; annotations: Array<{ pageIndex: number; x: number; y: number; category: string; anchorText: string; comment: string; isHighlight: boolean }>; ocrRevision: number },
 ): Promise<void> {
   const now = Date.now();
+  const summaryFields = extractReportSummaryFields(result.report);
+  const blockedReason = summaryFields.isLegacy
+    ? "旧版示范段落报告需要完整重新分析后才能导出新格式"
+    : "尚未经过老师审核";
   const savedGuard = `EXISTS (
     SELECT 1 FROM reviews INNER JOIN analysis_jobs ON analysis_jobs.id = ?
     WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.analysis_run_id IS NULL
@@ -1241,12 +1295,19 @@ export async function savePipelineResult(
   const statements = [
     database.prepare(`
       UPDATE reviews SET report = ?, report_ocr_revision = ?, status = 'ready_for_review',
+        has_report = 1, summary_grade = ?, summary_is_legacy = ?, summary_diagnostics = ?,
+        ocr_revision_cached = ?, export_ready_version = NULL, export_blocked_reason = ?,
+        summary_state_key = CASE WHEN summary_title IS NULL THEN NULL ELSE (CAST(revision + 1 AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(CAST(? AS INTEGER) AS TEXT) || ':' || CAST(CAST(? AS INTEGER) AS TEXT) || ':ready_for_review:' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END,
         revision = revision + 1, analysis_run_id = NULL, updated_at = ?
       WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND image_revision = ?
         AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
         AND EXISTS (SELECT 1 FROM analysis_jobs WHERE id = ? AND status = 'running')
     `).bind(
-      JSON.stringify(result.report), result.ocrRevision, now,
+      JSON.stringify(result.report), result.ocrRevision,
+      summaryFields.grade, summaryFields.isLegacy, summaryFields.diagnosticsJson,
+      result.ocrRevision, blockedReason,
+      result.ocrRevision, result.ocrRevision,
+      now,
       job.reviewId, job.ownerId, job.id, job.imageRevision, result.ocrRevision, job.id,
     ),
     database.prepare(`DELETE FROM annotations WHERE review_id = ? AND ${savedGuard}`)
@@ -1277,11 +1338,15 @@ export async function saveUnreadableResult(
   const outcomes = await database.batch([
     database.prepare(`
       UPDATE reviews SET status = 'needs_better_images', report = NULL, report_ocr_revision = NULL,
+        has_report = 0, summary_grade = NULL, summary_is_legacy = 0, summary_diagnostics = NULL,
+        ocr_revision_cached = ?, export_ready_version = NULL,
+        export_blocked_reason = '批改报告尚未完成',
+        summary_state_key = CASE WHEN summary_title IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(CAST(? AS INTEGER) AS TEXT) || ':-1:needs_better_images:' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END,
         analysis_run_id = NULL, updated_at = ?
       WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND image_revision = ?
         AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
         AND EXISTS (SELECT 1 FROM analysis_jobs WHERE id = ? AND status = 'running')
-    `).bind(now, job.reviewId, job.ownerId, job.id, job.imageRevision, ocrRevision, job.id),
+    `).bind(ocrRevision, ocrRevision, now, job.reviewId, job.ownerId, job.id, job.imageRevision, ocrRevision, job.id),
     database.prepare(`
       UPDATE analysis_jobs SET status = 'succeeded', progress_stage = 'saving_result', finished_at = ?
       WHERE id = ? AND status = 'running' AND EXISTS (

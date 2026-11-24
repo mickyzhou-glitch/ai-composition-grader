@@ -18,6 +18,7 @@
     "sync:model-essays": "tsx scripts/sync-model-essays.ts",
     "import:grading-opinions": "tsx scripts/import-grading-opinions.ts",
     "backfill:rule-candidates": "tsx scripts/backfill-rule-candidates.ts",
+    "backfill:review-summaries": "tsx scripts/backfill-review-summaries.ts",
     "start": "next start --hostname 127.0.0.1 --port 3001",
     "lint": "eslint",
     "test": "vitest run",
@@ -28,6 +29,7 @@
     "cf:audit-migration": "tsx scripts/cloudflare-migration-audit.mts",
     "cf:export-data": "tsx scripts/cloudflare-export-data.mts",
     "cf:upload-r2": "tsx scripts/cloudflare-upload-r2.mts",
+    "eval:quality": "tsx scripts/compare-review-quality.ts",
     "prebuild": "node scripts/prepare-pdf-assets.mjs",
     "predev": "node scripts/prepare-pdf-assets.mjs"
   },

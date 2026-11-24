@@ -390,6 +390,9 @@ function sqliteStore(database: AppDatabase): EssayStore {
 }
 
 export function quoteSql(value: string): string {
+  if (value.includes("\u0000")) {
+    return `CAST(X'${Buffer.from(value, "utf8").toString("hex")}' AS TEXT)`;
+  }
   return `'${value.replace(/'/gu, "''")}'`;
 }
 
@@ -496,6 +499,7 @@ export function executeRemoteD1(statement: string): D1StatementResult {
     encoding: "utf8",
     cwd: process.cwd(),
     env: process.env,
+    maxBuffer: 64 * 1024 * 1024,
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {

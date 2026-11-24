@@ -90,7 +90,8 @@ export class D1AnalysisJobs {
     // reports, OCR, annotations, and review revisions stay untouched.
     const results = await this.database.batch([
       this.database.prepare(`
-        UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ?
+        UPDATE reviews SET status = 'failed', analysis_run_id = NULL, updated_at = ?,
+          summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':failed:' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END
         WHERE status = 'analyzing' AND EXISTS (
           SELECT 1 FROM analysis_jobs WHERE ${expired}
             AND analysis_jobs.id = reviews.analysis_run_id
@@ -117,6 +118,7 @@ export class D1AnalysisJobs {
     const review = await this.database.prepare(`
       SELECT reviews.id, reviews.revision, reviews.image_revision, reviews.ocr_checkpoint,
         reviews.config, reviews.status, reviews.teacher_reviewed_at,
+        reviews.export_ready_version, reviews.export_blocked_reason, reviews.summary_state_key,
         COUNT(review_images.id) AS image_count
       FROM reviews LEFT JOIN review_images ON review_images.review_id = reviews.id
       WHERE reviews.id = ? AND reviews.owner_id = ? AND reviews.deleting_at IS NULL GROUP BY reviews.id
@@ -128,6 +130,9 @@ export class D1AnalysisJobs {
       config?: string | null;
       status: string;
       teacher_reviewed_at: number | null;
+      export_ready_version?: string | null;
+      export_blocked_reason?: string | null;
+      summary_state_key?: string | null;
       image_count: number;
     }>();
     if (!review) return { job: null, newlyQueued: false };
@@ -155,7 +160,10 @@ export class D1AnalysisJobs {
       outcomes = await this.database.batch([
         this.database.prepare(`
           UPDATE reviews SET status = 'analyzing', analysis_run_id = ?,
-            teacher_reviewed_at = NULL, updated_at = ?
+            teacher_reviewed_at = NULL, export_ready_version = NULL,
+            export_blocked_reason = CASE WHEN summary_state_key IS NULL THEN export_blocked_reason ELSE '尚未经过老师审核' END,
+            summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':analyzing:-1') END,
+            updated_at = ?
           WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND revision = ?
             AND analysis_run_id IS NULL
             AND NOT EXISTS (
@@ -195,11 +203,14 @@ export class D1AnalysisJobs {
       ) {
         await this.database.prepare(`
           UPDATE reviews SET status = ?, analysis_run_id = NULL,
-            teacher_reviewed_at = ?, updated_at = ?
+            teacher_reviewed_at = ?, export_ready_version = ?, export_blocked_reason = ?, summary_state_key = ?, updated_at = ?
           WHERE id = ? AND owner_id = ? AND analysis_run_id = ? AND revision = ?
         `).bind(
           review.status,
           review.teacher_reviewed_at,
+          review.export_ready_version ?? null,
+          review.export_blocked_reason ?? null,
+          review.summary_state_key ?? null,
           Date.now(),
           reviewId,
           ownerId,

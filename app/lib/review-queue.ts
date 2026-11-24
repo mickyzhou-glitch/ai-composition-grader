@@ -1,10 +1,13 @@
-import type { ReviewStatus } from "@/src/domain/contracts";
+import { gradeFromLegacyTotal, isLegacyEvaluationReport, type ReviewStatus } from "@/src/domain/contracts";
 import { deliveryReadiness } from "@/src/delivery/readiness";
-import type { ReviewView } from "./types";
+import type { ReviewSummaryView, ReviewView } from "./types";
 
 export type ReviewDisplayStatus = ReviewStatus | "reviewed";
 
-type ReviewLifecycleFields = Pick<ReviewView, "status" | "teacherReviewedAt"> & { report?: unknown };
+type ReviewLifecycleFields = Pick<ReviewView, "status" | "teacherReviewedAt"> & {
+  report?: unknown;
+  hasReport?: boolean;
+};
 
 /**
  * 审核失败：分析失败（含保留旧报告但最新一次分析失败，状态即 failed），
@@ -12,7 +15,9 @@ type ReviewLifecycleFields = Pick<ReviewView, "status" | "teacherReviewedAt"> & 
  */
 export function isReviewFailed(review: ReviewLifecycleFields): boolean {
   if (review.status === "failed") return true;
-  return review.status === "ready_for_review" && "report" in review && review.report == null;
+  if (review.status !== "ready_for_review") return false;
+  if (typeof review.hasReport === "boolean") return !review.hasReport;
+  return "report" in review && review.report == null;
 }
 
 export function normalizeStudentSearch(value: string): string {
@@ -63,13 +68,63 @@ export function matchesHistoryStatus(
 }
 
 export function exportEligibility(
-  review: Pick<ReviewView, "report" | "teacherReviewedAt" | "reportStale" | "ocr" | "images"> & { status?: ReviewStatus },
+  review:
+    | (Pick<ReviewView, "report" | "teacherReviewedAt" | "reportStale" | "ocr" | "images"> & { status?: ReviewStatus })
+    | Pick<ReviewSummaryView, "exportEligibility" | "status">,
 ): { eligible: true } | { eligible: false; reason: string } {
   if (review.status === "rejected") {
     return { eligible: false, reason: "审核不通过的作文不能导出" };
   }
-  const readiness = deliveryReadiness(review);
+  if ("exportEligibility" in review && review.exportEligibility) {
+    return review.exportEligibility;
+  }
+  const fullReview = review as Pick<ReviewView, "report" | "teacherReviewedAt" | "reportStale" | "ocr" | "images">;
+  const readiness = deliveryReadiness({
+    ...fullReview,
+    images: fullReview.images ?? [],
+  });
   return readiness.ready
     ? { eligible: true }
     : { eligible: false, reason: readiness.message };
+}
+
+export function toReviewSummary(review: ReviewView): ReviewSummaryView {
+  const hasReport = review.report !== null && review.report !== undefined;
+  const legacy = Boolean(review.report && isLegacyEvaluationReport(review.report));
+  const grade = review.report
+    ? (review.report.grade ?? (legacy ? gradeFromLegacyTotal(review.report.scores?.total ?? 0) : null))
+    : null;
+  const rawDiag = review.report?.diagnostics;
+  const diagnostics = rawDiag?.authenticityAndRelevance && rawDiag?.structure
+    ? {
+        authenticityAndRelevance: rawDiag.authenticityAndRelevance,
+        structure: rawDiag.structure,
+      }
+    : null;
+  return {
+    id: review.id,
+    status: review.status,
+    studentName: review.studentName ?? "",
+    className: review.className ?? "",
+    config: { title: review.config.title },
+    revision: review.revision ?? 0,
+    createdAt: review.createdAt,
+    updatedAt: review.updatedAt ?? review.createdAt,
+    teacherReviewedAt: review.teacherReviewedAt ?? null,
+    hasReport,
+    isLegacyReport: legacy,
+    grade,
+    ...(diagnostics ? { diagnostics } : {}),
+    hasPdf: Boolean(review.hasPdf),
+    pdfFilename: review.pdfFilename ?? null,
+    exportEligibility: exportEligibility({
+      status: review.status,
+      report: review.report ?? null,
+      teacherReviewedAt: review.teacherReviewedAt ?? null,
+      reportStale: Boolean(review.reportStale),
+      ocr: review.ocr ?? null,
+      images: review.images ?? [],
+    }),
+    ...(review.analysisFailure ? { analysisFailure: review.analysisFailure } : {}),
+  };
 }

@@ -42,7 +42,9 @@ export class D1OcrCheckpointRepository {
       paragraphs: result.paragraphs,
     });
     const update = await this.database.prepare(`
-      UPDATE reviews SET ocr_checkpoint = ?, report_ocr_revision = NULL
+      UPDATE reviews SET ocr_checkpoint = ?, report_ocr_revision = NULL,
+        ocr_revision_cached = 0, export_ready_version = NULL,
+        summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':0:-1:' || status || ':' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND image_revision = ?
         ${analysisRunId === undefined ? "" : `AND analysis_run_id = ? AND EXISTS (
           SELECT 1 FROM analysis_jobs WHERE id = ? AND status = 'running'
@@ -70,11 +72,15 @@ export class D1OcrCheckpointRepository {
       new Date().toISOString(),
     );
     const result = await this.database.prepare(`
-      UPDATE reviews SET ocr_checkpoint = ?
+      UPDATE reviews SET ocr_checkpoint = ?,
+        ocr_revision_cached = ?,
+        export_ready_version = NULL,
+        export_blocked_reason = '批改报告基于旧版识别原文，请重新生成批改',
+        summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(CAST(? AS INTEGER) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':' || status || ':' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END
       WHERE id = ? AND owner_id = ? AND deleting_at IS NULL AND image_revision = ?
         AND json_extract(ocr_checkpoint, '$.ocrRevision') = ?
     `).bind(
-      JSON.stringify(next), reviewId, ownerId, current.sourceRevision, expectedOcrRevision,
+      JSON.stringify(next), next.ocrRevision, next.ocrRevision, reviewId, ownerId, current.sourceRevision, expectedOcrRevision,
     ).run();
     if (result.meta.changes === 0) throw new OcrCheckpointError("OCR_REVISION_CONFLICT", 409);
     return next;

@@ -49,6 +49,10 @@ export class D1ImageWriter {
       this.database.prepare(`
         UPDATE reviews SET status = 'draft', report = NULL, revision = revision + 1,
           image_revision = image_revision + 1, ocr_checkpoint = NULL, report_ocr_revision = NULL,
+          has_report = 0, summary_grade = NULL, summary_is_legacy = 0, summary_diagnostics = NULL,
+          ocr_revision_cached = NULL, export_ready_version = NULL,
+          export_blocked_reason = '批改报告尚未完成',
+          summary_state_key = CAST(revision + 1 AS TEXT) || ':' || CAST(image_revision + 1 AS TEXT) || ':-1:-1:draft:-1',
           analysis_run_id = NULL, teacher_reviewed_at = NULL,
           pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL,
           privacy_consent_version = COALESCE(privacy_consent_version, ?), privacy_consented_at = COALESCE(privacy_consented_at, ?), updated_at = ?

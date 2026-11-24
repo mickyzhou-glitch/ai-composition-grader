@@ -1,4 +1,6 @@
-import { isParagraphEvaluationReport } from "../domain/contracts";
+import {
+  isParagraphEvaluationReport,
+} from "../domain/contracts";
 import { composeReviewGuidance, readReviewGuidance } from "../grading-opinions/review-guidance";
 import { listD1EssayOpinions, listD1StandingOpinions } from "./d1-grading-opinions";
 import {
@@ -7,11 +9,28 @@ import {
   evaluationReportSchema,
   normalizedCropSchema,
   reviewStatusSchema,
+  type ReviewStatus,
 } from "../domain/contracts";
 import { deliveryReadiness } from "../delivery/readiness";
 import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
 import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
+import {
+  backfillReviewSummaryBatch,
+  EXPECTED_SUMMARY_KEY_SQL,
+  parseSummaryDiagnostics,
+  runSummaryBackfillCursorStep,
+  summaryEligibilityFromMaterialized,
+} from "./review-summary-state";
+import type {
+  ReviewHistoryStatsView,
+  ReviewSummaryPageView,
+  ReviewSummaryView,
+} from "../../app/lib/types";
+import {
+  normalizeStudentSearch,
+  type HistoryStatusFilter,
+} from "../../app/lib/review-queue";
 
 interface ReviewRow {
   id: string;
@@ -85,6 +104,87 @@ function date(value: number | null): string | null {
   return value === null ? null : new Date(value).toISOString();
 }
 
+const MAX_LAZY_BACKFILL_PER_REQUEST = 20;
+
+const EXPECTED_EXPORT_READY_SQL = `(
+  CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' ||
+  CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' ||
+  CAST(COALESCE(report_ocr_revision, -1) AS TEXT)
+)`;
+
+function buildSummaryFilterWhere(
+  ownerId: string,
+  classFilter: string | null,
+  statusFilter: HistoryStatusFilter,
+  normalizedSearch: string,
+): { whereSql: string; bindings: unknown[] } {
+  const clauses: string[] = ["owner_id = ?", "deleting_at IS NULL"];
+  const bindings: unknown[] = [ownerId];
+
+  if (classFilter !== null) {
+    clauses.push("COALESCE(class_name, '') = ?");
+    bindings.push(classFilter);
+  }
+  if (normalizedSearch) {
+    clauses.push("instr(LOWER(COALESCE(student_name, '')), ?) > 0");
+    bindings.push(normalizedSearch);
+  }
+  if (statusFilter === "draft") {
+    clauses.push("status = 'draft'");
+  } else if (statusFilter === "review") {
+    clauses.push(
+      "teacher_reviewed_at IS NULL AND (status IN ('analyzing', 'needs_better_images') OR (status = 'ready_for_review' AND COALESCE(has_report, 0) = 1))",
+    );
+  } else if (statusFilter === "failed") {
+    clauses.push("(status = 'failed' OR (status = 'ready_for_review' AND COALESCE(has_report, 0) = 0))");
+  } else if (statusFilter === "reviewed") {
+    clauses.push("teacher_reviewed_at IS NOT NULL AND status <> 'exported'");
+  } else if (statusFilter === "exported") {
+    clauses.push("status = 'exported'");
+  } else if (statusFilter === "rejected") {
+    clauses.push("status = 'rejected'");
+  }
+
+  return { whereSql: clauses.join(" AND "), bindings };
+}
+
+interface SummaryStatsQueryRow {
+  total: number;
+  draft: number;
+  review: number;
+  failed: number;
+  reviewed: number;
+  exported: number;
+  rejected: number;
+  stale_summary_count: number;
+}
+
+interface SummaryPageScalarRow {
+  id: string;
+  status: string;
+  student_name: string | null;
+  class_name: string | null;
+  revision: number;
+  image_revision: number;
+  has_report: number;
+  summary_title: string | null;
+  summary_grade: string | null;
+  summary_is_legacy: number | null;
+  summary_diagnostics?: string | null;
+  ocr_revision_cached: number | null;
+  report_ocr_revision: number | null;
+  export_ready_version: string | null;
+  export_blocked_reason: string | null;
+  summary_state_key: string | null;
+  pdf_filename: string | null;
+  pdf_path: string | null;
+  pdf_revision: number | null;
+  exported_at: number | null;
+  teacher_reviewed_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export class D1ReviewReader {
   constructor(private readonly database: D1Database) {}
 
@@ -96,7 +196,10 @@ export class D1ReviewReader {
     return results.map((row) => row.class_name);
   }
 
-  async list(ownerId: string, options?: { ids?: readonly string[] }): Promise<unknown[]> {
+  async list(
+    ownerId: string,
+    options?: { ids?: readonly string[]; scope?: "pending_export" },
+  ): Promise<unknown[]> {
     let results: ReviewRow[];
     if (options?.ids !== undefined) {
       const requestedIds = [...new Set(options.ids)];
@@ -110,6 +213,17 @@ export class D1ReviewReader {
         return rows;
       }));
       results = chunks.flat().sort((left, right) => (right.updated_at - left.updated_at) || (right.created_at - left.created_at));
+    } else if (options?.scope === "pending_export") {
+      const queried = await this.database.prepare(`
+        SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
+        FROM reviews
+        WHERE owner_id = ?
+          AND deleting_at IS NULL
+          AND teacher_reviewed_at IS NOT NULL
+          AND status <> 'exported'
+        ORDER BY updated_at DESC, created_at DESC
+      `).bind(ownerId).all<ReviewRow>();
+      results = queried.results ?? [];
     } else {
       const queried = await this.database.prepare(`
         SELECT id, status, student_name, class_name, config, report, revision, image_revision, ocr_checkpoint, report_ocr_revision, pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at, rejection_reason, rejection_change_request, expires_at, created_at, updated_at
@@ -130,6 +244,282 @@ export class D1ReviewReader {
       annotations: annotationsByReview.get(review.id) ?? [],
       analysisFailure: failuresByReview.get(review.id) ?? null,
     })));
+  }
+
+  async summaryByIds(ownerId: string, ids: readonly string[]): Promise<ReviewSummaryView[]> {
+    const requestedIds = [...new Set(ids)];
+    if (requestedIds.length === 0) return [];
+
+    for (const backfillChunk of chunkItems(requestedIds, MAX_LAZY_BACKFILL_PER_REQUEST)) {
+      const placeholders = backfillChunk.map(() => "?").join(", ");
+      const staleRow = await this.database.prepare(`
+        SELECT COALESCE(SUM(CASE WHEN summary_state_key IS NULL OR summary_state_key <> ${EXPECTED_SUMMARY_KEY_SQL} THEN 1 ELSE 0 END), 0) AS stale_count
+        FROM reviews
+        WHERE owner_id = ? AND deleting_at IS NULL AND id IN (${placeholders})
+      `).bind(ownerId, ...backfillChunk).first<{ stale_count: number }>();
+      if ((staleRow?.stale_count ?? 0) > 0) {
+        await runSummaryBackfillCursorStep(this.database, {
+          ownerId,
+          ids: backfillChunk,
+          limit: backfillChunk.length,
+        });
+      }
+    }
+
+    const rowChunks = await Promise.all(chunkItems(requestedIds).map(async (chunk) => {
+      const placeholders = chunk.map(() => "?").join(", ");
+      const { results: rows = [] } = await this.database.prepare(`
+        SELECT id, status, student_name, class_name, revision, image_revision,
+               COALESCE(has_report, 0) AS has_report,
+               summary_title, summary_grade, summary_is_legacy, summary_diagnostics,
+               ocr_revision_cached, report_ocr_revision,
+               export_ready_version, export_blocked_reason, summary_state_key,
+               pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at,
+               created_at, updated_at
+        FROM reviews
+        WHERE owner_id = ? AND deleting_at IS NULL AND id IN (${placeholders})
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+      `).bind(ownerId, ...chunk).all<SummaryPageScalarRow>();
+      return rows;
+    }));
+    const rows = rowChunks
+      .flat()
+      .sort((left, right) => (right.updated_at - left.updated_at) || (right.created_at - left.created_at) || right.id.localeCompare(left.id));
+    if (rows.length === 0) return [];
+    const failedIds = rows.filter((row) => row.status === "failed").map((row) => row.id);
+    const failuresByReview = failedIds.length > 0
+      ? await this.batchLatestFailures(ownerId, failedIds)
+      : new Map<string, ReturnType<typeof describePublicAnalysisFailure>>();
+    return rows.map((row) => this.mapScalarSummaryRow(row, failuresByReview.get(row.id) ?? null));
+  }
+
+  async pendingExportSummaries(ownerId: string): Promise<ReviewSummaryView[]> {
+    const staleRow = await this.database.prepare(`
+      SELECT COALESCE(SUM(CASE WHEN summary_state_key IS NULL OR summary_state_key <> ${EXPECTED_SUMMARY_KEY_SQL} THEN 1 ELSE 0 END), 0) AS stale_count
+      FROM reviews
+      WHERE owner_id = ? AND deleting_at IS NULL AND teacher_reviewed_at IS NOT NULL AND status <> 'exported'
+    `).bind(ownerId).first<{ stale_count: number }>();
+
+    if ((staleRow?.stale_count ?? 0) > 0) {
+      await backfillReviewSummaryBatch(this.database, {
+        ownerId,
+        limit: MAX_LAZY_BACKFILL_PER_REQUEST,
+        onlyPendingExport: true,
+      });
+    }
+
+    const { results: rows = [] } = await this.database.prepare(`
+      SELECT id, status, student_name, class_name, revision, image_revision,
+             COALESCE(has_report, 0) AS has_report,
+             summary_title, summary_grade, summary_is_legacy, summary_diagnostics,
+             ocr_revision_cached, report_ocr_revision,
+             export_ready_version, export_blocked_reason, summary_state_key,
+             pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at,
+             created_at, updated_at
+      FROM reviews
+      WHERE owner_id = ?
+        AND deleting_at IS NULL
+        AND teacher_reviewed_at IS NOT NULL
+        AND status <> 'exported'
+      ORDER BY updated_at DESC, created_at DESC, id DESC
+    `).bind(ownerId).all<SummaryPageScalarRow>();
+
+    return rows.map((row) => this.mapScalarSummaryRow(row, null));
+  }
+
+  async summaryPage(
+    ownerId: string,
+    options?: {
+      page?: number;
+      pageSize?: number;
+      classFilter?: string | null;
+      statusFilter?: HistoryStatusFilter;
+      studentSearch?: string;
+    },
+  ): Promise<ReviewSummaryPageView> {
+    const requestedPage = Math.max(1, Math.trunc(options?.page ?? 1));
+    const pageSize = Math.min(100, Math.max(1, Math.trunc(options?.pageSize ?? 20)));
+    const classFilter = options?.classFilter ?? null;
+    const statusFilter: HistoryStatusFilter = options?.statusFilter ?? "";
+    const normalizedSearch = normalizeStudentSearch(options?.studentSearch ?? "");
+
+    // 第 1 步：纯标量聚合统计（不读 report / ocr_checkpoint / config 溢出页，也不读 review_images）
+    let statsRow = await this.querySummaryStats(ownerId);
+    if ((statsRow?.stale_summary_count ?? 0) > 0) {
+      // 仅针对尚未回填的历史行执行严格有界（单次最多 20 条）的权威回填；常规写入路径 stale_summary_count 恒为 0
+      await backfillReviewSummaryBatch(this.database, {
+        ownerId,
+        limit: MAX_LAZY_BACKFILL_PER_REQUEST,
+      });
+      statsRow = await this.querySummaryStats(ownerId);
+    }
+
+    const stats: ReviewHistoryStatsView = {
+      total: Number(statsRow?.total ?? 0),
+      draft: Number(statsRow?.draft ?? 0),
+      review: Number(statsRow?.review ?? 0),
+      failed: Number(statsRow?.failed ?? 0),
+      reviewed: Number(statsRow?.reviewed ?? 0),
+      exported: Number(statsRow?.exported ?? 0),
+      rejected: Number(statsRow?.rejected ?? 0),
+    };
+
+    const { whereSql, bindings } = buildSummaryFilterWhere(ownerId, classFilter, statusFilter, normalizedSearch);
+    const canMatchFailed = statusFilter === "" || statusFilter === "failed";
+
+    // 第 2 步：并行查询班级列表、当前班级已复核可导出 ID（走部分覆盖索引）、当前筛选总数与失败记录 ID
+    const [classesResult, exportableResult, filteredCountRow, failedRowsResult] = await Promise.all([
+      this.database.prepare(`
+        SELECT DISTINCT class_name FROM reviews
+        WHERE owner_id = ? AND deleting_at IS NULL AND class_name <> ''
+      `).bind(ownerId).all<{ class_name: string }>(),
+      this.database.prepare(`
+        SELECT id
+        FROM reviews
+        WHERE owner_id = ?
+          AND deleting_at IS NULL
+          AND teacher_reviewed_at IS NOT NULL
+          AND status NOT IN ('exported', 'rejected')
+          ${classFilter !== null ? "AND COALESCE(class_name, '') = ?" : ""}
+          AND export_ready_version = ${EXPECTED_EXPORT_READY_SQL}
+        ORDER BY updated_at DESC, created_at DESC, id DESC
+      `).bind(ownerId, ...(classFilter !== null ? [classFilter] : [])).all<{ id: string }>(),
+      this.database.prepare(`
+        SELECT COUNT(*) AS total_filtered FROM reviews WHERE ${whereSql}
+      `).bind(...bindings).first<{ total_filtered: number }>(),
+      canMatchFailed
+        ? this.database.prepare(`
+            SELECT id, student_name FROM reviews
+            WHERE ${whereSql} AND status = 'failed'
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+          `).bind(...bindings).all<{ id: string; student_name: string | null }>()
+        : Promise.resolve({ results: [] as Array<{ id: string; student_name: string | null }> }),
+    ]);
+
+    const classes = (classesResult.results ?? [])
+      .map((row) => row.class_name)
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true }));
+
+    const exportableReviewedIds = (exportableResult.results ?? []).map((row) => row.id);
+    const matchingFailed = (failedRowsResult.results ?? []).map((row) => ({
+      id: row.id,
+      studentName: row.student_name ?? "",
+    }));
+
+    const totalFiltered = Number(filteredCountRow?.total_filtered ?? 0);
+    const totalPages = Math.max(1, Math.ceil(totalFiltered / pageSize));
+    const page = Math.min(requestedPage, totalPages);
+    const offset = (page - 1) * pageSize;
+
+    // 第 3 步：仅按 LIMIT ? OFFSET ? 读取当前页最多 pageSize 条轻量标量摘要列（零 report / ocr_checkpoint / review_images 读取）
+    const pageRows: SummaryPageScalarRow[] = totalFiltered > 0
+      ? ((await this.database.prepare(`
+          SELECT id, status, student_name, class_name, revision, image_revision,
+                 COALESCE(has_report, 0) AS has_report,
+                 summary_title, summary_grade, summary_is_legacy, summary_diagnostics,
+                 ocr_revision_cached, report_ocr_revision,
+                 export_ready_version, export_blocked_reason, summary_state_key,
+                 pdf_filename, pdf_path, pdf_revision, exported_at, teacher_reviewed_at,
+                 created_at, updated_at
+          FROM reviews
+          WHERE ${whereSql}
+          ORDER BY updated_at DESC, created_at DESC, id DESC
+          LIMIT ? OFFSET ?
+        `).bind(...bindings, pageSize, offset).all<SummaryPageScalarRow>()).results ?? [])
+      : [];
+
+    const pageFailedIds = pageRows
+      .filter((row) => row.status === "failed")
+      .map((row) => row.id);
+    const failuresByReview = pageFailedIds.length > 0
+      ? await this.batchLatestFailures(ownerId, pageFailedIds)
+      : new Map<string, ReturnType<typeof describePublicAnalysisFailure>>();
+
+    const items: ReviewSummaryView[] = pageRows.map((row) =>
+      this.mapScalarSummaryRow(row, failuresByReview.get(row.id) ?? null),
+    );
+
+    const remainingBackfill = Number(statsRow?.stale_summary_count ?? 0);
+
+    return {
+      items,
+      page,
+      pageSize,
+      totalFiltered,
+      stats,
+      classes,
+      exportableReviewedIds,
+      matchingFailed,
+      ...(remainingBackfill > 0 ? { summaryBackfillPending: remainingBackfill } : {}),
+    };
+  }
+
+  private mapScalarSummaryRow(
+    row: SummaryPageScalarRow,
+    failure: ReturnType<typeof describePublicAnalysisFailure> | null,
+  ): ReviewSummaryView {
+    const status = reviewStatusSchema.parse(row.status);
+    const hasReport = Boolean(row.has_report);
+    const hasPdf = row.pdf_filename !== null
+      && row.pdf_path === `pdf/${row.pdf_filename}`
+      && row.pdf_revision === row.revision
+      && row.exported_at !== null;
+    const diagnostics = parseSummaryDiagnostics(row.summary_diagnostics);
+    const expectedStateKey = `${row.revision}:${row.image_revision}:${row.ocr_revision_cached ?? -1}:${row.report_ocr_revision ?? -1}:${status}:${row.teacher_reviewed_at ?? -1}`;
+    const summarySyncPending = row.summary_state_key === null || row.summary_state_key !== expectedStateKey;
+    return {
+      id: row.id,
+      status: status as ReviewStatus,
+      studentName: row.student_name ?? "",
+      className: row.class_name ?? "",
+      config: { title: row.summary_title ?? "" },
+      revision: row.revision,
+      createdAt: date(row.created_at)!,
+      updatedAt: date(row.updated_at)!,
+      teacherReviewedAt: date(row.teacher_reviewed_at),
+      hasReport,
+      isLegacyReport: Boolean(row.summary_is_legacy),
+      grade: hasReport ? (row.summary_grade ?? null) : null,
+      ...(diagnostics ? { diagnostics } : {}),
+      hasPdf,
+      pdfFilename: hasPdf ? row.pdf_filename : null,
+      exportEligibility: summaryEligibilityFromMaterialized({
+        status,
+        has_report: row.has_report,
+        summary_is_legacy: row.summary_is_legacy,
+        revision: row.revision,
+        image_revision: row.image_revision,
+        ocr_revision_cached: row.ocr_revision_cached,
+        report_ocr_revision: row.report_ocr_revision,
+        teacher_reviewed_at: row.teacher_reviewed_at,
+        export_ready_version: row.export_ready_version,
+        export_blocked_reason: row.export_blocked_reason,
+        summary_state_key: row.summary_state_key,
+      }),
+      ...(summarySyncPending ? { summarySyncPending: true } : {}),
+      ...(failure ? { analysisFailure: failure } : {}),
+    };
+  }
+
+  private async querySummaryStats(ownerId: string): Promise<SummaryStatsQueryRow | null> {
+    return this.database.prepare(`
+      SELECT
+        COUNT(*) AS total,
+        COALESCE(SUM(CASE WHEN status = 'draft' THEN 1 ELSE 0 END), 0) AS draft,
+        COALESCE(SUM(CASE WHEN teacher_reviewed_at IS NULL
+          AND (status IN ('analyzing', 'needs_better_images') OR (status = 'ready_for_review' AND COALESCE(has_report, 0) = 1))
+          THEN 1 ELSE 0 END), 0) AS review,
+        COALESCE(SUM(CASE WHEN status = 'failed'
+          OR (status = 'ready_for_review' AND COALESCE(has_report, 0) = 0)
+          THEN 1 ELSE 0 END), 0) AS failed,
+        COALESCE(SUM(CASE WHEN teacher_reviewed_at IS NOT NULL AND status <> 'exported' THEN 1 ELSE 0 END), 0) AS reviewed,
+        COALESCE(SUM(CASE WHEN status = 'exported' THEN 1 ELSE 0 END), 0) AS exported,
+        COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected,
+        COALESCE(SUM(CASE WHEN summary_state_key IS NULL OR summary_state_key <> ${EXPECTED_SUMMARY_KEY_SQL} THEN 1 ELSE 0 END), 0) AS stale_summary_count
+      FROM reviews
+      WHERE owner_id = ? AND deleting_at IS NULL
+    `).bind(ownerId).first<SummaryStatsQueryRow>();
   }
 
   async queue(ownerId: string): Promise<unknown[]> {

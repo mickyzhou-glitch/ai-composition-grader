@@ -184,10 +184,17 @@ function responseFilename(response: Response, fallback: string): string {
   return plain?.trim() || fallback;
 }
 
-export async function downloadLegacyCachedPdf(review: ReviewView): Promise<string> {
+export async function downloadLegacyCachedPdf(
+  review: Pick<ReviewView, "id" | "hasPdf" | "pdfFilename"> & {
+    report?: ReviewView["report"];
+    isLegacyReport?: boolean;
+  },
+): Promise<string> {
+  const isLegacy = typeof review.isLegacyReport === "boolean"
+    ? review.isLegacyReport
+    : Boolean(review.report && isLegacyEvaluationReport(review.report));
   if (
-    !review.report
-    || !isLegacyEvaluationReport(review.report)
+    !isLegacy
     || review.hasPdf !== true
     || !review.pdfFilename?.trim()
   ) {

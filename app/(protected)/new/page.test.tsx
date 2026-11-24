@@ -388,4 +388,101 @@ describe("新建作文批改", () => {
     const creation = fetchMock.mock.calls.find(([url, options]) => url === "/api/reviews" && options?.method === "POST");
     expect(JSON.parse(creation?.[1]?.body as string)).toMatchObject({ className: "六（1）班" });
   });
+
+  it("支持「提交并录下一篇」连续录入三篇虚构作文：沿用题目与班级，清空姓名、图片及授权勾选且互不串人", async () => {
+    let createdCount = 0;
+    const createdBodies: Array<{ studentName: string; className: string; config: { title: string } }> = [];
+    const uploadedImageNamesByReview = new Map<string, string[]>();
+    const analyzedIds: string[] = [];
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = String(input);
+      if (url === "/api/classes") return json(["六（1）班"]);
+      if (url === "/api/saved-assignments") return json([]);
+      if (url === "/api/reviews" && init?.method === "POST") {
+        createdCount += 1;
+        const body = JSON.parse(String(init.body)) as { studentName: string; className: string; config: { title: string } };
+        createdBodies.push(body);
+        return json({ id: `cont-review-${createdCount}`, revision: 0 }, 201);
+      }
+      const imagesMatch = /^\/api\/reviews\/(cont-review-\d+)\/images$/u.exec(url);
+      if (imagesMatch && init?.method === "POST") {
+        const form = init.body as FormData;
+        uploadedImageNamesByReview.set(
+          imagesMatch[1]!,
+          form.getAll("images").map((file) => (file as File).name),
+        );
+        return json({ images: [{ id: createdCount * 10, position: 0 }], revision: 1 });
+      }
+      const analyzeMatch = /^\/api\/reviews\/(cont-review-\d+)\/analyze$/u.exec(url);
+      if (analyzeMatch && init?.method === "POST") {
+        analyzedIds.push(analyzeMatch[1]!);
+        return json({ id: `job-${analyzeMatch[1]}`, status: "queued", progressStage: "queued" }, 202);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    const user = userEvent.setup();
+    render(<NewReviewPage />);
+
+    // 仅在第 1 篇设定一次自定义题目与班级
+    await user.click(screen.getByRole("button", { name: "自定义题目" }));
+    await user.type(screen.getByLabelText("作文题目"), "春日校园一角");
+    await user.type(screen.getByLabelText("写作要求"), "按移步换景写校园景物。");
+    await user.type(screen.getByLabelText("结构要求"), "首尾呼应，中间详写两处景物。");
+    await user.type(screen.getByLabelText("评分侧重"), "观察细致，语句生动。");
+    await user.click(screen.getByRole("button", { name: "下一步：上传作文" }));
+
+    // 第 1 篇（虚构学生甲）：点「提交并录下一篇」
+    await user.type(screen.getByLabelText("班级", { exact: true }), "六（1）班");
+    await user.type(screen.getByLabelText("学生姓名"), "虚构甲");
+    await user.upload(screen.getByLabelText("选择作文图片"), [
+      new File(["a1"], "甲-第1页.jpg", { type: "image/jpeg" }),
+      new File(["a2"], "甲-第2页.jpg", { type: "image/jpeg" }),
+    ]);
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await confirmPrivacy(user);
+    await user.click(screen.getByRole("button", { name: "提交并录下一篇" }));
+
+    // 自动回到第 2 步：不跳转详情页，保留题目与班级，清空姓名与图片并释放预览 URL
+    expect(await screen.findByRole("status")).toHaveTextContent("已提交「虚构甲」的《春日校园一角》（本轮连续第 1 篇）");
+    expect(screen.getByRole("link", { name: "去看本篇" })).toHaveAttribute("href", "/reviews?id=cont-review-1");
+    expect(push).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("班级", { exact: true })).toHaveValue("六（1）班");
+    expect(screen.getByLabelText("学生姓名")).toHaveValue("");
+    expect(screen.getByText("0/4 张")).toBeInTheDocument();
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:甲-第1页.jpg");
+    expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:甲-第2页.jpg");
+
+    // 第 2 篇（虚构学生乙）：无需重选题目与班级，且第 3 步隐私授权必须重新勾选
+    await user.type(screen.getByLabelText("学生姓名"), "虚构乙");
+    await user.upload(screen.getByLabelText("选择作文图片"), new File(["b1"], "乙-第1页.jpg", { type: "image/jpeg" }));
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    expect(screen.getByLabelText("确认真实作文上传说明")).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "提交并录下一篇" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "创建并开始批改" })).toBeDisabled();
+    await confirmPrivacy(user);
+    await user.click(screen.getByRole("button", { name: "提交并录下一篇" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("已提交「虚构乙」的《春日校园一角》（本轮连续第 2 篇）");
+    expect(push).not.toHaveBeenCalled();
+
+    // 第 3 篇（虚构学生丙）：最后点击「创建并开始批改」进入本篇详情
+    await user.type(screen.getByLabelText("学生姓名"), "虚构丙");
+    await user.upload(screen.getByLabelText("选择作文图片"), new File(["c1"], "丙-第1页.jpg", { type: "image/jpeg" }));
+    await user.click(screen.getByRole("button", { name: "下一步：确认提交" }));
+    await confirmPrivacy(user);
+    await user.click(screen.getByRole("button", { name: "创建并开始批改" }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/reviews?id=cont-review-3"));
+    expect(createdBodies).toEqual([
+      expect.objectContaining({ studentName: "虚构甲", className: "六（1）班", config: expect.objectContaining({ title: "春日校园一角" }) }),
+      expect.objectContaining({ studentName: "虚构乙", className: "六（1）班", config: expect.objectContaining({ title: "春日校园一角" }) }),
+      expect.objectContaining({ studentName: "虚构丙", className: "六（1）班", config: expect.objectContaining({ title: "春日校园一角" }) }),
+    ]);
+    expect(uploadedImageNamesByReview.get("cont-review-1")).toEqual(["甲-第1页.jpg", "甲-第2页.jpg"]);
+    expect(uploadedImageNamesByReview.get("cont-review-2")).toEqual(["乙-第1页.jpg"]);
+    expect(uploadedImageNamesByReview.get("cont-review-3")).toEqual(["丙-第1页.jpg"]);
+    expect(analyzedIds).toEqual(["cont-review-1", "cont-review-2", "cont-review-3"]);
+  });
 });

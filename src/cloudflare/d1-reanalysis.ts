@@ -13,6 +13,10 @@ import {
 import { analysisModeForCheckpoint, type AnalysisMode } from "../ocr/analysis-mode";
 import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import {
+  SUMMARY_TITLE_MAX_CHARS,
+  truncateSummaryField,
+} from "./review-summary-state";
+import {
   formatRevisionTeacherGuidance,
   normalizeAssignmentTitle,
   REANALYSIS_SKIP_REASONS,
@@ -293,6 +297,8 @@ export class D1Reanalysis {
       UPDATE reviews SET status = 'rejected',
         rejection_reason = ?, rejection_change_request = ?,
         analysis_run_id = NULL, teacher_reviewed_at = NULL,
+        export_ready_version = NULL, export_blocked_reason = '审核不通过的作文不能导出',
+        summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision + 1 AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':rejected:-1') END,
         pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL,
         revision = revision + 1, updated_at = ?
       WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
@@ -420,7 +426,8 @@ export class D1Reanalysis {
       `).bind(now, jobId, ownerId));
       statements.push(this.database.prepare(`
         UPDATE reviews
-        SET status = 'failed', analysis_run_id = NULL, updated_at = ?
+        SET status = 'failed', analysis_run_id = NULL, updated_at = ?,
+          summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':failed:' || CAST(COALESCE(teacher_reviewed_at, -1) AS TEXT)) END
         WHERE owner_id = ? AND analysis_run_id = ? AND status = 'analyzing'
           AND EXISTS (
             SELECT 1 FROM analysis_jobs
@@ -563,6 +570,8 @@ export class D1Reanalysis {
     return [
       this.database.prepare(`
         UPDATE reviews SET status = 'analyzing', analysis_run_id = ?, teacher_reviewed_at = NULL,
+          export_ready_version = NULL, export_blocked_reason = '尚未经过老师审核',
+          summary_state_key = CASE WHEN summary_state_key IS NULL THEN NULL ELSE (CAST(revision AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':analyzing:-1') END,
           pdf_filename = NULL, pdf_path = NULL, pdf_revision = NULL, exported_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
           AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
@@ -614,12 +623,17 @@ export class D1Reanalysis {
           )`
       : "";
     const frameworkBindings = framework ? [item.assignmentId, ownerId, assignmentUpdatedAt, title] : [];
+    const summaryTitle = truncateSummaryField(title.trim(), SUMMARY_TITLE_MAX_CHARS);
     return [
       this.database.prepare(`
         UPDATE reviews SET
           ${configSet}
+          summary_title = ?,
           revision = revision + 1, status = 'analyzing', analysis_run_id = ?,
-          teacher_reviewed_at = NULL, pdf_filename = NULL, pdf_path = NULL,
+          teacher_reviewed_at = NULL, export_ready_version = NULL,
+          export_blocked_reason = '尚未经过老师审核',
+          summary_state_key = CAST(revision + 1 AS TEXT) || ':' || CAST(image_revision AS TEXT) || ':' || CAST(COALESCE(ocr_revision_cached, -1) AS TEXT) || ':' || CAST(COALESCE(report_ocr_revision, -1) AS TEXT) || ':analyzing:-1',
+          pdf_filename = NULL, pdf_path = NULL,
           pdf_revision = NULL, exported_at = NULL, updated_at = ?
         WHERE id = ? AND owner_id = ? AND revision = ? AND deleting_at IS NULL
           AND status IN ('draft', 'ready_for_review', 'exported', 'failed', 'rejected')
@@ -632,6 +646,7 @@ export class D1Reanalysis {
           ${frameworkGuard}
       `).bind(
         ...frameworkBindings,
+        summaryTitle,
         jobId,
         now,
         item.reviewId,

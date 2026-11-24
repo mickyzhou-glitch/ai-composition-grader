@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ClassFilter } from "../components/ClassFilter";
-import { filterReviewsByClass } from "../lib/classification";
+import { classNames, filterReviewsByClass } from "../lib/classification";
 import { AppHeader } from "../components/AppHeader";
 import { BatchReanalysisDialog } from "../components/BatchReanalysisDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -13,14 +13,95 @@ import { StatusBadge } from "../components/StatusBadge";
 import { apiFetch, errorMessage } from "../lib/api";
 import { downloadLegacyCachedPdf, downloadReview, downloadReviewArchive, type ExportFormat } from "../lib/review-export";
 import { chunkItems } from "../lib/failed-regrade";
-import { exportEligibility, filterReviewsByStudentName, isReviewedPendingExport, isReviewFailed, matchesHistoryStatus, reviewDisplayStatus, type HistoryStatusFilter } from "../lib/review-queue";
-import type { BatchReanalysisCommitItem, BatchReanalysisCommitResult, BatchReanalysisPreview, PublicAnalysisJobView, ReviewView } from "../lib/types";
-import { gradeFromLegacyTotal, isLegacyEvaluationReport } from "@/src/domain/contracts";
+import {
+  exportEligibility,
+  filterReviewsByStudentName,
+  isReviewedPendingExport,
+  isReviewFailed,
+  matchesHistoryStatus,
+  reviewDisplayStatus,
+  toReviewSummary,
+  type HistoryStatusFilter,
+} from "../lib/review-queue";
+import type {
+  BatchReanalysisCommitItem,
+  BatchReanalysisCommitResult,
+  BatchReanalysisPreview,
+  PublicAnalysisJobView,
+  ReviewHistoryStatsView,
+  ReviewSummaryPageView,
+  ReviewSummaryView,
+  ReviewView,
+} from "../lib/types";
 import { BATCH_REANALYSIS_LIMIT } from "@/src/reanalysis/contracts";
 
 const REGRADE_POLL_INTERVAL_MS = 1_000;
 const REGRADE_POLL_DEADLINE_MS = 12 * 60_000;
 const ANALYZING_REFRESH_INTERVAL_MS = 4_000;
+export const HISTORY_PAGE_SIZE = 20;
+
+const EMPTY_STATS: ReviewHistoryStatsView = {
+  total: 0,
+  draft: 0,
+  review: 0,
+  failed: 0,
+  reviewed: 0,
+  exported: 0,
+  rejected: 0,
+};
+
+interface HistoryQueryParams {
+  page: number;
+  pageSize: number;
+  classFilter: string | null;
+  statusFilter: HistoryStatusFilter;
+  studentSearch: string;
+}
+
+function buildSummaryUrl(params: HistoryQueryParams): string {
+  const query = new URLSearchParams();
+  query.set("summary", "1");
+  query.set("page", String(params.page));
+  query.set("pageSize", String(params.pageSize));
+  if (params.classFilter !== null) query.set("class", params.classFilter);
+  if (params.statusFilter) query.set("status", params.statusFilter);
+  const trimmedSearch = params.studentSearch.trim();
+  if (trimmedSearch) query.set("q", trimmedSearch);
+  return `/api/reviews?${query.toString()}`;
+}
+
+function computePageFromSummaries(
+  summaries: ReviewSummaryView[],
+  params: HistoryQueryParams,
+): ReviewSummaryPageView {
+  const stats: ReviewHistoryStatsView = {
+    total: summaries.length,
+    draft: summaries.filter(({ status }) => status === "draft").length,
+    review: summaries.filter((item) => matchesHistoryStatus(item, "review")).length,
+    failed: summaries.filter(isReviewFailed).length,
+    reviewed: summaries.filter(isReviewedPendingExport).length,
+    exported: summaries.filter(({ status }) => status === "exported").length,
+    rejected: summaries.filter(({ status }) => status === "rejected").length,
+  };
+  const exportableReviewedIds = filterReviewsByClass(summaries.filter(isReviewedPendingExport), params.classFilter)
+    .filter((item) => exportEligibility(item).eligible)
+    .map(({ id }) => id);
+  const filtered = filterReviewsByStudentName(filterReviewsByClass(summaries, params.classFilter), params.studentSearch)
+    .filter((item) => matchesHistoryStatus(item, params.statusFilter));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / params.pageSize));
+  const safePage = Math.min(Math.max(1, params.page), totalPages);
+  const start = (safePage - 1) * params.pageSize;
+  return {
+    items: filtered.slice(start, start + params.pageSize),
+    page: safePage,
+    pageSize: params.pageSize,
+    totalFiltered: filtered.length,
+    stats,
+    classes: classNames(summaries),
+    exportableReviewedIds,
+    matchingFailed: filtered.filter(({ status }) => status === "failed").map(({ id, studentName }) => ({ id, studentName })),
+  };
+}
 
 async function pollRegradeJob(
   reviewId: string,
@@ -63,10 +144,31 @@ function reviewDate(value: string) {
     : new Intl.DateTimeFormat("zh-CN", { year: "numeric", month: "long", day: "numeric" }).format(date);
 }
 
+export function intersectLiveSelectedExportTargets(
+  candidateIds: readonly string[],
+  liveSelectedIds: ReadonlySet<string>,
+): string[] {
+  return candidateIds.filter((id) => liveSelectedIds.has(id));
+}
+
 export default function Home() {
-  const [reviews, setReviews] = useState<ReviewView[]>([]);
+  const [serverPage, setServerPage] = useState<ReviewSummaryPageView>({
+    items: [],
+    page: 1,
+    pageSize: HISTORY_PAGE_SIZE,
+    totalFiltered: 0,
+    stats: EMPTY_STATS,
+    classes: [],
+    exportableReviewedIds: [],
+    matchingFailed: [],
+  });
+  const [loadedQueryKey, setLoadedQueryKey] = useState<string | null>(null);
+  const [legacySummaries, setLegacySummaries] = useState<ReviewSummaryView[] | null>(null);
+  const [knownItemsById, setKnownItemsById] = useState<Map<string, ReviewSummaryView>>(() => new Map());
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [queryError, setQueryError] = useState("");
+  const [actionError, setActionError] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
   const [exporting, setExporting] = useState<string | null>(null);
   const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string>>(() => new Set());
@@ -92,37 +194,167 @@ export default function Home() {
 
   const mountedRef = useRef(true);
   const regradeControllerRef = useRef<AbortController | null>(null);
+  const fetchControllerRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+  const isLegacyModeRef = useRef(false);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      const loaded = await apiFetch<ReviewView[]>("/api/reviews");
-      if (mountedRef.current) setReviews(loaded);
-    } catch (caught) {
-      if (mountedRef.current) setError(errorMessage(caught));
-    } finally {
-      if (mountedRef.current) setLoading(false);
+  const currentQueryParams = useMemo<HistoryQueryParams>(() => ({
+    page,
+    pageSize: HISTORY_PAGE_SIZE,
+    classFilter,
+    statusFilter,
+    studentSearch,
+  }), [classFilter, page, statusFilter, studentSearch]);
+
+  const currentQueryKey = useMemo(() => buildSummaryUrl(currentQueryParams), [currentQueryParams]);
+  const latestQueryParamsRef = useRef<HistoryQueryParams>(currentQueryParams);
+  const selectedReviewIdsRef = useRef<Set<string>>(selectedReviewIds);
+  useEffect(() => {
+    latestQueryParamsRef.current = currentQueryParams;
+  }, [currentQueryParams]);
+  useEffect(() => {
+    selectedReviewIdsRef.current = selectedReviewIds;
+  }, [selectedReviewIds]);
+
+  const ingestPayload = useCallback((raw: ReviewSummaryPageView | ReviewView[], requestedParams: HistoryQueryParams) => {
+    if (Array.isArray(raw)) {
+      const summaries = raw.map(toReviewSummary);
+      isLegacyModeRef.current = true;
+      setLegacySummaries(summaries);
+      setLoadedQueryKey(buildSummaryUrl(requestedParams));
+      setKnownItemsById((previous) => {
+        const next = new Map(previous);
+        summaries.forEach((item) => next.set(item.id, item));
+        return next;
+      });
+      return;
     }
+    isLegacyModeRef.current = false;
+    setLegacySummaries(null);
+    setServerPage(raw);
+    const effectiveParams: HistoryQueryParams = { ...requestedParams, page: raw.page };
+    latestQueryParamsRef.current = effectiveParams;
+    if (raw.page !== requestedParams.page) {
+      setPage(raw.page);
+    }
+    setLoadedQueryKey(buildSummaryUrl(effectiveParams));
+    setKnownItemsById((previous) => {
+      const next = new Map(previous);
+      const pageIds = new Set<string>();
+      raw.items.forEach((item) => {
+        pageIds.add(item.id);
+        next.set(item.id, item);
+      });
+      if ((raw.summaryBackfillPending ?? 0) === 0) {
+        const exportableSet = new Set(raw.exportableReviewedIds);
+        for (const [id, prev] of next.entries()) {
+          if (pageIds.has(id)) continue;
+          if (exportableSet.has(id)) {
+            next.set(id, {
+              ...prev,
+              status: prev.status === "exported" || prev.status === "rejected" ? "ready_for_review" : prev.status,
+              teacherReviewedAt: prev.teacherReviewedAt ?? prev.updatedAt ?? prev.createdAt,
+              exportEligibility: { eligible: true },
+              summarySyncPending: undefined,
+            });
+          } else if (
+            prev.exportEligibility.eligible
+            && prev.status !== "exported"
+            && raw.stats.exported === 0
+            && (requestedParams.classFilter === null || (prev.className ?? "") === requestedParams.classFilter)
+          ) {
+            next.set(id, {
+              ...prev,
+              exportEligibility: {
+                eligible: false,
+                reason: "当前作文导出资格已变更，请重新核对",
+              },
+            });
+          }
+        }
+      }
+      return next;
+    });
   }, []);
+
+  // 始终按调用时刻的最新筛选与页码刷新，绝不使用旧闭包覆盖用户刚刚切换的新班级/新筛选
+  const refreshLatest = useCallback(async () => {
+    fetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
+    const seq = ++requestSeqRef.current;
+    const targetParams = latestQueryParamsRef.current;
+    const url = buildSummaryUrl(targetParams);
+    setLoading(true);
+    setQueryError("");
+    try {
+      const raw = await apiFetch<ReviewSummaryPageView | ReviewView[]>(url, { signal: controller.signal });
+      if (!mountedRef.current || seq !== requestSeqRef.current) return;
+      ingestPayload(raw, targetParams);
+    } catch (caught) {
+      if (!mountedRef.current || seq !== requestSeqRef.current || (caught instanceof DOMException && caught.name === "AbortError")) return;
+      setQueryError(errorMessage(caught));
+    } finally {
+      if (mountedRef.current && seq === requestSeqRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [ingestPayload]);
 
   useEffect(() => {
     mountedRef.current = true;
-    let active = true;
-    void apiFetch<ReviewView[]>("/api/reviews")
-      .then((loaded) => { if (active) setReviews(loaded); })
-      .catch((caught) => { if (active) setError(errorMessage(caught)); })
-      .finally(() => { if (active) setLoading(false); });
     return () => {
-      active = false;
       mountedRef.current = false;
+      fetchControllerRef.current?.abort();
       regradeControllerRef.current?.abort();
     };
   }, []);
 
+  useEffect(() => {
+    if (isLegacyModeRef.current) return;
+    let active = true;
+    fetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
+    const seq = ++requestSeqRef.current;
+    const queryParams = currentQueryParams;
+    const url = buildSummaryUrl(queryParams);
+    setLoading(true);
+    setQueryError("");
+    void apiFetch<ReviewSummaryPageView | ReviewView[]>(url, { signal: controller.signal })
+      .then((raw) => {
+        if (!active || seq !== requestSeqRef.current) return;
+        ingestPayload(raw, queryParams);
+      })
+      .catch((caught) => {
+        if (!active || seq !== requestSeqRef.current || (caught instanceof DOMException && caught.name === "AbortError")) return;
+        setQueryError(errorMessage(caught));
+      })
+      .finally(() => {
+        if (active && seq === requestSeqRef.current) setLoading(false);
+      });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [currentQueryParams, ingestPayload]);
+
+  const summaryPage = useMemo(() => (
+    legacySummaries !== null
+      ? computePageFromSummaries(legacySummaries, currentQueryParams)
+      : serverPage
+  ), [currentQueryParams, legacySummaries, serverPage]);
+
+  // 严格校验当前已加载数据是否与当前筛选框/页码精确对齐：仅在查询未就绪或查询本身报错时收起列表，旧异步操作失败（actionError）不影响已就绪的新班级
+  const isQuerySettled = legacySummaries !== null || (!loading && !queryError && loadedQueryKey === currentQueryKey);
+  const visibleReviews = useMemo(
+    () => (isQuerySettled ? summaryPage.items : []),
+    [isQuerySettled, summaryPage.items],
+  );
+
   const analyzingIds = useMemo(
-    () => reviews.filter(({ status }) => status === "analyzing").map(({ id }) => id),
-    [reviews],
+    () => (legacySummaries ?? visibleReviews).filter(({ status }) => status === "analyzing").map(({ id }) => id),
+    [legacySummaries, visibleReviews],
   );
   const hasAnalyzingReviews = analyzingIds.length > 0;
   const analyzingIdsRef = useRef<string[]>(analyzingIds);
@@ -138,115 +370,153 @@ export default function Home() {
       const ids = analyzingIdsRef.current;
       if (ids.length === 0) return;
       inFlight = true;
-      const endpoint = ids.length <= 50
-        ? `/api/reviews?ids=${ids.map((id) => encodeURIComponent(id)).join(",")}`
-        : "/api/reviews";
-      void apiFetch<ReviewView[]>(endpoint)
-        .then((loaded) => {
+      if (ids.length > 50) {
+        void refreshLatest().finally(() => { inFlight = false; });
+        return;
+      }
+      const endpoint = `/api/reviews?ids=${ids.map((id) => encodeURIComponent(id)).join(",")}`;
+      void apiFetch<Array<ReviewView | ReviewSummaryView>>(endpoint)
+        .then(async (loaded) => {
           if (!mountedRef.current) return;
-          if (ids.length > 50) {
-            setReviews(loaded);
+          const byId = new Map(loaded.map((item) => [
+            item.id,
+            "hasReport" in item ? item : toReviewSummary(item),
+          ]));
+          setKnownItemsById((previous) => {
+            const next = new Map(previous);
+            byId.forEach((value, key) => next.set(key, value));
+            return next;
+          });
+          if (isLegacyModeRef.current) {
+            setLegacySummaries((current) => (current ? current.map((item) => byId.get(item.id) ?? item) : current));
             return;
           }
-          const byId = new Map(loaded.map((item) => [item.id, item]));
-          setReviews((current) => current.map((item) => byId.get(item.id) ?? item));
+          const anyTransitioned = [...byId.values()].some((updated) => updated.status !== "analyzing");
+          if (anyTransitioned) {
+            // 一旦状态脱离 analyzing（如进入 ready_for_review 或 failed），重取当前查询摘要以同步筛选归属、失败清单与统计
+            await refreshLatest();
+          }
         })
         .catch(() => undefined)
         .finally(() => { inFlight = false; });
     };
     const timer = window.setInterval(poll, ANALYZING_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [failedRegrade?.running, hasAnalyzingReviews]);
+  }, [failedRegrade?.running, hasAnalyzingReviews, refreshLatest]);
 
-  const reviewedPending = useMemo(
-    () => reviews.filter(isReviewedPendingExport),
-    [reviews],
-  );
-  const reviewedPendingExport = useMemo(
-    () => filterReviewsByClass(reviewedPending, classFilter).filter((item) => exportEligibility(item).eligible),
-    [reviewedPending, classFilter],
-  );
-  const stats = useMemo(() => ({
-    draft: reviews.filter(({ status }) => status === "draft").length,
-    review: reviews.filter((review) => matchesHistoryStatus(review, "review")).length,
-    failed: reviews.filter(isReviewFailed).length,
-    reviewed: reviewedPending.length,
-    exported: reviews.filter(({ status }) => status === "exported").length,
-    rejected: reviews.filter(({ status }) => status === "rejected").length,
-  }), [reviews, reviewedPending.length]);
-  const visibleReviews = useMemo(
-    () => filterReviewsByStudentName(filterReviewsByClass(reviews, classFilter), studentSearch)
-      .filter((review) => matchesHistoryStatus(review, statusFilter)),
-    [reviews, studentSearch, classFilter, statusFilter],
-  );
-  const failedInView = useMemo(
-    () => visibleReviews.filter((review) => review.status === "failed"),
-    [visibleReviews],
-  );
+  const stats = summaryPage.stats;
+  const totalCount = stats.total;
+  const backfillPendingCount = isQuerySettled ? (summaryPage.summaryBackfillPending ?? 0) : 0;
+  const exportableReviewedIds = isQuerySettled && backfillPendingCount === 0 ? summaryPage.exportableReviewedIds : [];
+  const failedInView = isQuerySettled ? summaryPage.matchingFailed : [];
+  const totalPages = Math.max(1, Math.ceil(summaryPage.totalFiltered / summaryPage.pageSize));
+
   const selectedVisibleCount = visibleReviews.filter(({ id }) => selectedReviewIds.has(id)).length;
   const hiddenSelectedCount = selectedReviewIds.size - selectedVisibleCount;
-  const allVisibleSelected = visibleReviews.length > 0 && selectedVisibleCount === visibleReviews.length;
-  const selectedExportableReviews = reviews.filter(({ id }) => selectedReviewIds.has(id)).filter(
-    (item) => exportEligibility(item).eligible,
+  const allVisibleSelected = isQuerySettled && visibleReviews.length > 0 && selectedVisibleCount === visibleReviews.length;
+  const selectedExportableIds = useMemo(
+    () => [...selectedReviewIds].filter((id) => {
+      const known = knownItemsById.get(id);
+      return Boolean(known && exportEligibility(known).eligible);
+    }),
+    [knownItemsById, selectedReviewIds],
   );
   const reanalysisBusy = reanalysisLoading || reanalysisSubmitting || failedRegrade?.running === true;
 
-  async function remove(review: ReviewView) {
+  function changeClassFilter(nextClass: string | null) {
+    latestQueryParamsRef.current = { ...latestQueryParamsRef.current, page: 1, classFilter: nextClass };
+    setPage(1);
+    setClassFilter(nextClass);
+  }
+
+  function changeStudentSearch(nextQuery: string) {
+    latestQueryParamsRef.current = { ...latestQueryParamsRef.current, page: 1, studentSearch: nextQuery };
+    setPage(1);
+    setStudentSearch(nextQuery);
+  }
+
+  function changeStatusFilter(nextStatus: HistoryStatusFilter) {
+    latestQueryParamsRef.current = { ...latestQueryParamsRef.current, page: 1, statusFilter: nextStatus };
+    setPage(1);
+    setStatusFilter(nextStatus);
+  }
+
+  function changePage(nextPage: number) {
+    const safeNext = Math.max(1, nextPage);
+    latestQueryParamsRef.current = { ...latestQueryParamsRef.current, page: safeNext };
+    setPage(safeNext);
+  }
+
+  async function remove(review: ReviewSummaryView) {
     if (!window.confirm(`确认永久删除《${review.config.title}》？删除后不可恢复。`)) return;
     setDeleting(review.id);
-    setError("");
+    setActionError("");
     try {
       await apiFetch(`/api/reviews/${encodeURIComponent(review.id)}`, { method: "DELETE" });
-      setReviews((current) => current.filter(({ id }) => id !== review.id));
-      setSelectedReviewIds((current) => {
-        const next = new Set(current);
+      setKnownItemsById((previous) => {
+        const next = new Map(previous);
         next.delete(review.id);
         return next;
       });
+      setSelectedReviewIds((current) => {
+        const next = new Set(current);
+        next.delete(review.id);
+        selectedReviewIdsRef.current = next;
+        return next;
+      });
+      if (isLegacyModeRef.current) {
+        setLegacySummaries((current) => (current ? current.filter(({ id }) => id !== review.id) : current));
+      } else {
+        // 服务端模式删除后重取当前查询，自动采纳服务端校正后的页码（如删完第 2 页最后 1 篇自动回退第 1 页），并保留其余跨页选择
+        await refreshLatest();
+      }
     } catch (caught) {
-      setError(errorMessage(caught));
+      setActionError(errorMessage(caught));
     } finally {
       setDeleting(null);
     }
   }
 
-  async function exportReview(review: ReviewView, format: ExportFormat) {
+  async function exportReview(review: ReviewSummaryView, format: ExportFormat) {
     if (exporting || batchExporting) return;
     setExporting(review.id);
-    setError("");
+    setActionError("");
     try {
       await downloadReview(review.id, format);
-      await load();
+      await refreshLatest();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setActionError(errorMessage(caught));
     } finally {
       setExporting(null);
     }
   }
 
-  async function downloadLegacyPdf(review: ReviewView) {
+  async function downloadLegacyPdf(review: ReviewSummaryView) {
     if (exporting || batchExporting) return;
     setExporting(review.id);
-    setError("");
+    setActionError("");
     try {
       await downloadLegacyCachedPdf(review);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setActionError(errorMessage(caught));
     } finally {
       setExporting(null);
     }
   }
 
   function toggleReviewSelection(reviewId: string) {
+    if (batchExporting || exporting !== null || reanalysisBusy) return;
     setSelectedReviewIds((current) => {
       const next = new Set(current);
       if (next.has(reviewId)) next.delete(reviewId);
       else next.add(reviewId);
+      selectedReviewIdsRef.current = next;
       return next;
     });
   }
 
   function toggleAllReviews() {
+    if (!isQuerySettled || visibleReviews.length === 0 || batchExporting || exporting !== null || reanalysisBusy) return;
     setSelectedReviewIds((current) => {
       const next = new Set(current);
       if (visibleReviews.every(({ id }) => next.has(id))) {
@@ -254,40 +524,137 @@ export default function Home() {
       } else {
         visibleReviews.forEach(({ id }) => next.add(id));
       }
+      selectedReviewIdsRef.current = next;
       return next;
     });
   }
 
   async function exportSelected(format: ExportFormat) {
-    if (selectedExportableReviews.length === 0 || batchExporting || exporting) return;
+    if (!isQuerySettled || selectedExportableIds.length === 0 || batchExporting || exporting || reanalysisBusy) return;
     setBatchExporting(true);
-    setError("");
+    setActionError("");
     try {
-      await downloadReviewArchive(selectedExportableReviews.map(({ id }) => id), format);
-      await load();
+      let targetIds: string[] = [];
+      if (isLegacyModeRef.current) {
+        targetIds = selectedExportableIds;
+      } else {
+        const selectedIds = [...selectedReviewIdsRef.current];
+        const snapshotParams = latestQueryParamsRef.current;
+        fetchControllerRef.current?.abort();
+        const seq = ++requestSeqRef.current;
+        setLoading(false);
+        const freshRaw = await apiFetch<ReviewSummaryPageView | ReviewView[]>(buildSummaryUrl(snapshotParams));
+        if (Array.isArray(freshRaw)) {
+          throw new Error("历史分页摘要响应格式异常，已停止导出以免使用旧集合");
+        }
+        if (!mountedRef.current || seq !== requestSeqRef.current || buildSummaryUrl(latestQueryParamsRef.current) !== buildSummaryUrl(snapshotParams)) {
+          if (mountedRef.current) {
+            setActionError("列表或筛选状态已更新，已取消过期导出，请按最新结果重新操作");
+          }
+          return;
+        }
+        ingestPayload(freshRaw, snapshotParams);
+        const freshItemMap = new Map(freshRaw.items.map((item) => [item.id, item]));
+        const freshExportableSet = (freshRaw.summaryBackfillPending ?? 0) === 0
+          ? new Set(freshRaw.exportableReviewedIds)
+          : new Set<string>();
+        const unresolvedIds = selectedIds.filter((id) => !freshItemMap.has(id) && !freshExportableSet.has(id));
+        const extraEligibleSet = new Set<string>();
+        if (unresolvedIds.length > 0) {
+          for (const chunk of chunkItems(unresolvedIds)) {
+            const idQuery = `/api/reviews?summary=1&ids=${chunk.map((id) => encodeURIComponent(id)).join(",")}`;
+            const loaded = await apiFetch<Array<ReviewSummaryView | ReviewView> | ReviewSummaryPageView>(idQuery);
+            if (!mountedRef.current || seq !== requestSeqRef.current || buildSummaryUrl(latestQueryParamsRef.current) !== buildSummaryUrl(snapshotParams)) {
+              if (mountedRef.current) {
+                setActionError("列表或筛选状态已更新，已取消过期导出，请按最新结果重新操作");
+              }
+              return;
+            }
+            if (Array.isArray(loaded)) {
+              const normalized = loaded.map((entry) => ("hasReport" in entry ? entry : toReviewSummary(entry)));
+              setKnownItemsById((previous) => {
+                const next = new Map(previous);
+                normalized.forEach((item) => next.set(item.id, item));
+                return next;
+              });
+              normalized.forEach((item) => {
+                if (exportEligibility(item).eligible) extraEligibleSet.add(item.id);
+              });
+            } else if ((loaded.summaryBackfillPending ?? 0) === 0) {
+              loaded.items.forEach((item) => {
+                if (exportEligibility(item).eligible) extraEligibleSet.add(item.id);
+              });
+              loaded.exportableReviewedIds.forEach((id) => extraEligibleSet.add(id));
+            }
+          }
+        }
+        targetIds = selectedIds.filter((id) => {
+          const onPage = freshItemMap.get(id);
+          if (onPage) return exportEligibility(onPage).eligible;
+          if (freshExportableSet.has(id)) return true;
+          return extraEligibleSet.has(id);
+        });
+      }
+      targetIds = intersectLiveSelectedExportTargets(targetIds, selectedReviewIdsRef.current);
+      if (targetIds.length === 0) {
+        setActionError("所选记录当前已无可导出的新格式作文");
+        return;
+      }
+      await downloadReviewArchive(targetIds, format);
+      await refreshLatest();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setActionError(errorMessage(caught));
     } finally {
       setBatchExporting(false);
     }
   }
 
   async function exportReviewed(format: ExportFormat) {
-    if (reviewedPendingExport.length === 0 || batchExporting || exporting || reanalysisBusy) return;
+    if (!isQuerySettled || exportableReviewedIds.length === 0 || batchExporting || exporting || reanalysisBusy) return;
     setBatchExporting(true);
-    setError("");
+    setActionError("");
     try {
-      await downloadReviewArchive(reviewedPendingExport.map(({ id }) => id), format);
-      await load();
+      let targetIds: string[] = [];
+      if (isLegacyModeRef.current) {
+        targetIds = exportableReviewedIds;
+      } else {
+        // 服务端分页模式下，一键导出前实时重取当前筛选下的最新可导出 ID 集合；重取期间若列表/筛选已变更或响应异常，立即中止导出（归档调用 0 次）
+        const snapshotParams = latestQueryParamsRef.current;
+        fetchControllerRef.current?.abort();
+        const seq = ++requestSeqRef.current;
+        setLoading(false);
+        const freshRaw = await apiFetch<ReviewSummaryPageView | ReviewView[]>(buildSummaryUrl(snapshotParams));
+        if (Array.isArray(freshRaw)) {
+          throw new Error("历史分页摘要响应格式异常，已停止导出以免使用旧集合");
+        }
+        if (!mountedRef.current || seq !== requestSeqRef.current || buildSummaryUrl(latestQueryParamsRef.current) !== buildSummaryUrl(snapshotParams)) {
+          if (mountedRef.current) {
+            setActionError("列表或筛选状态已更新，已取消过期导出，请按最新结果重新操作");
+          }
+          return;
+        }
+        ingestPayload(freshRaw, snapshotParams);
+        if ((freshRaw.summaryBackfillPending ?? 0) > 0) {
+          setActionError(`尚有 ${freshRaw.summaryBackfillPending} 篇历史记录正在同步导出资格，请刷新完成后再一键导出`);
+          return;
+        }
+        targetIds = freshRaw.exportableReviewedIds;
+      }
+      if (targetIds.length === 0) {
+        setActionError("当前筛选下没有可导出的已复核作文");
+        return;
+      }
+      await downloadReviewArchive(targetIds, format);
+      await refreshLatest();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setActionError(errorMessage(caught));
     } finally {
       setBatchExporting(false);
     }
   }
 
   async function openBatchReanalysis() {
-    if (selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || reanalysisBusy || batchExporting || exporting) return;
+    if (!isQuerySettled || selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || reanalysisBusy || batchExporting || exporting) return;
     setReanalysisOpen(true);
     setReanalysisLoading(true);
     setReanalysisPreview(null);
@@ -321,9 +688,10 @@ export default function Home() {
       setSelectedReviewIds((current) => {
         const next = new Set(current);
         result.submitted.forEach(({ reviewId }) => next.delete(reviewId));
+        selectedReviewIdsRef.current = next;
         return next;
       });
-      await load();
+      await refreshLatest();
     } catch (caught) {
       setReanalysisError(errorMessage(caught));
     } finally {
@@ -332,7 +700,7 @@ export default function Home() {
   }
 
   async function regradeFailed() {
-    if (failedInView.length === 0 || reanalysisBusy || batchExporting || exporting) return;
+    if (!isQuerySettled || failedInView.length === 0 || reanalysisBusy || batchExporting || exporting) return;
     const ids = failedInView.map(({ id }) => id);
     const names = new Map(failedInView.map((item) => [item.id, item.studentName || "未填写"]));
     const chunks = chunkItems(ids);
@@ -345,7 +713,7 @@ export default function Home() {
     const regradeController = new AbortController();
     regradeControllerRef.current = regradeController;
     setFailedRegrade({ running: true, completed: 0, total: ids.length, submitted: 0, skipped: [], failures: [], error: "" });
-    setError("");
+    setActionError("");
     try {
       for (const chunk of chunks) {
         const preview = await apiFetch<BatchReanalysisPreview>("/api/reviews/batch-reanalysis/preview", {
@@ -374,6 +742,7 @@ export default function Home() {
           setSelectedReviewIds((current) => {
             const next = new Set(current);
             submittedIds.forEach((reviewId) => next.delete(reviewId));
+            selectedReviewIdsRef.current = next;
             return next;
           });
         }
@@ -412,7 +781,7 @@ export default function Home() {
           });
         }
       });
-      await load();
+      await refreshLatest();
       setFailedRegrade({
         running: false,
         completed: ids.length,
@@ -475,17 +844,17 @@ export default function Home() {
           <div className="section-heading">
             <div><p className="eyebrow">最近工作</p><h2 id="recent-title">批改历史</h2></div>
             <div className="section-heading-meta">
-              <span className="count-pill">共 {reviews.length} 篇</span>
+              <span className="count-pill">共 {totalCount} 篇</span>
               <span className="muted">长期保留，可手动永久删除</span>
             </div>
           </div>
           <div className="history-toolbar">
             <div className="history-tools">
               <div className="history-filters">
-                <ClassFilter items={reviews} value={classFilter} onChange={setClassFilter} />
-                <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" placeholder="输入姓名筛选…" value={studentSearch} onChange={(event) => setStudentSearch(event.target.value)} /></label>
+                <ClassFilter options={summaryPage.classes} value={classFilter} onChange={changeClassFilter} />
+                <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" placeholder="输入姓名筛选…" value={studentSearch} onChange={(event) => changeStudentSearch(event.target.value)} /></label>
                 <label className="history-search history-status-filter">批改状态
-                  <select aria-label="筛选批改状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as HistoryStatusFilter)}>
+                  <select aria-label="筛选批改状态" value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as HistoryStatusFilter)}>
                     <option value="">全部</option>
                     <option value="draft">草稿</option>
                     <option value="review">待复核</option>
@@ -498,20 +867,20 @@ export default function Home() {
               </div>
               <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
             </div>
-            {reviews.length ? (
+            {totalCount > 0 || selectedReviewIds.size > 0 ? (
               <div className="history-batch-actions">
                 <div className="history-selection-summary">
-                  <label><input type="checkbox" checked={allVisibleSelected} disabled={visibleReviews.length === 0 || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
+                  <label><input type="checkbox" checked={allVisibleSelected} disabled={!isQuerySettled || visibleReviews.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onChange={toggleAllReviews} /> 全选当前结果</label>
                   <span className="selection-count-badge">已选择 {selectedReviewIds.size} 篇</span>
                   {hiddenSelectedCount > 0 ? <span className="muted">其中 {hiddenSelectedCount} 篇未显示</span> : null}
                 </div>
                 <div className="history-batch-commands">
-                  <div className="history-export-command"><span>一键导出已复核（{reviewedPendingExport.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={reviewedPendingExport.length === 0 || batchExporting || exporting !== null || reanalysisBusy} busy={batchExporting} busyLabel="正在打包…" onExport={exportReviewed} /></div>
-                  <div className="history-export-command"><span>导出所选（{selectedExportableReviews.length}）</span><ExportMenu ariaLabel="导出所选记录" disabled={selectedExportableReviews.length === 0 || batchExporting || exporting !== null || reanalysisBusy} disabledReason={selectedReviewIds.size > 0 && selectedExportableReviews.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={batchExporting} busyLabel="正在打包…" onExport={exportSelected} /></div>
-                  <button className="button button--quiet" type="button" disabled={selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
+                  <div className="history-export-command"><span>一键导出已复核（{exportableReviewedIds.length}）</span><ExportMenu ariaLabel="导出全部已复核" disabled={!isQuerySettled || backfillPendingCount > 0 || exportableReviewedIds.length === 0 || batchExporting || exporting !== null || reanalysisBusy} disabledReason={backfillPendingCount > 0 ? `尚有 ${backfillPendingCount} 篇历史记录正在同步导出资格，请刷新完成后再一键导出` : undefined} busy={batchExporting} busyLabel="正在打包…" onExport={exportReviewed} /></div>
+                  <div className="history-export-command"><span>导出所选（{selectedExportableIds.length}）</span><ExportMenu ariaLabel="导出所选记录" disabled={!isQuerySettled || selectedExportableIds.length === 0 || batchExporting || exporting !== null || reanalysisBusy} disabledReason={selectedReviewIds.size > 0 && selectedExportableIds.length === 0 ? "所选记录没有可导出的新格式" : undefined} busy={batchExporting} busyLabel="正在打包…" onExport={exportSelected} /></div>
+                  <button className="button button--quiet" type="button" disabled={!isQuerySettled || selectedReviewIds.size === 0 || selectedReviewIds.size > BATCH_REANALYSIS_LIMIT || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void openBatchReanalysis()}>
                     {reanalysisLoading ? "正在预览…" : "按最新框架重新分析"}
                   </button>
-                  <button className="button button--quiet" type="button" disabled={failedInView.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void regradeFailed()}>
+                  <button className="button button--quiet" type="button" disabled={!isQuerySettled || failedInView.length === 0 || batchExporting || exporting !== null || reanalysisBusy} onClick={() => void regradeFailed()}>
                     {failedRegrade?.running ? "正在重新批改…" : `一键重新批改失败作文（${failedInView.length}）`}
                   </button>
                 </div>
@@ -531,9 +900,10 @@ export default function Home() {
               </div>
             ) : null}
           </div>
-          {error ? <ErrorBanner message={error} onRetry={load} /> : null}
+          {queryError ? <ErrorBanner message={queryError} onRetry={refreshLatest} /> : null}
+          {actionError ? <ErrorBanner message={actionError} /> : null}
           {loading ? <p className="loading-note" role="status">正在翻阅批改记录…</p> : null}
-          {!loading && !error && reviews.length === 0 ? (
+          {!loading && !queryError && totalCount === 0 ? (
             <div className="empty-state">
               <span className="empty-seal" aria-hidden="true">空</span>
               <h3>还没有作文批改记录</h3>
@@ -542,10 +912,10 @@ export default function Home() {
             </div>
           ) : null}
           <div className="history-list">
-            {!loading && reviews.length > 0 && visibleReviews.length === 0 ? <p className="muted history-empty-filter">没有找到该学生的作文</p> : null}
+            {isQuerySettled && totalCount > 0 && visibleReviews.length === 0 ? <p className="muted history-empty-filter">没有找到该学生的作文</p> : null}
             {visibleReviews.map((review) => (
               <article className={`history-card ${selectedReviewIds.has(review.id) ? "history-card--selected" : ""}`} key={review.id}>
-                <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting || reanalysisBusy} onChange={() => toggleReviewSelection(review.id)} /></label>
+                <label className="history-select"><input type="checkbox" aria-label={`选择《${review.config.title}》`} checked={selectedReviewIds.has(review.id)} disabled={batchExporting || exporting !== null || reanalysisBusy} onChange={() => toggleReviewSelection(review.id)} /></label>
                 <div className="history-main">
                   <div className="history-meta">
                     <StatusBadge status={reviewDisplayStatus(review)} />
@@ -555,7 +925,7 @@ export default function Home() {
                   </div>
                   <div className="history-title-row">
                     <h3><Link href={`/reviews?id=${encodeURIComponent(review.id)}`}>{review.config.title}</Link></h3>
-                    <p className="history-grade-tag">{review.report ? (() => { const grade = review.report.grade ?? gradeFromLegacyTotal(review.report.scores?.total ?? 0); return `${grade}${grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}`; })() : "尚未生成等级评定"}</p>
+                    <p className="history-grade-tag">{review.hasReport && review.grade ? `${review.grade}${review.grade === "C" ? " · 需要重写" : " · 已完成四维诊断"}` : "尚未生成等级评定"}</p>
                   </div>
                   {review.status === "failed" && review.analysisFailure ? <div className="history-failure-box">
                     <p>{review.analysisFailure.summary}</p>
@@ -564,8 +934,8 @@ export default function Home() {
                 </div>
                 <div className="card-actions">
                   <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>进入复核</Link>
-                  {review.report && isLegacyEvaluationReport(review.report) ? review.hasPdf && review.pdfFilename?.trim() ? <button className="button button--quiet" type="button" disabled={exporting !== null || batchExporting} onClick={() => void downloadLegacyPdf(review)}>{exporting === review.id ? "正在下载…" : "下载已生成的旧版 PDF"}</button> : <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>完整重新分析</Link> : (() => { const eligibility = exportEligibility(review); return <ExportMenu ariaLabel={`导出《${review.config.title}》`} disabled={!eligibility.eligible || exporting !== null || batchExporting} disabledReason={!eligibility.eligible ? eligibility.reason : undefined} busy={exporting === review.id} onExport={(format) => exportReview(review, format)} />; })()}
-                  {review.report && isLegacyEvaluationReport(review.report) ? <span className="export-menu-reason">旧版示范段落报告需要完整重新分析后才能导出新格式</span> : null}
+                  {review.hasReport && review.isLegacyReport ? review.hasPdf && review.pdfFilename?.trim() ? <button className="button button--quiet" type="button" disabled={exporting !== null || batchExporting} onClick={() => void downloadLegacyPdf(review)}>{exporting === review.id ? "正在下载…" : "下载已生成的旧版 PDF"}</button> : <Link className="button button--quiet" href={`/reviews?id=${encodeURIComponent(review.id)}`}>完整重新分析</Link> : (() => { const eligibility = exportEligibility(review); return <ExportMenu ariaLabel={`导出《${review.config.title}》`} disabled={!eligibility.eligible || exporting !== null || batchExporting} disabledReason={!eligibility.eligible ? eligibility.reason : undefined} busy={exporting === review.id} onExport={(format) => exportReview(review, format)} />; })()}
+                  {review.hasReport && review.isLegacyReport ? <span className="export-menu-reason">旧版示范段落报告需要完整重新分析后才能导出新格式</span> : null}
                   <button className="button button--danger-quiet" type="button" disabled={deleting === review.id || batchExporting || reanalysisBusy} onClick={() => void remove(review)} aria-label={`删除《${review.config.title}》`}>
                     {deleting === review.id ? "删除中…" : "删除"}
                   </button>
@@ -573,6 +943,29 @@ export default function Home() {
               </article>
             ))}
           </div>
+          {isQuerySettled && summaryPage.totalFiltered > summaryPage.pageSize ? (
+            <nav className="history-pagination form-actions" aria-label="批改历史分页">
+              <button
+                type="button"
+                className="button button--quiet"
+                disabled={loading || summaryPage.page <= 1}
+                onClick={() => changePage(summaryPage.page - 1)}
+              >
+                上一页
+              </button>
+              <span className="muted">
+                第 {summaryPage.page} / {totalPages} 页（当前筛选共 {summaryPage.totalFiltered} 篇）
+              </span>
+              <button
+                type="button"
+                className="button button--quiet"
+                disabled={loading || summaryPage.page >= totalPages}
+                onClick={() => changePage(summaryPage.page + 1)}
+              >
+                下一页
+              </button>
+            </nav>
+          ) : null}
         </section>
       </main>
       <BatchReanalysisDialog

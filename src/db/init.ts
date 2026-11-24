@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS reviews (
   deleting_at INTEGER,
   privacy_consent_version TEXT,
   privacy_consented_at INTEGER,
+  has_report INTEGER NOT NULL DEFAULT 0,
+  summary_title TEXT,
+  summary_grade TEXT,
+  summary_is_legacy INTEGER NOT NULL DEFAULT 0,
+  summary_diagnostics TEXT,
+  ocr_revision_cached INTEGER,
+  export_ready_version TEXT,
+  export_blocked_reason TEXT,
+  summary_state_key TEXT,
+  write_nonce TEXT,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -552,6 +562,38 @@ function migrateAnalysisJobs(database: Database.Database): void {
   `);
 }
 
+function migrateReviewSummaryFields(database: Database.Database): void {
+  const columns = tableColumns(database, "reviews");
+  const additions: Array<[string, string]> = [
+    ["has_report", "INTEGER NOT NULL DEFAULT 0"],
+    ["summary_title", "TEXT"],
+    ["summary_grade", "TEXT"],
+    ["summary_is_legacy", "INTEGER NOT NULL DEFAULT 0"],
+    ["summary_diagnostics", "TEXT"],
+    ["ocr_revision_cached", "INTEGER"],
+    ["export_ready_version", "TEXT"],
+    ["export_blocked_reason", "TEXT"],
+    ["summary_state_key", "TEXT"],
+    ["write_nonce", "TEXT"],
+  ];
+  for (const [name, definition] of additions) {
+    if (!columns.has(name)) {
+      database.exec(`ALTER TABLE reviews ADD COLUMN ${name} ${definition}`);
+    }
+  }
+  database.exec(`
+    CREATE INDEX IF NOT EXISTS reviews_owner_class_updated_idx
+      ON reviews(owner_id, class_name, updated_at DESC, created_at DESC)
+      WHERE deleting_at IS NULL;
+    CREATE INDEX IF NOT EXISTS reviews_pending_export_ready_idx
+      ON reviews(
+        owner_id, class_name, updated_at DESC, created_at DESC, id DESC,
+        revision, image_revision, ocr_revision_cached, report_ocr_revision, export_ready_version, status
+      )
+      WHERE deleting_at IS NULL AND teacher_reviewed_at IS NOT NULL AND status <> 'exported';
+  `);
+}
+
 function assertForeignKeys(database: Database.Database): void {
   const violations = database.prepare("PRAGMA foreign_key_check").all();
   if (violations.length > 0) {
@@ -595,6 +637,7 @@ export function initializeSchema(database: Database.Database): void {
       migrateSettings(database);
       migrateAnalysisJobs(database);
       migrateLegacyReviewImages(database);
+      migrateReviewSummaryFields(database);
       assertForeignKeys(database);
     })();
   } finally {

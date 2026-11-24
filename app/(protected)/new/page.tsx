@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
@@ -53,6 +54,12 @@ interface SavedAssignment {
   id: string;
   config: AssignmentConfig;
 }
+interface ContinuousEntryNotice {
+  id: string;
+  studentName: string;
+  title: string;
+  count: number;
+}
 
 function validateConfig(config: AssignmentConfig): string {
   if (!config.title.trim()) return "请填写作文题目";
@@ -83,7 +90,9 @@ export default function NewReviewPage() {
   const [privacyConfirmed, setPrivacyConfirmed] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [submitMode, setSubmitMode] = useState<"view" | "next">("view");
   const [startingAnalysis, setStartingAnalysis] = useState(false);
+  const [continuousNotice, setContinuousNotice] = useState<ContinuousEntryNotice | null>(null);
   const [savedAssignments, setSavedAssignments] = useState<SavedAssignment[]>([]);
   const [savedAssignmentsLoaded, setSavedAssignmentsLoaded] = useState(false);
   const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
@@ -219,8 +228,32 @@ export default function NewReviewPage() {
     setUploaded(null);
   }
 
-  async function submit() {
+  function resetForNextStudent(completedId: string) {
+    const submittedStudent = studentName.trim() || "未填写";
+    const submittedTitle = config.title;
+    selectionGeneration.current += 1;
+    previewRef.current.forEach(({ previewUrl }) => URL.revokeObjectURL(previewUrl));
+    previewRef.current = [];
+    setImages([]);
+    setDocumentName("");
+    setStudentName("");
+    setPrivacyConfirmed(false);
+    setReview(null);
+    setUploaded(null);
+    savedInputRef.current = null;
+    setError("");
+    setContinuousNotice((previous) => ({
+      id: completedId,
+      studentName: submittedStudent,
+      title: submittedTitle,
+      count: (previous?.count ?? 0) + 1,
+    }));
+    setStep(2);
+  }
+
+  async function submit(mode: "view" | "next" = "view") {
     if (busy) return;
+    setSubmitMode(mode);
     setBusy(true);
     setError("");
     let submittingAnalysis = false;
@@ -274,7 +307,11 @@ export default function NewReviewPage() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ mode: "full" }),
       });
-      router.push(`/reviews?id=${encodeURIComponent(currentReview.id)}`);
+      if (mode === "next") {
+        resetForNextStudent(currentReview.id);
+      } else {
+        router.push(`/reviews?id=${encodeURIComponent(currentReview.id)}`);
+      }
     } catch (caught) {
       setError(submittingAnalysis
         ? `${errorMessage(caught)}。作文已保存，尚未确认分析已启动，可直接重试。`
@@ -307,10 +344,10 @@ export default function NewReviewPage() {
           <section className="paper-card flow-card" aria-labelledby="assignment-heading">
             <div className="section-heading"><div><p className="eyebrow">第一步</p><h2 id="assignment-heading">选择作文题目</h2></div></div>
             <div className="template-grid">
-              <button type="button" aria-label="使用内置题目《为自己鼓掌》" aria-pressed={config.templateType === "preset_self_applause"} className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setError(""); }}>
+              <button type="button" aria-label="使用内置题目《为自己鼓掌》" aria-pressed={config.templateType === "preset_self_applause"} className={`template-card ${config.templateType === "preset_self_applause" ? "selected" : ""}`} onClick={() => { setConfig(presetConfig); setContinuousNotice(null); setError(""); }}>
                 <span className="template-mark" aria-hidden="true">荐</span><strong>《为自己鼓掌》</strong><small>六年级 · 600 字 · 记叙文</small>
               </button>
-              <button type="button" aria-label="自定义题目" aria-pressed={config.templateType === "custom"} className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setError(""); }}>
+              <button type="button" aria-label="自定义题目" aria-pressed={config.templateType === "custom"} className={`template-card ${config.templateType === "custom" ? "selected" : ""}`} onClick={() => { setConfig(customConfig); setContinuousNotice(null); setError(""); }}>
                 <span className="template-mark" aria-hidden="true">+</span><strong>自定义题目</strong><small>自行设置年级、结构与评分重点</small>
               </button>
             </div>
@@ -320,7 +357,7 @@ export default function NewReviewPage() {
                 <div className="saved-assignment-list">
                   {savedAssignments.map((assignment) => (
                     <article className="saved-assignment-card" key={assignment.id}>
-                      <button type="button" className="saved-assignment-select" aria-label={`使用已保存题目${assignment.config.title}`} onClick={() => { setConfig({ ...assignment.config, templateType: "custom" }); setError(""); }}>
+                      <button type="button" className="saved-assignment-select" aria-label={`使用已保存题目${assignment.config.title}`} onClick={() => { setConfig({ ...assignment.config, templateType: "custom" }); setContinuousNotice(null); setError(""); }}>
                         <strong>{assignment.config.title}</strong><small>{assignment.config.grade} · {assignment.config.targetCharacters} 字</small>
                         <span>{assignment.config.writingRequirements}</span>
                       </button>
@@ -347,7 +384,13 @@ export default function NewReviewPage() {
 
         {step === 2 ? (
           <section className="paper-card flow-card" aria-labelledby="upload-heading">
-            <div className="section-heading"><div><p className="eyebrow">第二步</p><h2 id="upload-heading">上传作文</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
+            <div className="section-heading"><div><p className="eyebrow">第二步 · 《{config.title}》</p><h2 id="upload-heading">上传作文</h2></div><span className="muted">{images.length}/{MAX_REVIEW_IMAGES} 张</span></div>
+            {continuousNotice ? (
+              <p role="status" className="document-import-notice">
+                已提交「{continuousNotice.studentName}」的《{continuousNotice.title}》（本轮连续第 {continuousNotice.count} 篇），后台正在分析，请继续上传下一位学生作文。{" "}
+                <Link href={`/reviews?id=${encodeURIComponent(continuousNotice.id)}`}>去看本篇</Link>
+              </p>
+            ) : null}
             {importing ? <p role="status" className="document-import-notice">{importProgress}</p> : null}
             <fieldset className="upload-workspace" disabled={importing}>
             <div className="upload-meta-grid">
@@ -388,7 +431,29 @@ export default function NewReviewPage() {
             <div className="confirm-assignment"><span>作文题目</span><b>{config.title}</b><span>{config.grade} · 目标 {config.targetCharacters} 字</span><span>学生姓名</span><b>{studentName.trim() || "未填写"}</b><span>班级</span><b>{className.trim() || "未分类"}</b></div>
             <ol className="confirm-images" aria-label="图片提交顺序">{images.map((image, index) => <li key={image.key}><span>{index + 1}</span><b>{image.file.name}</b><small>旋转 {image.rotation}°</small></li>)}</ol>
             <div className="privacy-note"><b>真实作文上传说明</b><p>请勿在图片或文档中保留学生姓名、学号、班级、学校等无关身份信息；本次图片仅用于作文批改，并会发送到教师配置的第三方 AI 服务识别和分析。</p><p>作文图片与批改文件会长期保留，老师可在历史记录中手动永久删除；第三方 AI 服务的数据处理以其自身规则为准。</p><label><input aria-label="确认真实作文上传说明" type="checkbox" checked={privacyConfirmed} onChange={(event) => setPrivacyConfirmed(event.target.checked)} /> 我确认已获得上传和使用该作文的必要授权。</label></div>
-            <div className="form-actions"><button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button><AsyncButton className="button button--primary" type="button" busy={busy} busyLabel={startingAnalysis ? "正在启动 AI 分析…" : "正在建立批改…"} disabled={!privacyConfirmed} onClick={() => void submit()}>创建并开始批改</AsyncButton></div>
+            <div className="form-actions">
+              <button className="button button--quiet" type="button" disabled={busy} onClick={() => setStep(2)}>上一步</button>
+              <AsyncButton
+                className="button button--quiet"
+                type="button"
+                busy={busy && submitMode === "next"}
+                busyLabel={startingAnalysis ? "正在提交并准备下一篇…" : "正在建立批改…"}
+                disabled={!privacyConfirmed || busy}
+                onClick={() => void submit("next")}
+              >
+                提交并录下一篇
+              </AsyncButton>
+              <AsyncButton
+                className="button button--primary"
+                type="button"
+                busy={busy && submitMode === "view"}
+                busyLabel={startingAnalysis ? "正在启动 AI 分析…" : "正在建立批改…"}
+                disabled={!privacyConfirmed || busy}
+                onClick={() => void submit("view")}
+              >
+                创建并开始批改
+              </AsyncButton>
+            </div>
           </section>
         ) : null}
       </main>
