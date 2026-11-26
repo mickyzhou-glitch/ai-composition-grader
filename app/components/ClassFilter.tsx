@@ -6,7 +6,10 @@ export function ClassFilter({ items = [], options, value, onChange }: {
   value: string | null;
   onChange: (value: string | null) => void;
 }) {
-  const names = options ?? classNames(items);
+  const baseNames = options ?? classNames(items);
+  const names = value !== null && value !== "" && !baseNames.includes(value)
+    ? [value, ...baseNames]
+    : baseNames;
   return <label className="class-field">班级筛选<select aria-label="班级筛选" value={value === null ? "all" : `class:${value}`} onChange={(event) => onChange(event.target.value === "all" ? null : event.target.value.slice(6))}>
     <option value="all">全部班级</option><option value="class:">未分类</option>
     {names.map((name) => <option key={name} value={`class:${name}`}>{name}</option>)}

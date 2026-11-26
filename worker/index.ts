@@ -7,6 +7,7 @@ import { D1PasswordProofRepository } from "../src/cloudflare/d1-password-proof-r
 import { D1SessionRepository } from "../src/cloudflare/d1-session-repository";
 import { D1ReviewReader } from "../src/cloudflare/d1-review-reader";
 import { D1ReviewWriter } from "../src/cloudflare/d1-review-writer";
+import { ClassRosterValidationError, D1ClassRosters } from "../src/cloudflare/d1-class-rosters";
 import { extractReportSummaryFields } from "../src/cloudflare/review-summary-state";
 import { D1AnalysisJobs, MAX_CLOUD_ANALYSIS_RUN_MS } from "../src/cloudflare/d1-analysis-jobs";
 import { runCloudMaintenance } from "../src/cloudflare/d1-maintenance";
@@ -476,6 +477,52 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       return Response.json({ ok: true, data: await new D1ReviewReader(env.DB).classes(user.id) }, { headers: { "cache-control": "no-store" } });
     }
+    if (url.pathname === "/api/class-rosters" && (request.method === "GET" || request.method === "PUT" || request.method === "DELETE")) {
+      if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
+      const rostersRepo = new D1ClassRosters(env.DB);
+      if (request.method === "GET") {
+        return Response.json(
+          { ok: true, data: await rostersRepo.list(user.id) },
+          { headers: { "cache-control": "no-store" } },
+        );
+      }
+      if (request.method === "DELETE") {
+        const classParam = url.searchParams.get("class");
+        if (classParam === null) {
+          return apiError("VALIDATION_ERROR", "请指定要删除的班级名称", 400);
+        }
+        try {
+          const deleted = await rostersRepo.delete(user.id, classParam);
+          return deleted
+            ? Response.json({ ok: true, data: { deleted: true } }, { headers: { "cache-control": "no-store" } })
+            : apiError("NOT_FOUND", "该班级名单不存在", 404);
+        } catch (error) {
+          if (error instanceof ZodError) {
+            return apiError("VALIDATION_ERROR", error.issues[0]?.message ?? "请求参数无效", 400);
+          }
+          throw error;
+        }
+      }
+      try {
+        const rawText = await request.text();
+        if (rawText.length > 256 * 1024) {
+          return apiError("PAYLOAD_TOO_LARGE", "班级名单内容过大", 413);
+        }
+        const updated = await rostersRepo.upsert(user.id, JSON.parse(rawText));
+        return Response.json({ ok: true, data: updated }, { headers: { "cache-control": "no-store" } });
+      } catch (error) {
+        if (error instanceof ClassRosterValidationError) {
+          return apiError(error.code, error.message, error.status);
+        }
+        if (error instanceof ZodError) {
+          return apiError("VALIDATION_ERROR", error.issues[0]?.message ?? "请求参数无效", 400);
+        }
+        if (error instanceof SyntaxError || error instanceof TypeError) {
+          return apiError("VALIDATION_ERROR", "请求参数无效", 400);
+        }
+        throw error;
+      }
+    }
     if (url.pathname === "/api/rule-candidates" && request.method === "GET") {
       if (!user) return apiError("UNAUTHENTICATED", "Authentication required", 401);
       const candidates = new D1RuleCandidates(env.DB);
@@ -573,12 +620,14 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
         const validStatuses = new Set(["", "draft", "review", "failed", "reviewed", "exported", "rejected"]);
         const studentSearch = url.searchParams.get("q") ?? "";
         const classFilter = url.searchParams.has("class") ? url.searchParams.get("class") : null;
+        const titleFilter = url.searchParams.has("title") ? url.searchParams.get("title") : null;
         if (
           !Number.isInteger(page) || page < 1
           || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100
           || !validStatuses.has(statusParam)
           || studentSearch.length > 100
           || (classFilter !== null && classFilter.length > 100)
+          || (titleFilter !== null && (titleFilter.length > 400 || Array.from(titleFilter).length > 200))
         ) {
           return apiError("VALIDATION_ERROR", "请求参数无效", 400);
         }
@@ -586,6 +635,7 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
           page,
           pageSize,
           classFilter,
+          titleFilter,
           statusFilter: statusParam as "" | "draft" | "review" | "failed" | "reviewed" | "exported" | "rejected",
           studentSearch,
         });

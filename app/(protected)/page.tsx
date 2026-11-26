@@ -4,7 +4,10 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ClassFilter } from "../components/ClassFilter";
-import { classNames, filterReviewsByClass } from "../lib/classification";
+import { ClassRosterDialog, type RosterSavePayload } from "../components/ClassRosterDialog";
+import { MissingSubmissionPanel } from "../components/MissingSubmissionPanel";
+import { TitleFilter } from "../components/TitleFilter";
+import { classNames, filterReviewsByClass, filterReviewsByTitle, titleNames } from "../lib/classification";
 import { AppHeader } from "../components/AppHeader";
 import { BatchReanalysisDialog } from "../components/BatchReanalysisDialog";
 import { ErrorBanner } from "../components/ErrorBanner";
@@ -27,6 +30,7 @@ import type {
   BatchReanalysisCommitItem,
   BatchReanalysisCommitResult,
   BatchReanalysisPreview,
+  ClassRosterView,
   PublicAnalysisJobView,
   ReviewHistoryStatsView,
   ReviewSummaryPageView,
@@ -54,6 +58,7 @@ interface HistoryQueryParams {
   page: number;
   pageSize: number;
   classFilter: string | null;
+  titleFilter: string | null;
   statusFilter: HistoryStatusFilter;
   studentSearch: string;
 }
@@ -64,6 +69,7 @@ function buildSummaryUrl(params: HistoryQueryParams): string {
   query.set("page", String(params.page));
   query.set("pageSize", String(params.pageSize));
   if (params.classFilter !== null) query.set("class", params.classFilter);
+  if (params.titleFilter !== null) query.set("title", params.titleFilter);
   if (params.statusFilter) query.set("status", params.statusFilter);
   const trimmedSearch = params.studentSearch.trim();
   if (trimmedSearch) query.set("q", trimmedSearch);
@@ -73,6 +79,7 @@ function buildSummaryUrl(params: HistoryQueryParams): string {
 function computePageFromSummaries(
   summaries: ReviewSummaryView[],
   params: HistoryQueryParams,
+  rosters: ClassRosterView[] = [],
 ): ReviewSummaryPageView {
   const stats: ReviewHistoryStatsView = {
     total: summaries.length,
@@ -83,21 +90,40 @@ function computePageFromSummaries(
     exported: summaries.filter(({ status }) => status === "exported").length,
     rejected: summaries.filter(({ status }) => status === "rejected").length,
   };
-  const exportableReviewedIds = filterReviewsByClass(summaries.filter(isReviewedPendingExport), params.classFilter)
+  const exportableReviewedIds = filterReviewsByTitle(
+    filterReviewsByClass(summaries.filter(isReviewedPendingExport), params.classFilter),
+    params.titleFilter,
+  )
     .filter((item) => exportEligibility(item).eligible)
     .map(({ id }) => id);
-  const filtered = filterReviewsByStudentName(filterReviewsByClass(summaries, params.classFilter), params.studentSearch)
+  const classAndTitleFiltered = filterReviewsByTitle(
+    filterReviewsByClass(summaries, params.classFilter),
+    params.titleFilter,
+  );
+  const filtered = filterReviewsByStudentName(classAndTitleFiltered, params.studentSearch)
     .filter((item) => matchesHistoryStatus(item, params.statusFilter));
   const totalPages = Math.max(1, Math.ceil(filtered.length / params.pageSize));
   const safePage = Math.min(Math.max(1, params.page), totalPages);
   const start = (safePage - 1) * params.pageSize;
+  const titleSubmissions = params.titleFilter !== null && params.titleFilter !== ""
+    ? classAndTitleFiltered.map((item) => ({
+        id: item.id,
+        className: item.className ?? "",
+        studentName: item.studentName ?? "",
+        status: item.status,
+        teacherReviewedAt: item.teacherReviewedAt,
+      }))
+    : undefined;
   return {
     items: filtered.slice(start, start + params.pageSize),
     page: safePage,
     pageSize: params.pageSize,
     totalFiltered: filtered.length,
     stats,
-    classes: classNames(summaries),
+    classes: classNames(summaries, rosters.map((item) => item.className)),
+    titles: titleNames(summaries),
+    rosters,
+    ...(titleSubmissions !== undefined ? { titleSubmissions } : {}),
     exportableReviewedIds,
     matchingFailed: filtered.filter(({ status }) => status === "failed").map(({ id, studentName }) => ({ id, studentName })),
   };
@@ -176,6 +202,9 @@ export default function Home() {
   const [studentSearch, setStudentSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<HistoryStatusFilter>("");
   const [classFilter, setClassFilter] = useState<string | null>(null);
+  const [titleFilter, setTitleFilter] = useState<string | null>(null);
+  const [legacyRosters, setLegacyRosters] = useState<ClassRosterView[]>([]);
+  const [rosterDialogSession, setRosterDialogSession] = useState<{ key: number; initialClassName: string } | null>(null);
   const [reanalysisOpen, setReanalysisOpen] = useState(false);
   const [reanalysisLoading, setReanalysisLoading] = useState(false);
   const [reanalysisSubmitting, setReanalysisSubmitting] = useState(false);
@@ -202,9 +231,10 @@ export default function Home() {
     page,
     pageSize: HISTORY_PAGE_SIZE,
     classFilter,
+    titleFilter,
     statusFilter,
     studentSearch,
-  }), [classFilter, page, statusFilter, studentSearch]);
+  }), [classFilter, page, statusFilter, studentSearch, titleFilter]);
 
   const currentQueryKey = useMemo(() => buildSummaryUrl(currentQueryParams), [currentQueryParams]);
   const latestQueryParamsRef = useRef<HistoryQueryParams>(currentQueryParams);
@@ -262,6 +292,7 @@ export default function Home() {
             && prev.status !== "exported"
             && raw.stats.exported === 0
             && (requestedParams.classFilter === null || (prev.className ?? "") === requestedParams.classFilter)
+            && (requestedParams.titleFilter === null || (prev.config.title ?? "") === requestedParams.titleFilter)
           ) {
             next.set(id, {
               ...prev,
@@ -341,9 +372,9 @@ export default function Home() {
 
   const summaryPage = useMemo(() => (
     legacySummaries !== null
-      ? computePageFromSummaries(legacySummaries, currentQueryParams)
+      ? computePageFromSummaries(legacySummaries, currentQueryParams, legacyRosters)
       : serverPage
-  ), [currentQueryParams, legacySummaries, serverPage]);
+  ), [currentQueryParams, legacyRosters, legacySummaries, serverPage]);
 
   // 严格校验当前已加载数据是否与当前筛选框/页码精确对齐：仅在查询未就绪或查询本身报错时收起列表，旧异步操作失败（actionError）不影响已就绪的新班级
   const isQuerySettled = legacySummaries !== null || (!loading && !queryError && loadedQueryKey === currentQueryKey);
@@ -427,6 +458,54 @@ export default function Home() {
     latestQueryParamsRef.current = { ...latestQueryParamsRef.current, page: 1, classFilter: nextClass };
     setPage(1);
     setClassFilter(nextClass);
+  }
+
+  function changeTitleFilter(nextTitle: string | null) {
+    latestQueryParamsRef.current = { ...latestQueryParamsRef.current, page: 1, titleFilter: nextTitle };
+    setPage(1);
+    setTitleFilter(nextTitle);
+  }
+
+  function openRosterDialog(preferredClass?: string) {
+    const candidate = preferredClass !== undefined
+      ? preferredClass
+      : (classFilter && classFilter.length > 0 ? classFilter : (summaryPage.classes[0] ?? ""));
+    setRosterDialogSession((prev) => ({
+      key: (prev?.key ?? 0) + 1,
+      initialClassName: candidate,
+    }));
+  }
+
+  async function saveClassRoster(payload: RosterSavePayload) {
+    const updated = await apiFetch<ClassRosterView[]>("/api/class-rosters", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    setLegacyRosters(updated);
+    if (!isLegacyModeRef.current) {
+      setServerPage((prev) => ({
+        ...prev,
+        rosters: updated,
+        classes: [...new Set([...prev.classes, ...updated.map((item) => item.className)].filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b, "zh-CN", { numeric: true })),
+      }));
+      await refreshLatest();
+    }
+  }
+
+  async function deleteClassRoster(targetClassName: string) {
+    await apiFetch(`/api/class-rosters?class=${encodeURIComponent(targetClassName)}`, {
+      method: "DELETE",
+    });
+    setLegacyRosters((prev) => prev.filter((item) => item.className !== targetClassName));
+    if (!isLegacyModeRef.current) {
+      setServerPage((prev) => ({
+        ...prev,
+        rosters: (prev.rosters ?? []).filter((item) => item.className !== targetClassName),
+      }));
+      await refreshLatest();
+    }
   }
 
   function changeStudentSearch(nextQuery: string) {
@@ -852,6 +931,7 @@ export default function Home() {
             <div className="history-tools">
               <div className="history-filters">
                 <ClassFilter options={summaryPage.classes} value={classFilter} onChange={changeClassFilter} />
+                <TitleFilter options={summaryPage.titles ?? []} value={titleFilter} onChange={changeTitleFilter} />
                 <label className="history-search">搜索学生姓名<input type="search" aria-label="搜索学生姓名" placeholder="输入姓名筛选…" value={studentSearch} onChange={(event) => changeStudentSearch(event.target.value)} /></label>
                 <label className="history-search history-status-filter">批改状态
                   <select aria-label="筛选批改状态" value={statusFilter} onChange={(event) => changeStatusFilter(event.target.value as HistoryStatusFilter)}>
@@ -865,7 +945,16 @@ export default function Home() {
                   </select>
                 </label>
               </div>
-              <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
+              <div className="history-tool-actions">
+                <button
+                  className="button button--quiet"
+                  type="button"
+                  onClick={() => openRosterDialog()}
+                >
+                  {(summaryPage.rosters?.length ?? 0) > 0 ? `班级名单（${summaryPage.rosters!.length}班）` : "班级名单"}
+                </button>
+                <Link className="button button--primary" href="/reviews/batch">开始批量审核</Link>
+              </div>
             </div>
             {totalCount > 0 || selectedReviewIds.size > 0 ? (
               <div className="history-batch-actions">
@@ -900,6 +989,18 @@ export default function Home() {
               </div>
             ) : null}
           </div>
+          <MissingSubmissionPanel
+            classFilter={classFilter}
+            titleFilter={titleFilter}
+            titles={summaryPage.titles ?? []}
+            rosters={summaryPage.rosters ?? []}
+            titleSubmissions={summaryPage.titleSubmissions ?? []}
+            titleSubmissionsTruncated={summaryPage.titleSubmissionsTruncated}
+            isQuerySettled={isQuerySettled}
+            onSelectClass={changeClassFilter}
+            onSelectTitle={changeTitleFilter}
+            onOpenRosterDialog={openRosterDialog}
+          />
           {queryError ? <ErrorBanner message={queryError} onRetry={refreshLatest} /> : null}
           {actionError ? <ErrorBanner message={actionError} /> : null}
           {loading ? <p className="loading-note" role="status">正在翻阅批改记录…</p> : null}
@@ -978,6 +1079,18 @@ export default function Home() {
         onClose={closeBatchReanalysis}
         onConfirm={(items, options) => { void submitBatchReanalysis(items, options); }}
       />
+      {rosterDialogSession ? (
+        <ClassRosterDialog
+          key={rosterDialogSession.key}
+          open
+          initialClassName={rosterDialogSession.initialClassName}
+          knownClasses={summaryPage.classes}
+          rosters={summaryPage.rosters ?? []}
+          onClose={() => setRosterDialogSession(null)}
+          onSave={saveClassRoster}
+          onDelete={deleteClassRoster}
+        />
+      ) : null}
     </div>
   );
 }

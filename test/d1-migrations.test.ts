@@ -1130,7 +1130,7 @@ describe("0015 摘要物化字段与待导出索引迁移", () => {
       // 同时核验 0015 SQL 迁移自身对已有超长标题与超长诊断行的截断长度同样严格 <= 200 / <= 500（省略号计入上限）
       const migCapDb = new Database(":memory:");
       migrationFiles()
-        .filter((name) => name !== "0015_review_summary_fields.sql")
+        .filter((name) => name < "0015")
         .forEach((name) => {
           const sql = readFileSync(path.join(MIGRATIONS, name), "utf8")
             .replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*(OFF|ON)\s*;/gimu, "");
@@ -1160,7 +1160,7 @@ describe("0015 摘要物化字段与待导出索引迁移", () => {
       //    在 JavaScript 中按码点回读标题与四项诊断长度严格为 200 与 500（不被 SQLite length(TEXT) 遇 NUL 截断绕过），且未审核记录保持 summary_state_key = NULL
       const embeddedNullDb = new Database(":memory:");
       migrationFiles()
-        .filter((name) => name !== "0015_review_summary_fields.sql")
+        .filter((name) => name < "0015")
         .forEach((name) => {
           const sql = readFileSync(path.join(MIGRATIONS, name), "utf8")
             .replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*(OFF|ON)\s*;/gimu, "");
@@ -1250,5 +1250,34 @@ describe("0015 摘要物化字段与待导出索引迁移", () => {
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("0016 班级整体花名册与作文题目索引迁移", () => {
+  it("只新建表与增量索引，不改动已有表，且按题目/班级+题目筛选命中新索引", () => {
+    const sql = readFileSync(path.join(MIGRATIONS, "0016_class_rosters_and_title_index.sql"), "utf8");
+    expect(sql).not.toMatch(/DROP\s+TABLE|ALTER\s+TABLE|DELETE\s+FROM|UPDATE\s+/iu);
+
+    const { db, apply } = openLikeD1();
+    migrationFiles().forEach(apply);
+
+    db.prepare("INSERT INTO users (id, username, password_hash, role, must_change_password, created_at, updated_at) VALUES ('u1', 'teacher', 'x', 'teacher', 0, 1, 1)").run();
+    db.prepare("INSERT INTO class_rosters (id, owner_id, class_name, students, created_at, updated_at) VALUES ('cr1', 'u1', '六（1）班', '[\"张三\",\"李四\"]', 1, 1)").run();
+    expect(count(db, "class_rosters")).toBe(1);
+
+    const titlePlan = db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT id FROM reviews WHERE owner_id = 'u1' AND deleting_at IS NULL AND summary_title = '为自己鼓掌' ORDER BY updated_at DESC, created_at DESC
+    `).all() as Array<{ detail: string }>;
+    expect(titlePlan.map((r) => r.detail).join(" ")).toContain("reviews_owner_title_updated_idx");
+
+    const classTitlePlan = db.prepare(`
+      EXPLAIN QUERY PLAN
+      SELECT id FROM reviews WHERE owner_id = 'u1' AND deleting_at IS NULL AND class_name = '六（1）班' AND summary_title = '为自己鼓掌' ORDER BY updated_at DESC, created_at DESC
+    `).all() as Array<{ detail: string }>;
+    expect(classTitlePlan.map((r) => r.detail).join(" ")).toContain("reviews_owner_class_title_updated_idx");
+
+    db.prepare("DELETE FROM users WHERE id = 'u1'").run();
+    expect(count(db, "class_rosters")).toBe(0);
   });
 });

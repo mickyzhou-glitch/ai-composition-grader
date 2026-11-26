@@ -1269,4 +1269,109 @@ describe("历史首页", () => {
     });
     await waitFor(() => expect(reviewExports.batch).toHaveBeenCalledWith(["synthetic-A"], "pdf"));
   });
+
+  it("支持按作文题目筛选、录入班级整体名单并直接生成与一键复制未交名单", async () => {
+    const itemApplause1 = {
+      id: "rev-1",
+      status: "ready_for_review" as const,
+      studentName: "张小明",
+      className: "六（1）班",
+      config: { title: "为自己鼓掌" },
+      revision: 1,
+      createdAt: "2026-11-26T01:00:00.000Z",
+      updatedAt: "2026-11-26T02:00:00.000Z",
+      teacherReviewedAt: "2026-11-26T02:00:00.000Z",
+      hasReport: true,
+      isLegacyReport: false,
+      grade: "A",
+      hasPdf: false,
+      pdfFilename: null,
+      exportEligibility: { eligible: true } as const,
+    };
+    const itemSpring1 = {
+      ...itemApplause1,
+      id: "rev-2",
+      studentName: "李安然",
+      config: { title: "春游记" },
+    };
+
+    let savedRosters: Array<{ className: string; students: string[]; updatedAt: string }> = [];
+    const requestedUrls: string[] = [];
+
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      requestedUrls.push(`${init?.method ?? "GET"} ${url}`);
+
+      if (url === "/api/class-rosters" && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body)) as { className: string; students: string[] };
+        savedRosters = [{
+          className: body.className,
+          students: body.students,
+          updatedAt: "2026-11-26T03:00:00.000Z",
+        }];
+        return json(savedRosters);
+      }
+
+      const parsed = new URL(url, "https://example.test");
+      const classParam = parsed.searchParams.has("class") ? parsed.searchParams.get("class") : null;
+      const titleParam = parsed.searchParams.has("title") ? parsed.searchParams.get("title") : null;
+      const allItems = [itemApplause1, itemSpring1];
+      const filtered = allItems.filter((item) =>
+        (classParam === null || item.className === classParam)
+        && (titleParam === null || item.config.title === titleParam),
+      );
+
+      return json({
+        items: filtered,
+        page: 1,
+        pageSize: 20,
+        totalFiltered: filtered.length,
+        stats: { total: 2, draft: 0, review: 0, failed: 0, reviewed: 2, exported: 0, rejected: 0 },
+        classes: ["六（1）班"],
+        titles: ["为自己鼓掌", "春游记"],
+        rosters: savedRosters,
+        ...(titleParam ? {
+          titleSubmissions: filtered.map((item) => ({
+            id: item.id,
+            className: item.className,
+            studentName: item.studentName,
+            status: item.status,
+            teacherReviewedAt: item.teacherReviewedAt,
+          })),
+        } : {}),
+        exportableReviewedIds: filtered.map((item) => item.id),
+        matchingFailed: [],
+      });
+    });
+
+    const user = userEvent.setup();
+    render(<Home />);
+
+    expect(await screen.findByRole("heading", { name: "为自己鼓掌" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "春游记" })).toBeInTheDocument();
+
+    // 1) 按作文题目筛选为《为自己鼓掌》，《春游记》被过滤掉，请求携带 title=为自己鼓掌
+    await user.selectOptions(screen.getByLabelText("作文题目"), "title:为自己鼓掌");
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "春游记" })).not.toBeInTheDocument());
+    expect(requestedUrls.some((entry) => entry.includes("title=%E4%B8%BA%E8%87%AA%E5%B7%B1%E9%BC%93%E6%8E%8C"))).toBe(true);
+
+    // 2) 选择班级「六（1）班」后提示录入名单，点击录入全班 3 人名单并保存
+    await user.selectOptions(screen.getByLabelText("班级筛选"), "class:六（1）班");
+    await user.click(await screen.findByRole("button", { name: "录入六（1）班名单" }));
+
+    const rosterTextarea = screen.getByLabelText("本班整体学生名单");
+    await user.type(rosterTextarea, "1. 张　小明\n2. 王语桐\n3. 陈子墨");
+    await user.click(screen.getByRole("button", { name: "保存本班名单" }));
+
+    // 3) 保存后自动展示交齐统计（应交 3 人 · 已交 1 人 · 未交 2 人）并支持一键复制未交名单
+    expect(await screen.findByText("应交 3 人")).toBeInTheDocument();
+    expect(screen.getByText("已交 1 人")).toBeInTheDocument();
+    expect(screen.getByText("未交 2 人")).toBeInTheDocument();
+    expect(screen.getByText("王语桐")).toBeInTheDocument();
+    expect(screen.getByText("陈子墨")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "一键复制未交名单" }));
+    expect(await screen.findByRole("button", { name: "已复制未交名单 ✓" })).toBeInTheDocument();
+    expect(await navigator.clipboard.readText()).toBe("六（1）班《为自己鼓掌》未交名单（2人）：王语桐、陈子墨");
+  });
 });

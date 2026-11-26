@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const tables = ["users", "settings", "sessions", "login_attempts", "security_events", "reviews", "saved_assignments", "review_images", "annotations", "analysis_jobs"] as const;
+const tables = ["users", "settings", "sessions", "login_attempts", "security_events", "reviews", "saved_assignments", "class_rosters", "review_images", "annotations", "analysis_jobs"] as const;
 const databasePath = path.resolve(process.env.APP_DATABASE_PATH ?? ".data/app.db");
 const outputPath = path.resolve(process.env.CLOUDFLARE_DATA_SQL ?? ".migration/cloudflare-data.sql");
 

@@ -15,6 +15,8 @@ import { deliveryReadiness } from "../delivery/readiness";
 import { describePublicAnalysisFailure } from "../jobs/public-analysis-failure";
 import { readStoredOcrCheckpoint } from "../ocr/contracts";
 import { D1OcrCheckpointRepository } from "./d1-ocr-checkpoint";
+import { D1ClassRosters } from "./d1-class-rosters";
+import type { TitleSubmissionItemView } from "../domain/class-roster";
 import {
   backfillReviewSummaryBatch,
   EXPECTED_SUMMARY_KEY_SQL,
@@ -115,6 +117,7 @@ const EXPECTED_EXPORT_READY_SQL = `(
 function buildSummaryFilterWhere(
   ownerId: string,
   classFilter: string | null,
+  titleFilter: string | null,
   statusFilter: HistoryStatusFilter,
   normalizedSearch: string,
 ): { whereSql: string; bindings: unknown[] } {
@@ -124,6 +127,10 @@ function buildSummaryFilterWhere(
   if (classFilter !== null) {
     clauses.push("COALESCE(class_name, '') = ?");
     bindings.push(classFilter);
+  }
+  if (titleFilter !== null) {
+    clauses.push("COALESCE(summary_title, '') = ?");
+    bindings.push(titleFilter);
   }
   if (normalizedSearch) {
     clauses.push("instr(LOWER(COALESCE(student_name, '')), ?) > 0");
@@ -189,11 +196,17 @@ export class D1ReviewReader {
   constructor(private readonly database: D1Database) {}
 
   async classes(ownerId: string): Promise<string[]> {
-    const { results = [] } = await this.database.prepare(`
-      SELECT DISTINCT class_name FROM reviews
-      WHERE owner_id = ? AND deleting_at IS NULL AND class_name <> '' ORDER BY class_name
-    `).bind(ownerId).all<{ class_name: string }>();
-    return results.map((row) => row.class_name);
+    const [reviewClassesResult, rosterClasses] = await Promise.all([
+      this.database.prepare(`
+        SELECT DISTINCT class_name FROM reviews
+        WHERE owner_id = ? AND deleting_at IS NULL AND class_name <> '' ORDER BY class_name
+      `).bind(ownerId).all<{ class_name: string }>(),
+      new D1ClassRosters(this.database).classNames(ownerId),
+    ]);
+    return [...new Set([
+      ...(reviewClassesResult.results ?? []).map((row) => row.class_name),
+      ...rosterClasses,
+    ].filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true }));
   }
 
   async list(
@@ -333,6 +346,7 @@ export class D1ReviewReader {
       page?: number;
       pageSize?: number;
       classFilter?: string | null;
+      titleFilter?: string | null;
       statusFilter?: HistoryStatusFilter;
       studentSearch?: string;
     },
@@ -340,6 +354,7 @@ export class D1ReviewReader {
     const requestedPage = Math.max(1, Math.trunc(options?.page ?? 1));
     const pageSize = Math.min(100, Math.max(1, Math.trunc(options?.pageSize ?? 20)));
     const classFilter = options?.classFilter ?? null;
+    const titleFilter = options?.titleFilter ?? null;
     const statusFilter: HistoryStatusFilter = options?.statusFilter ?? "";
     const normalizedSearch = normalizeStudentSearch(options?.studentSearch ?? "");
 
@@ -364,15 +379,40 @@ export class D1ReviewReader {
       rejected: Number(statsRow?.rejected ?? 0),
     };
 
-    const { whereSql, bindings } = buildSummaryFilterWhere(ownerId, classFilter, statusFilter, normalizedSearch);
+    const { whereSql, bindings } = buildSummaryFilterWhere(ownerId, classFilter, titleFilter, statusFilter, normalizedSearch);
     const canMatchFailed = statusFilter === "" || statusFilter === "failed";
+    const exportableBindings: unknown[] = [
+      ownerId,
+      ...(classFilter !== null ? [classFilter] : []),
+      ...(titleFilter !== null ? [titleFilter] : []),
+    ];
+    const shouldLoadTitleSubmissions = titleFilter !== null && titleFilter !== "";
+    const titleSubmissionBindings: unknown[] = shouldLoadTitleSubmissions
+      ? [ownerId, titleFilter, ...(classFilter !== null ? [classFilter] : [])]
+      : [];
 
-    // 第 2 步：并行查询班级列表、当前班级已复核可导出 ID（走部分覆盖索引）、当前筛选总数与失败记录 ID
-    const [classesResult, exportableResult, filteredCountRow, failedRowsResult] = await Promise.all([
+    // 第 2 步：并行查询班级列表、题目列表、班级花名册、当前筛选可导出 ID、当前筛选总数、失败记录与所选题目的交齐比对行
+    const [
+      classesResult,
+      titlesResult,
+      rosters,
+      exportableResult,
+      filteredCountRow,
+      failedRowsResult,
+      titleSubmissionsResult,
+    ] = await Promise.all([
       this.database.prepare(`
         SELECT DISTINCT class_name FROM reviews
         WHERE owner_id = ? AND deleting_at IS NULL AND class_name <> ''
       `).bind(ownerId).all<{ class_name: string }>(),
+      this.database.prepare(`
+        SELECT summary_title, MAX(updated_at) AS latest_at
+        FROM reviews
+        WHERE owner_id = ? AND deleting_at IS NULL AND COALESCE(summary_title, '') <> ''
+        GROUP BY summary_title
+        ORDER BY latest_at DESC, summary_title ASC
+      `).bind(ownerId).all<{ summary_title: string; latest_at: number }>(),
+      new D1ClassRosters(this.database).list(ownerId),
       this.database.prepare(`
         SELECT id
         FROM reviews
@@ -381,9 +421,10 @@ export class D1ReviewReader {
           AND teacher_reviewed_at IS NOT NULL
           AND status NOT IN ('exported', 'rejected')
           ${classFilter !== null ? "AND COALESCE(class_name, '') = ?" : ""}
+          ${titleFilter !== null ? "AND COALESCE(summary_title, '') = ?" : ""}
           AND export_ready_version = ${EXPECTED_EXPORT_READY_SQL}
         ORDER BY updated_at DESC, created_at DESC, id DESC
-      `).bind(ownerId, ...(classFilter !== null ? [classFilter] : [])).all<{ id: string }>(),
+      `).bind(...exportableBindings).all<{ id: string }>(),
       this.database.prepare(`
         SELECT COUNT(*) AS total_filtered FROM reviews WHERE ${whereSql}
       `).bind(...bindings).first<{ total_filtered: number }>(),
@@ -394,12 +435,54 @@ export class D1ReviewReader {
             ORDER BY updated_at DESC, created_at DESC, id DESC
           `).bind(...bindings).all<{ id: string; student_name: string | null }>()
         : Promise.resolve({ results: [] as Array<{ id: string; student_name: string | null }> }),
+      shouldLoadTitleSubmissions
+        ? this.database.prepare(`
+            SELECT id, class_name, student_name, status, teacher_reviewed_at
+            FROM reviews
+            WHERE owner_id = ?
+              AND deleting_at IS NULL
+              AND COALESCE(summary_title, '') = ?
+              ${classFilter !== null ? "AND COALESCE(class_name, '') = ?" : ""}
+            ORDER BY updated_at DESC, created_at DESC, id DESC
+            LIMIT 1001
+          `).bind(...titleSubmissionBindings).all<{
+            id: string;
+            class_name: string | null;
+            student_name: string | null;
+            status: string;
+            teacher_reviewed_at: number | null;
+          }>()
+        : Promise.resolve({
+            results: [] as Array<{
+              id: string;
+              class_name: string | null;
+              student_name: string | null;
+              status: string;
+              teacher_reviewed_at: number | null;
+            }>,
+          }),
     ]);
 
-    const classes = (classesResult.results ?? [])
-      .map((row) => row.class_name)
-      .filter(Boolean)
-      .sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true }));
+    const classes = [...new Set([
+      ...(classesResult.results ?? []).map((row) => row.class_name),
+      ...rosters.map((roster) => roster.className),
+    ].filter(Boolean))].sort((left, right) => left.localeCompare(right, "zh-CN", { numeric: true }));
+
+    const titles = (titlesResult.results ?? [])
+      .map((row) => row.summary_title)
+      .filter((title): title is string => Boolean(title));
+
+    const rawTitleSubmissions = titleSubmissionsResult.results ?? [];
+    const titleSubmissionsTruncated = rawTitleSubmissions.length > 1000;
+    const titleSubmissions: TitleSubmissionItemView[] | undefined = shouldLoadTitleSubmissions
+      ? rawTitleSubmissions.slice(0, 1000).map((row) => ({
+          id: row.id,
+          className: row.class_name ?? "",
+          studentName: row.student_name ?? "",
+          status: reviewStatusSchema.parse(row.status),
+          teacherReviewedAt: date(row.teacher_reviewed_at),
+        }))
+      : undefined;
 
     const exportableReviewedIds = (exportableResult.results ?? []).map((row) => row.id);
     const matchingFailed = (failedRowsResult.results ?? []).map((row) => ({
@@ -449,6 +532,10 @@ export class D1ReviewReader {
       totalFiltered,
       stats,
       classes,
+      titles,
+      rosters,
+      ...(titleSubmissions !== undefined ? { titleSubmissions } : {}),
+      ...(titleSubmissionsTruncated ? { titleSubmissionsTruncated: true } : {}),
       exportableReviewedIds,
       matchingFailed,
       ...(remainingBackfill > 0 ? { summaryBackfillPending: remainingBackfill } : {}),

@@ -6,6 +6,14 @@ import type {
   ReviewStatus,
 } from "@/src/domain/contracts";
 import type { PublicOcrView } from "@/src/ocr/contracts";
+import type {
+  ClassRosterView,
+  TitleSubmissionItemView,
+} from "@/src/domain/class-roster";
+export type {
+  ClassRosterView,
+  TitleSubmissionItemView,
+} from "@/src/domain/class-roster";
 export type {
   BatchReanalysisCommitItem,
   BatchReanalysisCommitResult,
@@ -101,6 +109,10 @@ export interface ReviewSummaryPageView {
   totalFiltered: number;
   stats: ReviewHistoryStatsView;
   classes: string[];
+  titles?: string[];
+  rosters?: ClassRosterView[];
+  titleSubmissions?: TitleSubmissionItemView[];
+  titleSubmissionsTruncated?: boolean;
   exportableReviewedIds: string[];
   matchingFailed: Array<{ id: string; studentName: string }>;
   /** 若迁移后尚有未完成权威回填的历史记录，标明剩余待同步篇数，供前端提示并避免导出残缺批次 */

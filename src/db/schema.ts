@@ -114,6 +114,22 @@ export const savedAssignments = sqliteTable(
   ],
 );
 
+export const classRosters = sqliteTable(
+  "class_rosters",
+  {
+    id: text("id").primaryKey(),
+    ownerId: text("owner_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    className: text("class_name").notNull(),
+    students: text("students", { mode: "json" }).$type<string[]>().notNull(),
+    createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull(),
+  },
+  (table) => [
+    uniqueIndex("class_rosters_owner_class_unique_idx").on(table.ownerId, table.className),
+    index("class_rosters_owner_updated_idx").on(table.ownerId, table.updatedAt),
+  ],
+);
+
 export const gradingOpinions = sqliteTable(
   "grading_opinions",
   {
