@@ -663,6 +663,27 @@ describe("手动编辑标线与多格式切分辅助函数", () => {
     );
     expect(brokenLegacyText).toEqual([{ advice: "补细节" }]);
 
+    // Round 5 Major-1: <= 4,000 字常规中等篇幅段落首尾累计改写超过 512 字（如首尾各改 320+ 字或首改 560 字+句末换标点）全选粘贴时，中间未改句标线完整保留
+    const midKeep = "风停了，檐角的雨珠一滴一滴落在青石板上。";
+    const mediumBefore = `${"春风拂过湖面，柳枝轻摇。".repeat(30)}${midKeep}${"远处山影朦胧，暮色四合。".repeat(30)}。`;
+    const mediumAfter = `${"秋雨敲打窗棂，灯火微明。".repeat(35)}${midKeep}${"院中落叶满阶，夜凉如水。".repeat(30)}！`;
+    expect(mediumBefore.length + mediumAfter.length).toBeLessThanOrEqual(4_000);
+    const midPosBefore = mediumBefore.indexOf(midKeep);
+    const midPosAfter = mediumAfter.indexOf(midKeep);
+    const mediumMigrated = reconcileQuotesOnRevisedTextChange(
+      mediumBefore,
+      mediumAfter,
+      [{
+        advice: "保留中间细节句",
+        revisedQuotes: [midKeep],
+        revisedRanges: [{ start: midPosBefore, end: midPosBefore + midKeep.length, actionIndex: 0, text: midKeep }],
+      }],
+      { start: 0, end: mediumBefore.length },
+    );
+    expect(mediumMigrated[0]?.revisedRanges).toEqual([
+      { start: midPosAfter, end: midPosAfter + midKeep.length, actionIndex: 0, text: midKeep },
+    ]);
+
     // Round 3 Minor 2: 本段无需修改即使不带 revisedQuotes 也不回退整段单下划线
     expect(buildAdviceRevisionRuns("我站着。", "雨点落在窗沿，泥土泛出清香。", [{ advice: "本段无需修改" }])).toEqual([
       { kind: "unchanged", text: "雨点落在窗沿，泥土泛出清香。" },

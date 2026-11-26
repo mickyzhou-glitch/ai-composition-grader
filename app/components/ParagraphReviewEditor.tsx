@@ -149,7 +149,14 @@ export function ParagraphReviewEditor({
   revisionLabel = "改后全段",
 }: ParagraphReviewEditorProps) {
   const [instructions, setInstructions] = useState<Record<string, string>>({});
+  const [prevReviewId, setPrevReviewId] = useState(reviewId);
   const [selection, setSelection] = useState<SelectionSnapshot | null>(null);
+  if (prevReviewId !== reviewId) {
+    setPrevReviewId(reviewId);
+    if (selection !== null) {
+      setSelection(null);
+    }
+  }
   const [actionDrafts, setActionDrafts] = useState<Record<string, ActionDraftSnapshot | undefined>>({});
   const [manualPanels, setManualPanels] = useState<Record<string, boolean>>({});
   const [underlineHints, setUnderlineHints] = useState<Record<string, string>>({});

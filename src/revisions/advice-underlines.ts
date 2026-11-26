@@ -965,8 +965,10 @@ function diffSliceByCodePoints(
   let prevOffset = prevBase + prefixUnits;
   let nextOffset = nextBase + prefixUnits;
 
-  if (corePrev.length + coreNext.length <= 4_000) {
-    const fineChanges = diffArrays(corePrev, coreNext, { maxEditLength: 1024 });
+  if (corePrev.length > 0 && coreNext.length > 0 && corePrev.length + coreNext.length <= 4_000) {
+    const prevCharSet = new Set(corePrev);
+    const hasSharedChar = coreNext.some((cp) => prevCharSet.has(cp));
+    const fineChanges = hasSharedChar ? diffArrays(corePrev, coreNext) : undefined;
     if (fineChanges) {
       for (const change of fineChanges) {
         const unitLen = change.value.reduce((sum, cp) => sum + cp.length, 0);
@@ -1124,7 +1126,7 @@ function diffArbitrarySpan(
       const prevTokenSet = new Set(prevTokens);
       const hasSharedToken = nextTokens.some((token) => prevTokenSet.has(token));
       const coarseChanges = hasSharedToken
-        ? diffArrays(prevTokens, nextTokens, { maxEditLength: 512 })
+        ? diffArrays(prevTokens, nextTokens, { maxEditLength: 2048 })
         : undefined;
 
       if (!coarseChanges) {

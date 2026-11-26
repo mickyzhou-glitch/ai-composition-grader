@@ -770,8 +770,9 @@ describe("ParagraphReviewEditor", () => {
     rerender(<ParagraphReviewEditor reviewId="review-b" report={reportB} ocr={ocr} images={[]} disabled={false} onChange={onChangeB} />);
     expect(screen.getByRole("button", { name: "第 1 段选中文字划第 1 条标线" })).toBeDisabled();
 
-    // 切回学生 A，将第 2 句划单线，再在正文框选中第 1 句删除（M3），剩余的一句保留标线
+    // R5-m2: 未在 review-b 做任何选区操作直接切回学生 A，旧选区已清空，划线按钮保持禁用直到重新选字
     rerender(<ParagraphReviewEditor reviewId="review-a" report={reportA} ocr={ocr} images={[]} disabled={false} onChange={onChangeA} />);
+    expect(screen.getByRole("button", { name: "第 1 段选中文字划第 1 条标线" })).toBeDisabled();
     const revBoxA = screen.getByLabelText("第 1 段改后全段") as HTMLTextAreaElement;
     revBoxA.setSelectionRange(2, 4);
     fireEvent.select(revBoxA);
