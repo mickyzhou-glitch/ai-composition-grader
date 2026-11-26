@@ -215,6 +215,19 @@ function legacyDiagnostics(report: z.infer<typeof historicalEvaluationReportSche
 
 const optionalSuggestionText = z.string().trim().min(1).optional();
 
+export const MAX_REVISED_RANGE_OFFSET = 10_000_000;
+
+export const revisedQuoteRangeSchema = z.object({
+  start: z.number().int().min(0).max(MAX_REVISED_RANGE_OFFSET),
+  end: z.number().int().min(1).max(MAX_REVISED_RANGE_OFFSET),
+  actionIndex: z.number().int().min(0).max(99),
+  text: z.string().min(1).max(MAX_REVISED_RANGE_OFFSET),
+}).strict().refine(
+  (value) => value.end > value.start && value.end - value.start === value.text.length,
+  { message: "revised quote range bounds must match text length" },
+);
+export type PersistedQuoteRange = z.infer<typeof revisedQuoteRangeSchema>;
+
 export const paragraphSuggestionSchema = z.object({
   problem: optionalSuggestionText,
   advice: z.string().trim().min(1),
@@ -224,9 +237,11 @@ export const paragraphSuggestionSchema = z.object({
   // 只用于改后全段与修改动作按条划单线/波浪线/点划线；旧报告没有此字段时退回单下划线。
   // 教师改稿后可能对不上，因此这里不强制必须是子串，渲染时再核对。
   revisedQuotes: z.array(z.union([
-    z.string().trim().max(600),
-    z.array(z.string().trim().max(600)).max(4),
-  ])).max(12).optional(),
+    z.string().trim().max(5000),
+    z.array(z.string().trim().max(5000)).max(200),
+  ])).max(100).optional(),
+  // 手动编辑标线保存精确字符偏移与原文切片，彻底消除同段重复短语定位歧义。
+  revisedRanges: z.array(revisedQuoteRangeSchema).max(500).optional(),
 }).strict();
 export type ParagraphSuggestion = z.infer<typeof paragraphSuggestionSchema>;
 

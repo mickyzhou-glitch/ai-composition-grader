@@ -650,4 +650,116 @@ describe("Word 逐段批改文档", () => {
     expect(documentXml).toContain('<w:sz w:val="24"');
     expect(documentXml).not.toMatch(/<w:sz w:val="(?:16|17|18|19|20|21)"/u);
   });
+
+  it("教师手动编辑顿号编号动作、非相邻多段标线及清空部分句子标线后，Word XML 精确输出对应红蓝线型", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const ocr = review.ocr;
+    if (!ocr || ocr.version !== 2) throw new Error("fixture ocr");
+    ocr.pages[0].text = "旧第一段。";
+    ocr.paragraphs[0].text = "旧第一段。";
+    const report = review.report as {
+      paragraphReviews: Array<{
+        revisedText: string;
+        suggestions: Array<{ advice: string; revisedQuotes?: Array<string | string[]> }>;
+      }>;
+    };
+    report.paragraphReviews[0].suggestions = [{
+      advice: "1、解释名言并点出金老师；\n2、换用贴切名言“良言一句三冬暖”；\n3、删去冗余铺垫。",
+      revisedQuotes: [
+        ["一句温暖贴心的话，", "我以前却不这么想。"],
+        "“良言一句三冬暖。”",
+        "",
+      ],
+    }];
+    report.paragraphReviews[0].revisedText = "“良言一句三冬暖。”一句温暖贴心的话，能在寒冬里焐热一颗心。我以前却不这么想。那时我最怕数学金老师。";
+    report.paragraphReviews[1].suggestions = [{
+      advice: "把感受落到对勇气的新理解。",
+      revisedQuotes: [""],
+    }];
+
+    const { documentXml } = await unpack(review);
+    const runXml = (text: string) => {
+      const token = `<w:t xml:space="preserve">${text}</w:t>`;
+      const at = documentXml.indexOf(token);
+      expect(at).toBeGreaterThan(-1);
+      const start = documentXml.lastIndexOf("<w:r>", at);
+      return documentXml.slice(start, documentXml.indexOf("</w:r>", at));
+    };
+
+    // 改后全段蓝字楷体按手动标线分别输出 wave、single（两处非相邻），未标句保持黑字无下划线
+    expect(runXml("“良言一句三冬暖。”")).toContain('<w:u w:val="wave" w:color="1F4E78"');
+    expect(runXml("一句温暖贴心的话，")).toContain('<w:u w:val="single" w:color="1F4E78"');
+    expect(runXml("我以前却不这么想。")).toContain('<w:u w:val="single" w:color="1F4E78"');
+    expect(runXml("能在寒冬里焐热一颗心。")).not.toContain("<w:u ");
+    expect(runXml("那时我最怕数学金老师。")).not.toContain("<w:u ");
+    // 第 2 段清空标线后不回退整段单线
+    expect(runXml("我明白了勇气。")).not.toContain("<w:u ");
+
+    // 修改动作红字宋体：顿号前缀不划线，有对应正文的动作划同款线，纯删除动作不划线
+    expect(runXml("1、")).not.toContain("<w:u ");
+    expect(runXml("解释名言并点出金老师；")).toContain('<w:u w:val="single" w:color="C00000"');
+    expect(runXml("换用贴切名言“良言一句三冬暖”；")).toContain('<w:u w:val="wave" w:color="C00000"');
+    expect(runXml("删去冗余铺垫。")).not.toContain("<w:u ");
+  });
+
+  it("超长含 UTF-16 代理对（emoji）整段标线导出到 Word 时字符完好无替换符损坏", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const emojiParagraph = `${"甲".repeat(1999)}😀乙`;
+    const report = review.report as {
+      paragraphReviews: Array<{
+        revisedText: string;
+        suggestions: Array<{
+          advice: string;
+          revisedQuotes?: Array<string | string[]>;
+          revisedRanges?: Array<{ start: number; end: number; actionIndex: number; text: string }>;
+        }>;
+      }>;
+    };
+    report.paragraphReviews[0].revisedText = emojiParagraph;
+    report.paragraphReviews[0].suggestions = [{
+      advice: "整段扩写并保留表情符号。",
+      revisedQuotes: [emojiParagraph],
+      revisedRanges: [{ start: 0, end: emojiParagraph.length, actionIndex: 0, text: emojiParagraph }],
+    }];
+
+    const { documentXml } = await unpack(review);
+    expect(documentXml).toContain("😀乙");
+    expect(documentXml).not.toContain("\uFFFD");
+  });
+
+  it("含段首全角缩进的正文手动划第 2 个同字后，导出 Word 仍准确划在第 2 个字而非移位到第 3 个字（M1）", async () => {
+    installBrowserExport();
+    const review = fixture();
+    const indented = "　甲甲甲";
+    const report = review.report as {
+      paragraphReviews: Array<{
+        revisedText: string;
+        suggestions: Array<{
+          advice: string;
+          revisedQuotes?: Array<string | string[]>;
+          revisedRanges?: Array<{ start: number; end: number; actionIndex: number; text: string }>;
+        }>;
+      }>;
+    };
+    report.paragraphReviews[0].revisedText = indented;
+    report.paragraphReviews[0].suggestions = [{
+      advice: "强调第二个甲。",
+      revisedQuotes: ["甲"],
+      // 相对于 trimmed ("甲甲甲") 的规范偏移 [1,2)
+      revisedRanges: [{ start: 1, end: 2, actionIndex: 0, text: "甲" }],
+    }];
+
+    const { documentXml } = await unpack(review);
+    const cell = documentXml.slice(documentXml.indexOf("改后全段："));
+    const revisedParagraph = cell.slice(0, cell.indexOf("</w:p>"));
+    const runs = [...revisedParagraph.matchAll(/<w:r>[\s\S]*?<\/w:r>/gu)].map((m) => m[0]);
+    // runs[0] 为「改后全段：」，随后依次是未划线「甲」、单下划线「甲」、未划线「甲」
+    const bodyRuns = runs.filter((r) => r.includes(">甲<"));
+    expect(bodyRuns).toHaveLength(3);
+    expect(bodyRuns[0]).not.toContain("<w:u ");
+    expect(bodyRuns[1]).toContain('<w:u w:val="single" w:color="1F4E78"');
+    expect(bodyRuns[2]).not.toContain("<w:u ");
+  });
 });

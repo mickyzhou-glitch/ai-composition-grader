@@ -829,6 +829,18 @@ describe("BatchReviewPage", () => {
     expect(await screen.findByRole("heading", { name: "张小明" })).toBeVisible();
     expect(await screen.findByLabelText("第 1 段改后全段")).toHaveValue("我走上台。");
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/reviews/review-1")).toBe(true);
+
+    // 修改标线后未点「审核通过」直接切回待导出清单时，弹窗拦截防止误导出旧标线
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    await user.click(screen.getByRole("button", { name: "第 1 段清空全段标线" }));
+    await user.click(screen.getByRole("button", { name: "已复核待导出清单 (1)" }));
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("第 1 段改后全段")).toBeVisible();
+
+    // 确认放弃修改后才切回待导出清单，且丢弃未保存本地草稿
+    await user.click(screen.getByRole("button", { name: "已复核待导出清单 (1)" }));
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("button", { name: "返回修改" })).toBeVisible();
   });
 
   it("一键导出已复核成功后重新读取历史并移除已导出记录", async () => {

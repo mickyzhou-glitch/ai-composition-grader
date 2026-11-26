@@ -99,6 +99,44 @@ describe("导出段落建议正文与改后全段，不含标签", () => {
     expect(runs.map((run) => run.text).join("")).not.toMatch(/第 ?\d+ ?段|对应原文第|修改动作：/u);
   });
 
+  it("教师手动改为顿号/括号编号、多处非相邻标线或清空标线时，导出数据忠实反映手改动作与划线", () => {
+    const source = review();
+    const reviewReport = source.report as ParagraphEvaluationReport;
+    reviewReport.paragraphReviews[0] = {
+      ...reviewReport.paragraphReviews[0]!,
+      suggestions: [{
+        advice: "1、换用名言并解释；\n2）点出金老师过渡；\n3. 删去偏题铺垫。",
+        revisedQuotes: [
+          ["“良言一句三冬暖。”", "能在寒冬里焐热一颗心。"],
+          "我以前却不这么想。",
+          "",
+        ],
+      }],
+      revisedText: "“良言一句三冬暖。”一句温暖贴心的话，能在寒冬里焐热一颗心。我以前却不这么想。那时我最怕数学金老师。",
+    };
+    const paragraph = buildExportReportContent(source).pages[0]!.paragraphs[0]!;
+    expect(paragraph.actionUnderlines).toEqual(["single", "wave", null]);
+    expect(paragraph.revisionRuns).toEqual([
+      { text: "“良言一句三冬暖。”", changed: true, underline: "single" },
+      { text: "一句温暖贴心的话，", changed: false },
+      { text: "能在寒冬里焐热一颗心。", changed: true, underline: "single" },
+      { text: "我以前却不这么想。", changed: true, underline: "wave" },
+      { text: "那时我最怕数学金老师。", changed: false },
+    ]);
+    const suggestionRuns = exportParagraphRuns(paragraph).filter((run) => run.style === "suggestion");
+    expect(suggestionRuns).toEqual([
+      { text: "1、", style: "suggestion" },
+      { text: "换用名言并解释；", style: "suggestion", underline: "single" },
+      { text: "\n", style: "suggestion" },
+      { text: "2）", style: "suggestion" },
+      { text: "点出金老师过渡；", style: "suggestion", underline: "wave" },
+      { text: "\n", style: "suggestion" },
+      { text: "3. ", style: "suggestion" },
+      { text: "删去偏题铺垫。", style: "suggestion" },
+      { text: "\n", style: "suggestion" },
+    ]);
+  });
+
   it("用与原段的逐句比对标记修改句和新增句", () => {
     const content = buildExportReportContent(review());
     const paragraph = content.pages[0]?.paragraphs[0];

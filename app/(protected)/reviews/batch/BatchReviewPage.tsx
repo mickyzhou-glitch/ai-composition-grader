@@ -711,6 +711,15 @@ export function BatchReviewPage() {
   }
 
   function openExportView() {
+    if (view === "review" && dirty) {
+      if (!window.confirm("当前修改尚未审核保存，直接切回待导出清单不会导出最新改动。确认放弃当前修改并切换吗？")) {
+        return;
+      }
+      const clean = activeItem ? cacheRef.current.get(cacheKey(activeItem.id, activeItem.revision)) ?? null : null;
+      reviewRef.current = clean;
+      setReview(clean);
+      setDirty(false);
+    }
     setView("export");
     const seq = ++pendingExportSeqRef.current;
     setExportListLoading(true);

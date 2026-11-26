@@ -1,5 +1,5 @@
 import type { ParagraphSuggestion } from "../domain/contracts";
-import type { RevisionRun } from "../revisions/revision-diff";
+import type { RevisionRun, RevisionUnderline } from "../revisions/revision-diff";
 
 export const DELIVERY_STYLE = {
   page: { widthMm: 210, heightMm: 297, marginXmm: 18, marginYmm: 16 },
@@ -21,6 +21,7 @@ export interface DeliveryParagraph {
   crops: DeliveryCrop[];
   suggestions: ParagraphSuggestion[];
   revisionRuns: RevisionRun[];
+  actionUnderlines?: Array<RevisionUnderline | null>;
 }
 
 export interface DeliveryDocument {

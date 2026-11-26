@@ -1,6 +1,6 @@
 import type { DeliveryDocument } from "@/src/delivery/contracts";
 import { paginateDeliveryDocument, type DeliveryPageBlock } from "@/app/lib/delivery-pagination";
-import { PREVIEW_UNDERLINE_STYLE } from "@/src/revisions/advice-underlines";
+import { buildPreviewUnderlineStyles, splitParagraphActionSlices } from "@/src/revisions/advice-underlines";
 
 import styles from "./print.module.css";
 
@@ -66,24 +66,46 @@ export function PrintReview({
               if (block.kind === "suggestion") {
                 const suggestion = paragraph.suggestions[block.suggestionIndex];
                 if (!suggestion) throw new TypeError("修改建议不完整");
+                const actionUnderlines = paragraph.suggestions.length === 1 ? paragraph.actionUnderlines : undefined;
+                const slices = actionUnderlines?.some(Boolean) ? splitParagraphActionSlices(suggestion.advice) : null;
+                const renderSlices = slices && actionUnderlines && slices.length === actionUnderlines.length ? slices : null;
                 return <ol className={styles.suggestions} start={block.suggestionIndex + 1} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
                   <li>
-                    <p>{suggestion.advice}</p>
+                    <p className={styles.actionParagraph}>
+                      {renderSlices ? renderSlices.map((slice, sliceIdx) => {
+                        const underline = actionUnderlines![sliceIdx];
+                        return <span key={sliceIdx}>
+                          {slice.prefix}
+                          {slice.body ? (
+                            <span
+                              className={underline ? styles.actionUnderlined : undefined}
+                              data-action-underline={underline ?? undefined}
+                              style={underline ? buildPreviewUnderlineStyles(underline, "#c00000") : undefined}
+                            >{slice.body}</span>
+                          ) : null}
+                          {slice.suffix}
+                        </span>;
+                      }) : suggestion.advice}
+                    </p>
                   </li>
                 </ol>;
               }
               return <p className={styles.revision} style={{ height: `${block.heightMm}mm` }} key={blockIndex}>
                 {block.runs
                   .filter((run) => run.kind !== "deleted")
-                  .map((run, runIndex) => (
-                    <span
-                      className={run.kind === "inserted" ? styles.inserted : undefined}
-                      data-run-kind={run.kind}
-                      data-underline={run.kind === "inserted" ? run.underline ?? "single" : undefined}
-                      style={run.kind === "inserted" ? { textDecorationStyle: PREVIEW_UNDERLINE_STYLE[run.underline ?? "single"] } : undefined}
-                      key={runIndex}
-                    >{run.text}</span>
-                  ))}
+                  .map((run, runIndex) => {
+                    const inserted = run.kind === "inserted";
+                    const underline = run.underline ?? "single";
+                    return (
+                      <span
+                        className={inserted ? styles.inserted : undefined}
+                        data-run-kind={run.kind}
+                        data-underline={inserted ? underline : undefined}
+                        style={inserted ? buildPreviewUnderlineStyles(underline, "#1f4e78") : undefined}
+                        key={runIndex}
+                      >{run.text}</span>
+                    );
+                  })}
               </p>;
             })}
           </section>

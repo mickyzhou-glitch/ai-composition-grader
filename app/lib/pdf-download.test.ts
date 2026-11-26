@@ -546,4 +546,118 @@ describe("drawUnderline", () => {
     expect(curves[0]![2]).toBeLessThan(50);
     expect(curves[1]![2]).toBeGreaterThan(50);
   });
+
+  it("教师手动调整后的修改动作与多线型划线（单线/波浪线/点划线）完整绘制进 PDF 画布", async () => {
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: { load: vi.fn(async () => [{} as FontFace]) },
+    });
+    const strokeRecords: Array<{ color: string; hasQuad: boolean; segmentCount: number }> = [];
+    let currentHasQuad = false;
+    let currentSegments = 0;
+    const context = {
+      fillStyle: "",
+      strokeStyle: "",
+      font: "",
+      textAlign: "left",
+      textBaseline: "top",
+      lineWidth: 1,
+      beginPath() {
+        currentHasQuad = false;
+        currentSegments = 0;
+      },
+      drawImage: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo() {
+        currentSegments += 1;
+      },
+      quadraticCurveTo() {
+        currentHasQuad = true;
+        currentSegments += 1;
+      },
+      scale: vi.fn(),
+      fillRect: vi.fn(),
+      stroke() {
+        strokeRecords.push({
+          color: this.strokeStyle,
+          hasQuad: currentHasQuad,
+          segmentCount: currentSegments,
+        });
+      },
+      measureText: (text: string) => ({ width: text.length * 10 }),
+      fillText: vi.fn(),
+    };
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => context as never);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue("data:image/jpeg;base64,page");
+    Object.assign(URL, { createObjectURL: vi.fn(() => "blob:image"), revokeObjectURL: vi.fn() });
+    vi.stubGlobal("Image", class {
+      src = "";
+      naturalWidth = 1200;
+      naturalHeight = 1600;
+      async decode() { return undefined; }
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => (
+      new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/png" } })
+    ));
+
+    await createReviewPdf({
+      id: "review-manual-lines",
+      revision: 1,
+      teacherReviewedAt: "2026-11-26T07:00:00.000Z",
+      studentName: "小红",
+      config: { title: "温暖的一句话" },
+      images: [{ id: 11, position: 0, width: 1200, height: 1600 }],
+      ocr: {
+        version: 2,
+        ocrRevision: 1,
+        editedAt: null,
+        pages: [{ pageIndex: 0, text: "旧段落。", readable: true, warnings: [] }],
+        paragraphs: [{
+          id: "paragraph-1",
+          paragraphIndex: 0,
+          text: "旧段落。",
+          segments: [{ pageIndex: 0, x: 0.1, y: 0.2, width: 0.5, height: 0.1 }],
+        }],
+      },
+      report: {
+        version: 2,
+        themeFit: "fits",
+        themeReason: "切题",
+        personalizedComment: "真实",
+        painPoints: [],
+        commonIssues: [],
+        revisionSuggestions: [],
+        grade: "A",
+        diagnostics: {
+          authenticityAndRelevance: { finding: "真实", action: "保留" },
+          materialAndDetails: { finding: "具体", action: "保留" },
+          structure: { finding: "完整", action: "保留" },
+          language: { finding: "通顺", action: "保留" },
+        },
+        paragraphReviews: [{
+          paragraphId: "paragraph-1",
+          suggestions: [{
+            advice: "1、解释名言；\n2、换用贴切名言；\n3、点出转折心理。",
+            revisedQuotes: [
+              "一句温暖贴心的话。",
+              "“良言一句三冬暖。”",
+              "我以前却不这么想。",
+            ],
+          }],
+          revisedText: "“良言一句三冬暖。”一句温暖贴心的话。我以前却不这么想。那时我最怕数学金老师。",
+        }],
+        parentFeedbacks: [],
+      },
+    } as never);
+
+    const redUnderlines = strokeRecords.filter((item) => item.color === "#c00000");
+    const blueUnderlines = strokeRecords.filter((item) => item.color === "#1f4e78");
+    // 红字修改动作与蓝字改后全段都各自画出了单线(segmentCount===1, !hasQuad)、波浪线(hasQuad)、点划线(segmentCount>1, !hasQuad)
+    expect(redUnderlines.some((item) => !item.hasQuad && item.segmentCount === 1)).toBe(true);
+    expect(redUnderlines.some((item) => item.hasQuad)).toBe(true);
+    expect(redUnderlines.some((item) => !item.hasQuad && item.segmentCount > 1)).toBe(true);
+    expect(blueUnderlines.some((item) => !item.hasQuad && item.segmentCount === 1)).toBe(true);
+    expect(blueUnderlines.some((item) => item.hasQuad)).toBe(true);
+    expect(blueUnderlines.some((item) => !item.hasQuad && item.segmentCount > 1)).toBe(true);
+  });
 });

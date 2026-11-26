@@ -82,6 +82,18 @@
   white-space: pre-wrap;
 }
 
+.actionParagraph {
+  color: #c00000;
+  font-weight: 700;
+}
+
+.actionUnderlined {
+  color: #c00000;
+  text-decoration: underline;
+  text-decoration-thickness: 1.4px;
+  text-underline-offset: 2px;
+}
+
 .revision {
   margin: 0;
   overflow: hidden;

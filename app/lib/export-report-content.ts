@@ -11,7 +11,7 @@ import {
   type DeliveryReadinessInput,
 } from "@/src/delivery/readiness";
 import type { PublicOcrView } from "@/src/ocr/contracts";
-import { adviceActionUnderlines, buildAdviceRevisionRuns, splitParagraphActions } from "@/src/revisions/advice-underlines";
+import { adviceActionUnderlines, buildAdviceRevisionRuns, splitParagraphActionSlices } from "@/src/revisions/advice-underlines";
 import type { RevisionUnderline } from "@/src/revisions/revision-diff";
 
 export const EXPORT_KAITI_FACE = '"LXGW WenKai"';
@@ -141,22 +141,24 @@ export function exportParagraphRuns(paragraph: ExportParagraph): ExportTextRun[]
 
 /**
  * 修改动作按条划线：编号不划，动作正文划与改后全段落实句相同的线。
- * 拆条后拼不回原文（编号写法特殊）时整框不划线，保证文字不变。
+ * 兼容「1. 」「1、」「1)」、同行多条及单条带编号写法；拼不回原文时退回整框不划线，保证文字不变。
  */
 function suggestionRuns(paragraph: ExportParagraph): ExportTextRun[] {
   const text = suggestionText(paragraph.suggestions);
   const plain: ExportTextRun[] = [{ text: `${text}\n`, style: "suggestion" }];
   const underlines = paragraph.actionUnderlines;
   if (!underlines?.some(Boolean)) return plain;
-  const actions = splitParagraphActions(text);
-  if (actions.length !== underlines.length) return plain;
+  const slices = splitParagraphActionSlices(text);
+  if (slices.length !== underlines.length) return plain;
   const runs: ExportTextRun[] = [];
-  actions.forEach((action, index) => {
-    const prefix = actions.length > 1 ? `${index + 1}. ` : "";
-    if (prefix) runs.push({ text: prefix, style: "suggestion" });
+  slices.forEach((slice, index) => {
+    if (slice.prefix) runs.push({ text: slice.prefix, style: "suggestion" });
     const underline = underlines[index];
-    runs.push(underline ? { text: action, style: "suggestion", underline } : { text: action, style: "suggestion" });
-    runs.push({ text: "\n", style: "suggestion" });
+    if (slice.body) {
+      runs.push(underline ? { text: slice.body, style: "suggestion", underline } : { text: slice.body, style: "suggestion" });
+    }
+    const trailing = index === slices.length - 1 ? `${slice.suffix}\n` : slice.suffix;
+    if (trailing) runs.push({ text: trailing, style: "suggestion" });
   });
   if (runs.map((run) => run.text).join("") !== `${text}\n`) return plain;
   return runs;
