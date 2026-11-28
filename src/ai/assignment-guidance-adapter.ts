@@ -9,6 +9,7 @@ import {
 import {
   AI_MAX_RETRIES,
   describeUpstreamAiError,
+  imageUrlContentPart,
   timeoutForBaseUrl,
 } from "./ai-client-options";
 import {
@@ -78,7 +79,7 @@ export class AssignmentGuidanceAdapter {
           },
           { role: "user", content: hasImages ? [
             { type: "text", text: JSON.stringify(requestInput) },
-            ...textbookImages.map((url) => ({ type: "image_url", image_url: { url, detail: "high" } })),
+            ...textbookImages.map((url) => imageUrlContentPart(url, settings.baseUrl)),
           ] : JSON.stringify(requestInput) },
         ],
       });

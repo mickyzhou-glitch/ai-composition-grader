@@ -273,4 +273,29 @@ describe("VisionOcrAdapter", () => {
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[1][0]).toMatchObject({ max_tokens: 8192 });
   });
+
+  it("omits OpenAI image_url detail field and uses higher retry token cap on Gemini endpoints", async () => {
+    const valid = validSinglePageResponse();
+    const create = vi.fn()
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: "{\"pages\":[{\"pageIndex\":0" }, finish_reason: "length" }],
+      })
+      .mockResolvedValueOnce({
+        choices: [{ message: { content: JSON.stringify(valid) }, finish_reason: "stop" }],
+      });
+    const factory: OpenAIClientFactory = () => ({ chat: { completions: { create } } });
+    const settings = {
+      getRuntimeConfig: vi.fn(async () => ({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-3.8-flash",
+        apiKey: "gemini-secret",
+      })),
+    };
+    const adapter = new VisionOcrAdapter(settings, { clientFactory: factory });
+
+    const recognized = await adapter.recognize({ imageUrls: ["data:image/jpeg;base64,page-0"] });
+    expect(recognized).toEqual(valid);
+    expect(JSON.stringify(create.mock.calls[0][0])).not.toContain("\"detail\"");
+    expect(create.mock.calls[1][0]).toMatchObject({ max_tokens: 32768 });
+  });
 });

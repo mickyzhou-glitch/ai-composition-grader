@@ -16,12 +16,16 @@ import {
   paragraphAnnotationAnchorSchema,
   type ParagraphAnnotationAnchor,
 } from "../ocr/contracts";
+import { isGeminiBaseUrl } from "./ai-client-options";
 import { completionJsonWithFinish, parseJsonResponse, roleClient, TruncatedOutputError } from "./adapter-shared";
 
 /** Initial output cap; stays within DeepSeek's 8192 hard limit. */
 export const CONTENT_RETRY_MAX_TOKENS = 8192;
 /** Raised output cap when a non-DeepSeek provider truncates at 8192. */
 export const CONTENT_TRUNCATION_RETRY_MAX_TOKENS = 16384;
+/** Gemini reasoning models count internal thinking tokens inside max_tokens. */
+export const GEMINI_CONTENT_MAX_TOKENS = 32768;
+export const GEMINI_CONTENT_TRUNCATION_RETRY_MAX_TOKENS = 65536;
 const TRUNCATION_CONCISE_REMINDER = "上一次输出因超出长度限制被截断，请精简修改动作与批注措辞、省略非必需冗余字段，确保输出完整闭合的 JSON。";
 import {
   AiAdapterError,
@@ -627,9 +631,14 @@ export class CompositionReviewAdapter {
     const safeInput = { ...input, paragraphs };
     const { client, model, baseUrl } = await roleClient(this.settings, this.clientFactory, "content");
     const isDeepSeek = new URL(baseUrl).hostname === "api.deepseek.com";
+    const isGemini = isGeminiBaseUrl(baseUrl);
+    const initialMaxTokens = isGemini ? GEMINI_CONTENT_MAX_TOKENS : CONTENT_RETRY_MAX_TOKENS;
+    const truncationRetryMaxTokens = isGemini
+      ? GEMINI_CONTENT_TRUNCATION_RETRY_MAX_TOKENS
+      : CONTENT_TRUNCATION_RETRY_MAX_TOKENS;
     const requestOptions = {
       model,
-      max_tokens: CONTENT_RETRY_MAX_TOKENS,
+      max_tokens: initialMaxTokens,
       response_format: { type: "json_object" },
       ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
     };
@@ -676,7 +685,7 @@ export class CompositionReviewAdapter {
       const affected = failingParagraphs(round);
       const repaired = await completionJsonWithFinish(client, {
         ...requestOptions,
-        max_tokens: CONTENT_RETRY_MAX_TOKENS,
+        max_tokens: initialMaxTokens,
         messages: [
           { role: "system", content: [
             "你是作文老师。范文没有通过逐段结构复核，需要返修。同时更新受影响段落的 suggestions 修改动作与 revisedText 正文，其他段落原样返回。保留学生原文中的核心事实，不虚构关键经历。",
@@ -781,21 +790,21 @@ export class CompositionReviewAdapter {
       if (isDeepSeek) {
         retry = await completionJsonWithFinish(client, {
           ...requestOptions,
-          max_tokens: CONTENT_RETRY_MAX_TOKENS,
+          max_tokens: initialMaxTokens,
           messages: conciseMessages,
         });
       } else {
         try {
           retry = await completionJsonWithFinish(client, {
             ...requestOptions,
-            max_tokens: CONTENT_TRUNCATION_RETRY_MAX_TOKENS,
+            max_tokens: truncationRetryMaxTokens,
             messages,
           });
         } catch (error) {
           if (error instanceof AiAdapterError && error.upstreamStatus === 400) {
             retry = await completionJsonWithFinish(client, {
               ...requestOptions,
-              max_tokens: CONTENT_RETRY_MAX_TOKENS,
+              max_tokens: initialMaxTokens,
               messages: conciseMessages,
             });
           } else {
@@ -825,7 +834,7 @@ export class CompositionReviewAdapter {
       const affectedParagraphs = [...new Set(lengthFailures.flatMap((failure) => failure.indices))];
       const repairedResult = await completionJsonWithFinish(client, {
         ...requestOptions,
-        max_tokens: CONTENT_RETRY_MAX_TOKENS,
+        max_tokens: initialMaxTokens,
         messages: lengthRepair ? [
           { role: "system", content: [
             "你负责修正一篇作文的完整范文。同时更新受影响段落的 suggestions 修改动作与 revisedText 正文，其他段落原样返回，不生成额外点评或批注。保持原文事实，不虚构关键经历，满足教师的结构、详略和最新修改要求。",

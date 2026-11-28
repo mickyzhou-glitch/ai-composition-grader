@@ -514,6 +514,100 @@ describe("Cloudflare Worker", () => {
     expect(body.thinking).toEqual({ type: "disabled" });
   });
 
+  it("Gemini 连接测试使用低思考档位与充足 max_completion_tokens，遇 400 回退不带 reasoning_effort，并在失败时返回脱敏上游原因", async () => {
+    const database = {
+      prepare: vi.fn((sql: string) => ({
+        bind: vi.fn(() => ({
+          first: vi.fn().mockResolvedValue(sql.includes("FROM sessions INNER JOIN users") ? {
+            id: "admin-1",
+            username: "admin",
+            role: "admin",
+            must_change_password: 0,
+            expires_at: Date.now() + 60_000,
+          } : sql.includes("FROM settings") ? {
+            base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+            encrypted_api_key: null,
+          } : null),
+        })),
+      })),
+    };
+    const upstream = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{ message: { content: "OK" } }],
+      }), { headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        error: { code: 400, message: "reasoning_effort unsupported", status: "INVALID_ARGUMENT" },
+      }]), { status: 400, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        choices: [{ message: { content: "OK" } }],
+      }), { headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify([{
+        error: {
+          code: 429,
+          message: "Quota exceeded for gemini-4-carbon with key AIzaSyD1234567890abcdefghijklmno_pqrstuv",
+          status: "RESOURCE_EXHAUSTED",
+        },
+      }]), { status: 429, headers: { "content-type": "application/json" } }));
+
+    const env = {
+      ASSETS: { fetch: async () => new Response("asset") },
+      DB: database,
+      CONTENT_AI_API_KEY: "gemini-secret",
+      VISION_AI_API_KEY: "gemini-vision-secret",
+    } as never;
+
+    const first = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-4-carbon",
+      }),
+    }), env);
+    expect(first.status).toBe(200);
+    const firstBody = JSON.parse((upstream.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect(firstBody.reasoning_effort).toBe("low");
+    expect(firstBody.max_completion_tokens).toBeGreaterThanOrEqual(512);
+    expect(firstBody).not.toHaveProperty("max_tokens");
+
+    const fallback = await worker.fetch(new Request("https://grader.workers.dev/api/settings/vision/test", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-2.0-flash",
+      }),
+    }), env);
+    expect(fallback.status).toBe(200);
+    const retryBody = JSON.parse((upstream.mock.calls[2]?.[1] as RequestInit).body as string);
+    expect(retryBody).not.toHaveProperty("reasoning_effort");
+    expect(retryBody.max_completion_tokens).toBeGreaterThanOrEqual(512);
+
+    const failed = await worker.fetch(new Request("https://grader.workers.dev/api/settings/content/test", {
+      method: "POST",
+      headers: {
+        cookie: "__Host-zuowen_session=session-token",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-4-carbon",
+      }),
+    }), env);
+    expect(failed.status).toBe(502);
+    const failedJson = await failed.json() as { error: { code: string; message: string } };
+    expect(failedJson.error.code).toBe("AI_CONNECTION_FAILED");
+    expect(failedJson.error.message).toContain("HTTP 429");
+    expect(failedJson.error.message).toContain("[密钥]");
+    expect(failedJson.error.message).not.toContain("AIzaSyD1234567890abcdefghijklmno_pqrstuv");
+  });
+
   it("保存作文内容模型时只更新 content 角色", async () => {
     const statements: Array<{ sql: string; bindings: unknown[] }> = [];
     const database = {

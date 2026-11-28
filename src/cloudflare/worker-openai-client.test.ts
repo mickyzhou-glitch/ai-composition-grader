@@ -112,4 +112,46 @@ describe("createWorkerOpenAIClient", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     vi.unstubAllGlobals();
   });
+
+  it("解析 Gemini OpenAI 兼容端点返回的数组包裹错误对象并脱敏 AIza 密钥", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify([{
+      error: {
+        code: 403,
+        message: "API key AIzaSyD1234567890abcdefghijklmno_pqrstuv lacks permission",
+        status: "PERMISSION_DENIED",
+      },
+    }]), { status: 403, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createWorkerOpenAIClient({
+      apiKey: "gemini-key",
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+      timeout: 240_000,
+      maxRetries: 0,
+    });
+    await expect(client.chat.completions.create({ model: "gemini-4-carbon", messages: [] })).rejects.toMatchObject({
+      status: 403,
+      code: "PERMISSION_DENIED",
+      error: { message: "API key [密钥] lacks permission" },
+    });
+
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify([{
+      error: {
+        code: "AIzaSyD1234567890abcdefghijklmno_pqrstuv",
+        message: "Invalid credential custom-unprefixed-secret-value",
+      },
+    }]), { status: 401, headers: { "content-type": "application/json" } }));
+    const customClient = createWorkerOpenAIClient({
+      apiKey: "custom-unprefixed-secret-value",
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai",
+      timeout: 240_000,
+      maxRetries: 0,
+    });
+    await expect(customClient.chat.completions.create({ model: "gemini-4-carbon", messages: [] })).rejects.toMatchObject({
+      status: 401,
+      code: undefined,
+      error: { message: "Invalid credential [密钥]" },
+    });
+    vi.unstubAllGlobals();
+  });
 });

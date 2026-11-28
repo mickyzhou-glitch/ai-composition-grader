@@ -6,18 +6,47 @@ export const AI_MAX_RETRIES = 1;
 const UPSTREAM_DETAIL_LIMIT = 160;
 
 /** Remove provider keys before a failure string is logged or shown to a teacher. */
-export function redactAiSecrets(value: string): string {
-  return value
+export function redactAiSecrets(value: string, literalSecret?: string): string {
+  const trimmedSecret = literalSecret?.trim();
+  const withoutLiteral = trimmedSecret ? value.split(trimmedSecret).join("[密钥]") : value;
+  return withoutLiteral
     .replace(/sk-[A-Za-z0-9_-]{8,}/gu, "[密钥]")
     .replace(/xai-[A-Za-z0-9_-]{8,}/giu, "[密钥]")
+    .replace(/AIza[A-Za-z0-9_-]{20,}/gu, "[密钥]")
+    .replace(/([?&]key=)[^&\s]+/giu, "$1[密钥]")
     .replace(/Bearer\s+\S+/giu, "[密钥]")
     .replace(/(?:api[_-]?key|token|secret)\s*[:=]\s*\S+/giu, "[密钥]");
+}
+
+export function isSafeProviderErrorCode(value: string | undefined, literalSecret?: string): value is string {
+  if (!value || !/^[A-Za-z0-9._-]{1,64}$/u.test(value)) return false;
+  return redactAiSecrets(value, literalSecret) === value;
+}
+
+export function isGeminiBaseUrl(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl).hostname.toLowerCase() === "generativelanguage.googleapis.com";
+  } catch {
+    return false;
+  }
+}
+
+export function imageUrlContentPart(url: string, baseUrl: string): {
+  type: "image_url";
+  image_url: { url: string; detail?: "high" };
+} {
+  return {
+    type: "image_url",
+    image_url: isGeminiBaseUrl(baseUrl) ? { url } : { url, detail: "high" },
+  };
 }
 
 export function timeoutForBaseUrl(baseUrl: string): number {
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
-    if (host === "api.x.ai" || host.endsWith(".x.ai")) return XAI_AI_TIMEOUT_MS;
+    if (host === "api.x.ai" || host.endsWith(".x.ai") || isGeminiBaseUrl(baseUrl)) {
+      return XAI_AI_TIMEOUT_MS;
+    }
   } catch {
     // Unparseable settings fall back to the shorter default.
   }
@@ -37,9 +66,7 @@ export function describeUpstreamAiError(error: unknown): {
   const record = typeof error === "object" && error !== null ? error as Record<string, unknown> : null;
   const upstreamStatus = typeof record?.status === "number" ? record.status : undefined;
   const rawUpstreamCode = readString(record?.code) || readString(record?.type);
-  const upstreamCode = rawUpstreamCode && /^[A-Za-z0-9._-]{1,64}$/u.test(rawUpstreamCode)
-    ? rawUpstreamCode
-    : undefined;
+  const upstreamCode = isSafeProviderErrorCode(rawUpstreamCode) ? rawUpstreamCode : undefined;
 
   let detail = "";
   const nested = record?.error;

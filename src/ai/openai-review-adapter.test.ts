@@ -1593,4 +1593,27 @@ describe("testOpenAIConnection", () => {
     });
     expect(create).toHaveBeenCalledOnce();
   });
+
+  it("Gemini 连接测试在首次 400 不支持 reasoning_effort 时自动回退重试", async () => {
+    const create = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error("reasoning_effort unsupported"), { status: 400 }))
+      .mockResolvedValueOnce({ choices: [{ message: { content: "OK" } }] });
+    const factory: OpenAIClientFactory = vi.fn(() => ({
+      chat: { completions: { create } },
+    }));
+
+    await testOpenAIConnection(
+      {
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+        model: "gemini-2.0-flash",
+        apiKey: "gemini-key",
+      },
+      factory,
+    );
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0][0]).toMatchObject({ reasoning_effort: "low", max_completion_tokens: 1024 });
+    expect(create.mock.calls[1][0]).not.toHaveProperty("reasoning_effort");
+    expect(create.mock.calls[1][0]).toMatchObject({ max_completion_tokens: 1024 });
+  });
 });

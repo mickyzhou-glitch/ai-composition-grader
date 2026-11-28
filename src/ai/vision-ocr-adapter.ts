@@ -11,6 +11,7 @@ import {
 } from "../ocr/contracts";
 import { OCR_UNREADABLE_PLACEHOLDER } from "../ocr/ocr-quality";
 import { alignParagraphsToSource } from "../ocr/source-paragraphs";
+import { imageUrlContentPart, isGeminiBaseUrl } from "./ai-client-options";
 import { completionJsonWithFinish, completionWithFinish, parseJsonResponse, roleClient } from "./adapter-shared";
 import {
   AiAdapterError,
@@ -20,6 +21,7 @@ import {
 } from "./openai-review-adapter";
 
 const VISION_RETRY_MAX_TOKENS = 8_192;
+const GEMINI_VISION_RETRY_MAX_TOKENS = 32_768;
 const MINOR_BOUNDS_EPSILON = 0.04;
 const MINOR_OVERLAP_MAX_HEIGHT = 0.04;
 const MINOR_OVERLAP_MAX_RATIO = 0.35;
@@ -294,17 +296,15 @@ export class VisionOcrAdapter {
     if (input.imageUrls.length < 1 || input.imageUrls.length > MAX_REVIEW_IMAGES) {
       throw new TypeError(`imageUrls must contain 1 to ${MAX_REVIEW_IMAGES} pages`);
     }
-    const { client, model } = await roleClient(this.settings, this.clientFactory, "vision");
+    const { client, model, baseUrl } = await roleClient(this.settings, this.clientFactory, "vision");
+    const retryMaxTokens = isGeminiBaseUrl(baseUrl) ? GEMINI_VISION_RETRY_MAX_TOKENS : VISION_RETRY_MAX_TOKENS;
     const baseMessages = [
       { role: "system", content: OCR_PROMPT },
       {
         role: "user",
         content: [
           { type: "text", text: `请直接识别每张完整作文图片（共 ${input.imageUrls.length} 页），按原文自然段分行，不要裁成段再识别。看不清的字每字用一个「${OCR_UNREADABLE_PLACEHOLDER}」占位，不要猜、不要补写、病句照写。` },
-          ...input.imageUrls.map((url) => ({
-            type: "image_url",
-            image_url: { url, detail: "high" },
-          })),
+          ...input.imageUrls.map((url) => imageUrlContentPart(url, baseUrl)),
         ],
       },
     ];
@@ -331,7 +331,7 @@ export class VisionOcrAdapter {
     try {
       retry = await completionWithFinish(client, {
         model,
-        max_tokens: VISION_RETRY_MAX_TOKENS,
+        max_tokens: retryMaxTokens,
         response_format: { type: "json_object" },
         messages: [...baseMessages, { role: "user", content: repairInstruction }],
       });

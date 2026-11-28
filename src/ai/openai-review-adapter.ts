@@ -19,6 +19,8 @@ import { validateReport } from "../domain/report-validation";
 import {
   AI_MAX_RETRIES,
   describeUpstreamAiError,
+  imageUrlContentPart,
+  isGeminiBaseUrl,
   timeoutForBaseUrl,
 } from "./ai-client-options";
 import { JSON_RETRY_INSTRUCTION, parseJsonResponse, tryParseJsonResponse } from "./json-response";
@@ -643,10 +645,7 @@ export class OpenAIReviewAdapter {
           role: "user",
           content: [
             { type: "text", text: "请批改这些按页排序的作文图片。" },
-            ...input.imageUrls.map((url) => ({
-              type: "image_url",
-              image_url: { url, detail: "high" },
-            })),
+            ...input.imageUrls.map((url) => imageUrlContentPart(url, settings.baseUrl)),
           ],
         },
       ],
@@ -673,10 +672,7 @@ export class OpenAIReviewAdapter {
             role: "user",
             content: [
               { type: "text", text: "请继续完成这篇作文的批改。" },
-              ...input.imageUrls.map((url) => ({
-                type: "image_url",
-                image_url: { url, detail: "high" },
-              })),
+              ...input.imageUrls.map((url) => imageUrlContentPart(url, settings.baseUrl)),
             ],
           },
         ],
@@ -938,11 +934,26 @@ export async function testOpenAIConnection(
     timeout: timeoutForBaseUrl(input.baseUrl),
     maxRetries: AI_MAX_RETRIES,
   });
-  const content = await completionContent(client, {
-    model: input.model,
-    messages: [{ role: "user", content: "只回复 OK" }],
-    max_tokens: 8,
-  });
+  const isGemini = isGeminiBaseUrl(input.baseUrl);
+  const messages = [{ role: "user", content: "只回复 OK" }];
+  let content: string;
+  try {
+    content = await completionContent(client, {
+      model: input.model,
+      messages,
+      ...(isGemini ? { reasoning_effort: "low", max_completion_tokens: 1024 } : { max_tokens: 64 }),
+    });
+  } catch (error) {
+    if (isGemini && error instanceof AiAdapterError && error.upstreamStatus === 400) {
+      content = await completionContent(client, {
+        model: input.model,
+        messages,
+        max_completion_tokens: 1024,
+      });
+    } else {
+      throw error;
+    }
+  }
   if (content.trim().length === 0) {
     throw new AiAdapterError("AI_INVALID_RESPONSE", "AI 返回了空响应", 502);
   }

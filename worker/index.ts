@@ -27,11 +27,12 @@ import { ANALYSIS_JOB_METADATA_PREFIX } from "../src/jobs/analysis-job-metadata"
 import { sanitizeAnalysisDetail } from "../src/jobs/public-analysis-failure";
 import { loadInlineAiImageUrls } from "../src/cloudflare/ai-inline-image";
 import { aiRequestHeaders } from "../src/cloudflare/ai-request-headers";
-import { createWorkerOpenAIClient } from "../src/cloudflare/worker-openai-client";
+import { createWorkerOpenAIClient, upstreamErrorDetail } from "../src/cloudflare/worker-openai-client";
 import { D1ImageWriter } from "../src/cloudflare/d1-image-writer";
 import { D1SecurityEvents } from "../src/cloudflare/d1-admin-accounts";
 import { handleWorkerAdmin } from "../src/cloudflare/worker-admin-routes";
 import { authenticatedWorkerUser, handleWorkerAuth } from "../src/cloudflare/worker-auth-routes";
+import { isGeminiBaseUrl } from "../src/ai/ai-client-options";
 import { AiAdapterError, OpenAIReviewAdapter } from "../src/ai/openai-review-adapter";
 import { VisionOcrAdapter } from "../src/ai/vision-ocr-adapter";
 import { CompositionReviewAdapter } from "../src/ai/composition-review-adapter";
@@ -256,30 +257,62 @@ async function configuredApiKey(env: WorkerEnv, encryptedApiKey: string | null, 
 
 const AI_CONNECTION_TEST_TIMEOUT_MS = 30_000;
 
+class AiConnectionTestError extends Error {
+  constructor(readonly detail?: string) {
+    super("AI_CONNECTION_FAILED");
+    this.name = "AiConnectionTestError";
+  }
+}
+
 async function testAiConnection(input: { baseUrl: string; model: string; apiKey: string; role: "vision" | "content" }): Promise<void> {
   // A 1×1 PNG verifies that the configured model accepts the same multimodal
   // request shape used by essay analysis, rather than only proving text chat.
   const visionProbe = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
-  const hostname = new URL(input.baseUrl).hostname;
+  const hostname = new URL(input.baseUrl).hostname.toLowerCase();
   const isMiMo = hostname === "api.xiaomimimo.com";
   const isDeepSeek = hostname === "api.deepseek.com";
-  const response = await fetch(`${input.baseUrl}/chat/completions`, {
+  const isGemini = isGeminiBaseUrl(input.baseUrl);
+  const messages = input.role === "vision" ? [{ role: "user", content: [
+    { type: "image_url", image_url: { url: visionProbe } },
+    { type: "text", text: "请确认你能读取图片，只回复 OK" },
+  ] }] : [{ role: "user", content: "请只回复 OK" }];
+  const sendProbe = (includeGeminiLowEffort: boolean) => fetch(`${input.baseUrl}/chat/completions`, {
     method: "POST",
     headers: aiRequestHeaders(input.baseUrl, input.apiKey),
     body: JSON.stringify({
       model: input.model,
-      messages: input.role === "vision" ? [{ role: "user", content: [
-          { type: "image_url", image_url: { url: visionProbe } },
-          { type: "text", text: "请确认你能读取图片，只回复 OK" },
-        ] }] : [{ role: "user", content: "请只回复 OK" }],
+      messages,
       ...(isDeepSeek ? { thinking: { type: "disabled" } } : {}),
-      ...(isMiMo ? { max_completion_tokens: 256 } : { max_tokens: 16 }),
+      ...(isGemini && includeGeminiLowEffort ? { reasoning_effort: "low" } : {}),
+      ...(isGemini
+        ? { max_completion_tokens: 1024 }
+        : isMiMo
+          ? { max_completion_tokens: 256 }
+          : { max_tokens: 64 }),
     }),
     signal: AbortSignal.timeout(AI_CONNECTION_TEST_TIMEOUT_MS),
   });
-  if (!response.ok) throw new Error("AI_CONNECTION_FAILED");
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
-  if (typeof payload.choices?.[0]?.message?.content !== "string" || !payload.choices[0].message.content.trim()) throw new Error("AI_CONNECTION_FAILED");
+
+  let response = await sendProbe(true);
+  if (!response.ok && isGemini && response.status === 400) {
+    await response.body?.cancel().catch(() => undefined);
+    response = await sendProbe(false);
+  }
+  if (!response.ok) {
+    let payload: unknown;
+    try { payload = await response.json(); } catch { payload = undefined; }
+    const detail = upstreamErrorDetail(payload, 140, input.apiKey);
+    throw new AiConnectionTestError(detail ? `HTTP ${response.status}：${detail}` : `HTTP ${response.status}`);
+  }
+  const payload = await response.json() as {
+    choices?: Array<{ message?: { content?: unknown }; finish_reason?: unknown }>;
+  };
+  const firstChoice = payload.choices?.[0];
+  if (typeof firstChoice?.message?.content !== "string" || !firstChoice.message.content.trim()) {
+    throw new AiConnectionTestError(
+      firstChoice?.finish_reason === "length" ? "输出被长度上限截断，未生成可见回复" : "上游返回了空回复",
+    );
+  }
 }
 
 function workerAiSettings(env: WorkerEnv) {
@@ -460,7 +493,8 @@ async function handleFetch(request: Request, env: WorkerEnv, ctx?: ExecutionCont
         return Response.json({ ok: true, data: { connected: true } });
       } catch (error) {
         if (error instanceof Error && error.message === "AI_SETTINGS_INCOMPLETE") return apiError("AI_SETTINGS_INCOMPLETE", "请先填写 API Key", 400);
-        return apiError("AI_CONNECTION_FAILED", "AI 服务连接失败，请检查地址、模型和密钥", 502);
+        const detail = error instanceof AiConnectionTestError && error.detail ? `（${error.detail}）` : "";
+        return apiError("AI_CONNECTION_FAILED", `AI 服务连接失败，请检查地址、模型和密钥${detail}`, 502);
       }
     }
     if (url.pathname === "/api/assignment-guidance" && request.method === "POST") {

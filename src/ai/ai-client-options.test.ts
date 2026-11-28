@@ -8,16 +8,18 @@ import {
 } from "./ai-client-options";
 
 describe("timeoutForBaseUrl", () => {
-  it("uses a longer timeout for api.x.ai and other x.ai hosts", () => {
+  it("uses a longer timeout for api.x.ai, other x.ai hosts, and Gemini endpoints", () => {
     expect(timeoutForBaseUrl("https://api.x.ai/v1")).toBe(XAI_AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("https://api.x.ai/v1/")).toBe(XAI_AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("https://API.X.AI/v1")).toBe(XAI_AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("https://gateway.x.ai/v1")).toBe(XAI_AI_TIMEOUT_MS);
+    expect(timeoutForBaseUrl("https://generativelanguage.googleapis.com/v1beta/openai")).toBe(XAI_AI_TIMEOUT_MS);
   });
 
   it("keeps the default timeout for other providers", () => {
     expect(timeoutForBaseUrl("https://api.deepseek.com")).toBe(AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("https://api.openai.com/v1")).toBe(AI_TIMEOUT_MS);
+    expect(timeoutForBaseUrl("https://aiplatform.googleapis.com/v1")).toBe(AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("https://api.x.ai.evil.example/v1")).toBe(AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("https://notx.ai/v1")).toBe(AI_TIMEOUT_MS);
     expect(timeoutForBaseUrl("not-a-url")).toBe(AI_TIMEOUT_MS);
@@ -36,13 +38,15 @@ describe("describeUpstreamAiError", () => {
     expect(described.message).toBe("AI 服务请求失败：Model does not exist");
   });
 
-  it("redacts sk-, Bearer, xai-, and api_key-style secrets", () => {
+  it("redacts sk-, Bearer, xai-, AIza, and api_key-style secrets", () => {
     const described = describeUpstreamAiError({
-      message: "Unauthorized Bearer sk-abcdefghijklmnop and xai-SecretKey123456 api_key=secretvalue99",
+      message: "Unauthorized Bearer sk-abcdefghijklmnop xai-SecretKey123456 AIzaSyD1234567890abcdefghijklmno_pqrstuv api_key=secretvalue99 ?key=AIzaQuerySecret99999999999999999999",
     });
     expect(described.message).toContain("[密钥]");
     expect(described.message).not.toContain("sk-abcdefghijklmnop");
     expect(described.message).not.toContain("xai-SecretKey123456");
+    expect(described.message).not.toContain("AIzaSyD1234567890abcdefghijklmno_pqrstuv");
+    expect(described.message).not.toContain("AIzaQuerySecret99999999999999999999");
     expect(described.message).not.toContain("secretvalue99");
     expect(described.message).not.toMatch(/Bearer\s+\S/u);
   });

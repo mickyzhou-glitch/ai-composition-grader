@@ -1,16 +1,23 @@
-import { redactAiSecrets } from "../ai/ai-client-options";
+import { isSafeProviderErrorCode, redactAiSecrets } from "../ai/ai-client-options";
 import type { OpenAIClientFactory, OpenAICompatibleClient } from "../ai/openai-review-adapter";
 import { aiRequestHeaders } from "./ai-request-headers";
 
-function safeProviderCode(payload: unknown): string | undefined {
-  const error = typeof payload === "object" && payload !== null && "error" in payload ? payload.error : payload;
+function unwrapErrorEntry(payload: unknown): unknown {
+  return Array.isArray(payload) ? payload[0] : payload;
+}
+
+export function safeProviderCode(payload: unknown, literalSecret?: string): string | undefined {
+  const root = unwrapErrorEntry(payload);
+  const error = typeof root === "object" && root !== null && "error" in root ? root.error : root;
   if (typeof error !== "object" || error === null) return undefined;
   const value = "code" in error && typeof error.code === "string"
     ? error.code
     : "type" in error && typeof error.type === "string"
       ? error.type
-      : undefined;
-  return value && /^[A-Za-z0-9._-]{1,64}$/u.test(value) ? value : undefined;
+      : "status" in error && typeof error.status === "string"
+        ? error.status
+        : undefined;
+  return isSafeProviderErrorCode(value, literalSecret) ? value : undefined;
 }
 
 async function responsePayload(response: Response): Promise<unknown> {
@@ -19,9 +26,14 @@ async function responsePayload(response: Response): Promise<unknown> {
 
 const UPSTREAM_DETAIL_LIMIT = 500;
 
-function upstreamErrorDetail(payload: unknown): string | undefined {
-  if (typeof payload !== "object" || payload === null) return undefined;
-  const body = payload as { error?: unknown; message?: unknown };
+export function upstreamErrorDetail(
+  payload: unknown,
+  limit = UPSTREAM_DETAIL_LIMIT,
+  literalSecret?: string,
+): string | undefined {
+  const root = unwrapErrorEntry(payload);
+  if (typeof root !== "object" || root === null) return undefined;
+  const body = root as { error?: unknown; message?: unknown };
   const nested = body.error;
   const detail = typeof nested === "string"
     ? nested
@@ -30,9 +42,9 @@ function upstreamErrorDetail(payload: unknown): string | undefined {
       : typeof body.message === "string"
         ? body.message
         : "";
-  const compact = redactAiSecrets(detail).replace(/\s+/gu, " ").trim();
+  const compact = redactAiSecrets(detail, literalSecret).replace(/\s+/gu, " ").trim();
   if (!compact) return undefined;
-  return compact.length > UPSTREAM_DETAIL_LIMIT ? `${compact.slice(0, UPSTREAM_DETAIL_LIMIT)}…` : compact;
+  return compact.length > limit ? `${compact.slice(0, limit)}…` : compact;
 }
 
 const RETRYABLE_UPSTREAM_STATUSES = new Set([429, 500, 502, 503, 504]);
@@ -98,10 +110,10 @@ export const createWorkerOpenAIClient: OpenAIClientFactory = (options): OpenAICo
 
           const payload = await responsePayload(response);
           if (!response.ok) {
-            const detail = upstreamErrorDetail(payload);
+            const detail = upstreamErrorDetail(payload, UPSTREAM_DETAIL_LIMIT, options.apiKey);
             throw Object.assign(new Error("AI upstream request failed"), {
               status: response.status,
-              code: safeProviderCode(payload),
+              code: safeProviderCode(payload, options.apiKey),
               ...(detail ? { error: { message: detail } } : {}),
             });
           }
